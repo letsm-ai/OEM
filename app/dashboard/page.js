@@ -192,14 +192,24 @@ export default async function DashboardPage() {
         {/* Quick links */}
         <div className="mt-8 grid gap-4 md:grid-cols-2">
           <QuickAction
+            href="/directory/my-companies"
+            title="شركاتي في الدليل"
+            desc="إدارة شركاتك ومتابعة حالة الاعتماد"
+          />
+          <QuickAction
             href="/directory/add-company"
-            title="أضف شركتك للدليل"
+            title="أضف شركة جديدة للدليل"
             desc="تطلب باقة أساسي فما فوق"
           />
           <QuickAction
             href="/shop/become-vendor"
             title="افتح متجرك كبائع"
             desc="تطلب باقة ذهبي فما فوق"
+          />
+          <QuickAction
+            href="/membership"
+            title="إدارة العضوية"
+            desc="ترقية الباقة أو تجديد الاشتراك"
           />
         </div>
       </div>

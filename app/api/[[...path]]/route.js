@@ -4,14 +4,16 @@ import crypto from 'crypto'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { connectDB } from '@/lib/db'
-import { User, Membership, PasswordResetToken } from '@/lib/models'
+import { User, Membership, PasswordResetToken, Company } from '@/lib/models'
 import {
   TIER_META,
   TIERS,
   oneYearFromNow,
   applyDiscount,
   formatArabicDate,
+  canListCompany,
 } from '@/lib/membership'
+import { SECTOR_KEYS, GOVERNORATE_KEYS } from '@/lib/directory'
 import {
   sendWelcomeEmail,
   sendSubscriptionEmail,
@@ -285,6 +287,380 @@ async function handleRoute(request, { params }) {
       
       const result = applyDiscount(price, tier)
       return handleCORS(NextResponse.json({ tier, ...result }))
+    }
+
+    /* ============================================================
+       COMPANIES
+       ============================================================ */
+
+    // Helpers
+    const companyDetailMatch = route.match(/^\/companies\/([A-Za-z0-9-]+)$/)
+    const adminApproveMatch = route.match(
+      /^\/admin\/companies\/([A-Za-z0-9-]+)\/approve$/
+    )
+    const adminRejectMatch = route.match(
+      /^\/admin\/companies\/([A-Za-z0-9-]+)\/reject$/
+    )
+
+    // ---- GET /companies  (public list of APPROVED) ----
+    if (route === '/companies' && method === 'GET') {
+      const url = new URL(request.url)
+      const q = (url.searchParams.get('search') || '').trim()
+      const sector = url.searchParams.get('sector') || ''
+      const gov = url.searchParams.get('governorate') || ''
+
+      await connectDB()
+      const query = { status: 'APPROVED' }
+      if (sector) query.sector = sector
+      if (gov) query.governorate = gov
+      if (q) {
+        const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+        query.$or = [{ nameAr: rx }, { nameEn: rx }, { description: rx }]
+      }
+      const list = await Company.find(query)
+        .sort({ createdAt: -1 })
+        .limit(200)
+        .lean()
+      return handleCORS(
+        NextResponse.json({
+          companies: list.map(({ _id, ...rest }) => ({ id: _id, ...rest })),
+        })
+      )
+    }
+
+    // ---- POST /companies  (auth + BASIC+) ----
+    if (route === '/companies' && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'يجب تسجيل الدخول أولاً' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const dbUser = await User.findById(session.user.id).lean()
+      const userTier = dbUser?.membershipTier || 'FREE'
+      if (!canListCompany(userTier)) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'تحتاج إلى باقة أساسية أو أعلى لإضافة شركة' },
+            { status: 403 }
+          )
+        )
+      }
+
+      const body = await request.json().catch(() => ({}))
+      const { nameAr, sector } = body || {}
+      if (!nameAr || !sector) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'اسم الشركة (عربي) والقطاع مطلوبان' },
+            { status: 400 }
+          )
+        )
+      }
+      if (!SECTOR_KEYS.includes(sector)) {
+        return handleCORS(
+          NextResponse.json({ error: 'القطاع غير صحيح' }, { status: 400 })
+        )
+      }
+      if (body.governorate && !GOVERNORATE_KEYS.includes(body.governorate)) {
+        return handleCORS(
+          NextResponse.json({ error: 'المحافظة غير صحيحة' }, { status: 400 })
+        )
+      }
+
+      const company = await Company.create({
+        userId: session.user.id,
+        nameAr: String(nameAr).trim(),
+        nameEn: body.nameEn ? String(body.nameEn).trim() : undefined,
+        sector,
+        governorate: body.governorate || undefined,
+        description: body.description || '',
+        services: Array.isArray(body.services)
+          ? body.services.slice(0, 30)
+          : [],
+        phone: body.phone || '',
+        email: body.email || '',
+        website: body.website || '',
+        location: body.location || '',
+        logo: body.logo || '',
+        status: 'PENDING',
+        isApproved: false,
+      })
+
+      // Ensure status is set using update operation (workaround for schema issue)
+      await Company.findByIdAndUpdate(company._id, { 
+        status: 'PENDING', 
+        isApproved: false 
+      })
+
+      const companyObj = company.toObject()
+      return handleCORS(
+        NextResponse.json({
+          success: true,
+          company: { 
+            id: company._id, 
+            ...companyObj, 
+            _id: undefined,
+            status: companyObj.status || 'PENDING',
+            isApproved: companyObj.isApproved || false
+          },
+        })
+      )
+    }
+
+    // ---- GET /companies/:id ----
+    if (companyDetailMatch && method === 'GET') {
+      const id = companyDetailMatch[1]
+      await connectDB()
+      const company = await Company.findById(id).lean()
+      if (!company) {
+        return handleCORS(
+          NextResponse.json({ error: 'الشركة غير موجودة' }, { status: 404 })
+        )
+      }
+      // Non-approved only visible to owner or admin
+      if (company.status !== 'APPROVED') {
+        const session = await getServerSession(authOptions)
+        const isOwner = session?.user?.id === company.userId
+        const isAdmin = session?.user?.role === 'ADMIN'
+        if (!isOwner && !isAdmin) {
+          return handleCORS(
+            NextResponse.json({ error: 'الشركة غير متاحة' }, { status: 404 })
+          )
+        }
+      }
+      const { _id, ...rest } = company
+      return handleCORS(NextResponse.json({ id: _id, ...rest }))
+    }
+
+    // ---- PUT /companies/:id  (owner updates; resets to PENDING) ----
+    if (companyDetailMatch && method === 'PUT') {
+      const id = companyDetailMatch[1]
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'يجب تسجيل الدخول أولاً' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const company = await Company.findById(id)
+      if (!company) {
+        return handleCORS(
+          NextResponse.json({ error: 'الشركة غير موجودة' }, { status: 404 })
+        )
+      }
+      const isOwner = company.userId === session.user.id
+      const isAdmin = session.user.role === 'ADMIN'
+      if (!isOwner && !isAdmin) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 403 })
+        )
+      }
+
+      const body = await request.json().catch(() => ({}))
+      const allowed = [
+        'nameAr',
+        'nameEn',
+        'sector',
+        'governorate',
+        'description',
+        'services',
+        'phone',
+        'email',
+        'website',
+        'location',
+        'logo',
+      ]
+      for (const k of allowed) {
+        if (body[k] !== undefined) company[k] = body[k]
+      }
+      if (body.sector && !SECTOR_KEYS.includes(body.sector)) {
+        return handleCORS(
+          NextResponse.json({ error: 'القطاع غير صحيح' }, { status: 400 })
+        )
+      }
+      if (body.governorate && !GOVERNORATE_KEYS.includes(body.governorate)) {
+        return handleCORS(
+          NextResponse.json({ error: 'المحافظة غير صحيحة' }, { status: 400 })
+        )
+      }
+
+      // Any user edit resets approval (admin edits keep current status)
+      if (!isAdmin) {
+        company.status = 'PENDING'
+        company.isApproved = false
+        company.rejectionReason = null
+      }
+      company.updatedAt = new Date()
+      await company.save()
+
+      // Ensure status is updated in DB (workaround for schema issue)
+      if (!isAdmin) {
+        await Company.findByIdAndUpdate(company._id, { 
+          status: 'PENDING', 
+          isApproved: false,
+          rejectionReason: null
+        })
+      }
+
+      const obj = company.toObject()
+      const { _id, ...rest } = obj
+      return handleCORS(
+        NextResponse.json({ 
+          success: true, 
+          company: { 
+            id: _id, 
+            ...rest,
+            status: isAdmin ? (rest.status || 'APPROVED') : 'PENDING'
+          } 
+        })
+      )
+    }
+
+    // ---- DELETE /companies/:id  (owner or admin) ----
+    if (companyDetailMatch && method === 'DELETE') {
+      const id = companyDetailMatch[1]
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'يجب تسجيل الدخول أولاً' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const company = await Company.findById(id)
+      if (!company) {
+        return handleCORS(
+          NextResponse.json({ error: 'الشركة غير موجودة' }, { status: 404 })
+        )
+      }
+      if (
+        company.userId !== session.user.id &&
+        session.user.role !== 'ADMIN'
+      ) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 403 })
+        )
+      }
+      await Company.deleteOne({ _id: id })
+      return handleCORS(NextResponse.json({ success: true }))
+    }
+
+    // ---- GET /my-companies ----
+    if (route === '/my-companies' && method === 'GET') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const list = await Company.find({ userId: session.user.id })
+        .sort({ createdAt: -1 })
+        .lean()
+      return handleCORS(
+        NextResponse.json({
+          companies: list.map(({ _id, ...rest }) => ({ id: _id, ...rest })),
+        })
+      )
+    }
+
+    /* ============================================================
+       ADMIN
+       ============================================================ */
+    // ---- GET /admin/companies?status=PENDING ----
+    if (route === '/admin/companies' && method === 'GET') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      if (session.user.role !== 'ADMIN') {
+        return handleCORS(
+          NextResponse.json({ error: 'صلاحيات مسؤول مطلوبة' }, { status: 403 })
+        )
+      }
+      const url = new URL(request.url)
+      const status = (url.searchParams.get('status') || 'PENDING').toUpperCase()
+      await connectDB()
+      const query = status === 'ALL' ? {} : { status }
+      const list = await Company.find(query)
+        .sort({ createdAt: -1 })
+        .limit(500)
+        .lean()
+      return handleCORS(
+        NextResponse.json({
+          companies: list.map(({ _id, ...rest }) => ({ id: _id, ...rest })),
+        })
+      )
+    }
+
+    // ---- POST /admin/companies/:id/approve ----
+    if (adminApproveMatch && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user || session.user.role !== 'ADMIN') {
+        return handleCORS(
+          NextResponse.json({ error: 'صلاحيات مسؤول مطلوبة' }, { status: 403 })
+        )
+      }
+      const id = adminApproveMatch[1]
+      await connectDB()
+      const company = await Company.findByIdAndUpdate(
+        id,
+        {
+          status: 'APPROVED',
+          isApproved: true,
+          rejectionReason: null,
+          updatedAt: new Date(),
+        },
+        { new: true }
+      ).lean()
+      if (!company) {
+        return handleCORS(
+          NextResponse.json({ error: 'الشركة غير موجودة' }, { status: 404 })
+        )
+      }
+      return handleCORS(
+        NextResponse.json({ success: true, status: 'APPROVED' })
+      )
+    }
+
+    // ---- POST /admin/companies/:id/reject ----
+    if (adminRejectMatch && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user || session.user.role !== 'ADMIN') {
+        return handleCORS(
+          NextResponse.json({ error: 'صلاحيات مسؤول مطلوبة' }, { status: 403 })
+        )
+      }
+      const id = adminRejectMatch[1]
+      const body = await request.json().catch(() => ({}))
+      const reason = (body?.reason || '').trim()
+      if (!reason) {
+        return handleCORS(
+          NextResponse.json({ error: 'سبب الرفض مطلوب' }, { status: 400 })
+        )
+      }
+      await connectDB()
+      const company = await Company.findByIdAndUpdate(
+        id,
+        {
+          status: 'REJECTED',
+          isApproved: false,
+          rejectionReason: reason,
+          updatedAt: new Date(),
+        },
+        { new: true }
+      ).lean()
+      if (!company) {
+        return handleCORS(
+          NextResponse.json({ error: 'الشركة غير موجودة' }, { status: 404 })
+        )
+      }
+      return handleCORS(
+        NextResponse.json({ success: true, status: 'REJECTED' })
+      )
     }
 
     // -------- FORGOT PASSWORD --------
