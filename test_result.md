@@ -217,6 +217,54 @@ backend:
         agent: "testing"
         comment: "Fixed: Updated discount endpoint to fetch fresh user data from database instead of relying on stale JWT session data. All discount tiers working: ✅ No session → FREE (0%), ✅ BASIC → 10% discount, ✅ GOLD → 20% discount, ✅ PLATINUM → 30% discount, ✅ Invalid price → 400 with Arabic error."
 
+  - task: "POST /api/signup triggers Resend welcome email (non-blocking)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "✅ Regression test passed: Signup still works correctly with unique timestamped email → 200 with {success, user{id, name, email, role:MEMBER, membershipTier:FREE}}. No password in response. Welcome email is fire-and-forget and does not cause 500 even though Resend test-mode rejects it."
+
+  - task: "POST /api/membership/subscribe triggers Resend subscription email (non-blocking)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "✅ Regression test passed: Membership subscribe still works correctly. Login via NextAuth credentials successful, POST /api/membership/subscribe {tier:BASIC} → 200, GET /api/me reflects tier=BASIC and membershipExpiry set. Subscription email is fire-and-forget."
+
+  - task: "POST /api/forgot-password (anti-enumeration, generates hashed reset token, sends email if user exists)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "✅ All validations working: ✅ No body/email → 400 with Arabic error 'البريد الإلكتروني مطلوب', ✅ Unknown email → 200 with anti-enumeration message 'إذا كان...', ✅ Known email → 200 with same message, ✅ DB check: PasswordResetToken created with userId, 64-char hex tokenHash, expiresAt ≈ now+1hr, usedAt=null, ✅ Second call invalidates previous token (usedAt set) and creates new active token."
+
+  - task: "POST /api/reset-password (validates token, updates password, marks token used)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "✅ All validations working: ✅ Missing token/password → 400 'الرابط وكلمة المرور مطلوبة', ✅ password.length < 6 → 400 'يجب أن تكون كلمة المرور 6 أحرف على الأقل', ✅ Invalid token → 400 'الرابط غير صالح أو منتهي الصلاحية...', ✅ Valid token flow: synthesized raw token in DB, POST reset → 200 'تم تحديث كلمة المرور بنجاح', token marked usedAt, user can login with new password, old password rejected, ✅ Token reuse → 400, ✅ Expired token → 400."
+
 frontend:
   - task: "Arabic RTL layout + Cairo font + sticky Navbar"
     implemented: true
@@ -328,3 +376,39 @@ agent_communication:
       4) GET /api/me ✅ Correctly exposes membershipExpiry field after subscription
       
       All Arabic error messages working. All membership features fully functional.
+  - agent: "testing"
+    message: |
+      ✅ Email + Password Reset Flow testing COMPLETE - All functionality working correctly:
+      
+      REGRESSION TESTS:
+      1) POST /api/signup ✅ Still works with unique timestamped email → 200 with proper user object
+      2) Membership subscribe ✅ Still works: login → subscribe BASIC → GET /api/me reflects changes
+      
+      FORGOT PASSWORD TESTS:
+      3) POST /api/forgot-password ✅ All validations working:
+         - No email → 400 with Arabic error "البريد الإلكتروني مطلوب"
+         - Unknown email → 200 with anti-enumeration message (security)
+         - Known email → 200 with same message + DB token created correctly
+         - Token invalidation: second call invalidates previous token and creates new one
+      
+      RESET PASSWORD TESTS:
+      4) POST /api/reset-password ✅ All validations working:
+         - Missing fields → 400 with Arabic errors
+         - Short password → 400 with Arabic error
+         - Invalid token → 400 with Arabic error
+         - Valid token flow: password updated, token marked used, login works with new password, old password rejected
+         - Token reuse → 400 (security)
+         - Expired token → 400 (security)
+      
+      DATABASE INTEGRATION:
+      5) MongoDB PasswordResetToken collection ✅ Working correctly:
+         - Tokens stored with proper userId, 64-char hex tokenHash, expiresAt ≈ +1hr, usedAt=null
+         - Token invalidation and expiry logic working
+         - Direct DB token insertion for testing successful
+      
+      REGRESSION ENDPOINTS:
+      6) GET /api/ ✅ Returns {"message":"Majles API is running"}
+      7) GET /api/me ✅ 401 without session, 200 with session
+      
+      IMPORTANT: Resend email errors in logs are EXPECTED (test mode) and do not indicate failure.
+      All API responses are 200 as required. Email functionality is fire-and-forget and non-blocking.

@@ -1,15 +1,28 @@
 import { NextResponse } from 'next/server'
 import bcrypt from 'bcryptjs'
+import crypto from 'crypto'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { connectDB } from '@/lib/db'
-import { User, Membership } from '@/lib/models'
+import { User, Membership, PasswordResetToken } from '@/lib/models'
 import {
   TIER_META,
   TIERS,
   oneYearFromNow,
   applyDiscount,
+  formatArabicDate,
 } from '@/lib/membership'
+import {
+  sendWelcomeEmail,
+  sendSubscriptionEmail,
+  sendPasswordResetEmail,
+} from '@/lib/email'
+
+const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'
+
+function sha256(s) {
+  return crypto.createHash('sha256').update(String(s)).digest('hex')
+}
 
 function handleCORS(response) {
   response.headers.set(
@@ -88,6 +101,11 @@ async function handleRoute(request, { params }) {
         role: 'MEMBER',
         membershipTier: 'FREE',
       })
+
+      // Fire-and-forget welcome email (must not break signup flow)
+      sendWelcomeEmail({ to: user.email, name: user.name }).catch((e) =>
+        console.error('welcome email failed:', e)
+      )
 
       return handleCORS(
         NextResponse.json({
@@ -188,6 +206,15 @@ async function handleRoute(request, { params }) {
         paymentStatus: 'PAID',
       })
 
+      // Fire-and-forget subscription email
+      sendSubscriptionEmail({
+        to: user.email,
+        name: user.name,
+        tierAr: meta.nameAr,
+        amount: meta.price,
+        expiryFormatted: formatArabicDate(endDate),
+      }).catch((e) => console.error('subscription email failed:', e))
+
       return handleCORS(
         NextResponse.json({
           success: true,
@@ -258,6 +285,115 @@ async function handleRoute(request, { params }) {
       
       const result = applyDiscount(price, tier)
       return handleCORS(NextResponse.json({ tier, ...result }))
+    }
+
+    // -------- FORGOT PASSWORD --------
+    if (route === '/forgot-password' && method === 'POST') {
+      const body = await request.json().catch(() => ({}))
+      const { email } = body || {}
+      if (!email || typeof email !== 'string') {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'البريد الإلكتروني مطلوب' },
+            { status: 400 }
+          )
+        )
+      }
+      const normalizedEmail = email.toLowerCase().trim()
+
+      await connectDB()
+      const user = await User.findOne({ email: normalizedEmail }).lean()
+
+      // Always respond success to avoid email enumeration
+      if (user) {
+        // Invalidate any previous active tokens
+        await PasswordResetToken.updateMany(
+          { userId: user._id, usedAt: null, expiresAt: { $gt: new Date() } },
+          { $set: { usedAt: new Date() } }
+        )
+
+        const rawToken = crypto.randomBytes(32).toString('hex')
+        const tokenHash = sha256(rawToken)
+        const expiresAt = new Date(Date.now() + 60 * 60 * 1000) // 1 hour
+
+        await PasswordResetToken.create({
+          userId: user._id,
+          tokenHash,
+          expiresAt,
+        })
+
+        const resetUrl = `${BASE_URL}/reset-password?token=${rawToken}`
+        sendPasswordResetEmail({
+          to: user.email,
+          name: user.name,
+          resetUrl,
+        }).catch((e) => console.error('reset email failed:', e))
+      }
+
+      return handleCORS(
+        NextResponse.json({
+          success: true,
+          message:
+            'إذا كان البريد مسجلاً لدينا، فسيصلك رابط إعادة تعيين كلمة المرور',
+        })
+      )
+    }
+
+    // -------- RESET PASSWORD --------
+    if (route === '/reset-password' && method === 'POST') {
+      const body = await request.json().catch(() => ({}))
+      const { token, password } = body || {}
+
+      if (!token || !password) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'الرابط وكلمة المرور مطلوبة' },
+            { status: 400 }
+          )
+        )
+      }
+      if (password.length < 6) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'يجب أن تكون كلمة المرور 6 أحرف على الأقل' },
+            { status: 400 }
+          )
+        )
+      }
+
+      await connectDB()
+      const tokenHash = sha256(token)
+      const resetDoc = await PasswordResetToken.findOne({
+        tokenHash,
+        usedAt: null,
+        expiresAt: { $gt: new Date() },
+      })
+
+      if (!resetDoc) {
+        return handleCORS(
+          NextResponse.json(
+            {
+              error:
+                'الرابط غير صالح أو منتهي الصلاحية. يرجى طلب رابط جديد',
+            },
+            { status: 400 }
+          )
+        )
+      }
+
+      const hashed = await bcrypt.hash(password, 10)
+      await User.findByIdAndUpdate(resetDoc.userId, { password: hashed })
+
+      // Mark token used
+      resetDoc.usedAt = new Date()
+      await resetDoc.save()
+
+      return handleCORS(
+        NextResponse.json({
+          success: true,
+          message: 'تم تحديث كلمة المرور بنجاح',
+        })
+      )
     }
 
     return handleCORS(
