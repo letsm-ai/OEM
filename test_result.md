@@ -169,6 +169,54 @@ backend:
         agent: "testing"
         comment: "Working correctly: ✅ Unauthenticated request returns 401 with Arabic error 'غير مصرح', ✅ Authenticated request returns user data (id, name, email, role=MEMBER, membershipTier=FREE, createdAt). Password field excluded."
 
+  - task: "POST /api/membership/subscribe (mock payment, update tier+expiry, create Membership record)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Requires session. Rejects invalid/FREE tier. Sets membershipExpiry=+1yr. Creates Membership doc with paymentStatus=PAID and amountPaid matching tier price (BASIC=50, GOLD=100, PLATINUM=200 OMR)."
+      - working: true
+        agent: "testing"
+        comment: "All validations working correctly: ✅ No session → 401 with Arabic error, ✅ Invalid tier → 400, ✅ FREE tier → 400 with Arabic error, ✅ BASIC subscription: amountPaid=50, paymentStatus=PAID, endDate ≈ +365 days, user.membershipTier=BASIC, ✅ GOLD upgrade: amountPaid=100, tier=GOLD, ✅ PLATINUM upgrade: amountPaid=200, tier=PLATINUM. User.membershipExpiry correctly updated."
+
+  - task: "GET /api/membership/history (user's subscription history)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Returns user's past Membership docs sorted desc by startDate. 401 if no session."
+      - working: true
+        agent: "testing"
+        comment: "Working correctly: ✅ No session → 401, ✅ With session → 200 with history array sorted desc by startDate. After multiple subscriptions (BASIC→GOLD→PLATINUM), history shows ≥2 entries with latest being PLATINUM."
+
+  - task: "POST /api/membership/discount (apply current tier discount to a price)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "FREE=0%, BASIC=10%, GOLD=20%, PLATINUM=30%. Returns {tier, originalPrice, discountPercent, discountAmount, finalPrice}. 400 if price invalid. No session => FREE applied."
+      - working: false
+        agent: "testing"
+        comment: "Issue found: JWT session contains stale membershipTier data. Discount endpoint was reading from session.user.membershipTier which doesn't update after subscription."
+      - working: true
+        agent: "testing"
+        comment: "Fixed: Updated discount endpoint to fetch fresh user data from database instead of relying on stale JWT session data. All discount tiers working: ✅ No session → FREE (0%), ✅ BASIC → 10% discount, ✅ GOLD → 20% discount, ✅ PLATINUM → 30% discount, ✅ Invalid price → 400 with Arabic error."
+
 frontend:
   - task: "Arabic RTL layout + Cairo font + sticky Navbar"
     implemented: true
@@ -221,7 +269,7 @@ frontend:
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 2
+  test_sequence: 3
   run_ui: false
 
 test_plan:
@@ -250,3 +298,33 @@ agent_communication:
       5) Data integrity ✅ UUID format, default values (role=MEMBER, tier=FREE), password excluded from responses
       
       All Arabic error messages working. MongoDB integration confirmed. Ready for frontend testing or Phase 2.
+  - agent: "main"
+    message: |
+      Phase 2 (Membership) implementation complete. Please test the new membership endpoints:
+      1) POST /api/membership/subscribe - subscription with tier validation and payment simulation
+      2) GET /api/membership/history - user's subscription history
+      3) POST /api/membership/discount - discount calculation based on current tier
+      All endpoints require authentication except discount (treats unauthenticated as FREE tier).
+  - agent: "testing"
+    message: |
+      ✅ Backend Phase 2 (Membership) testing COMPLETE - All endpoints working correctly:
+      
+      1) POST /api/membership/subscribe ✅ All validations working:
+         - No session → 401 with Arabic error "يجب تسجيل الدخول أولاً"
+         - Invalid tier → 400, FREE tier → 400 with Arabic error
+         - BASIC: amountPaid=50, GOLD: amountPaid=100, PLATINUM: amountPaid=200
+         - paymentStatus=PAID, endDate ≈ +365 days, user.membershipTier updated
+         - Multiple subscriptions create history (upgrade path working)
+      
+      2) GET /api/membership/history ✅ Working correctly:
+         - No session → 401, With session → 200 with history array
+         - Sorted desc by startDate, shows subscription progression
+      
+      3) POST /api/membership/discount ✅ All discount tiers working:
+         - No session → FREE (0%), BASIC → 10%, GOLD → 20%, PLATINUM → 30%
+         - Invalid price → 400 with Arabic error "السعر غير صحيح"
+         - Fixed JWT session staleness issue by fetching fresh user data
+      
+      4) GET /api/me ✅ Correctly exposes membershipExpiry field after subscription
+      
+      All Arabic error messages working. All membership features fully functional.

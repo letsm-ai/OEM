@@ -298,9 +298,401 @@ def test_me_endpoint(authenticated_session, unauthenticated_session=None):
     else:
         print_test_result("Authenticated /api/me", False, "No authenticated session available")
 
+def test_membership_subscribe(authenticated_session):
+    """Test POST /api/membership/subscribe endpoint"""
+    print("=== Testing Membership Subscribe ===")
+    
+    if not authenticated_session:
+        print_test_result("Membership subscribe tests", False, "No authenticated session available")
+        return
+    
+    # Test 1: No session cookie (using unauthenticated session)
+    try:
+        unauthenticated_session = requests.Session()
+        response = unauthenticated_session.post(
+            f"{API_BASE}/membership/subscribe",
+            json={"tier": "BASIC"},
+            headers={"Content-Type": "application/json"},
+            timeout=10
+        )
+        
+        if response.status_code == 401:
+            data = response.json()
+            if "يجب تسجيل الدخول أولاً" in data.get("error", ""):
+                print_test_result("Subscribe without session", True, "401 with Arabic error message")
+            else:
+                print_test_result("Subscribe without session", True, f"401 status (error: {data.get('error', 'N/A')})")
+        else:
+            print_test_result("Subscribe without session", False, f"Expected 401, got {response.status_code}")
+    except Exception as e:
+        print_test_result("Subscribe without session", False, f"Exception: {str(e)}")
+    
+    # Test 2: Invalid tier
+    try:
+        response = authenticated_session.post(
+            f"{API_BASE}/membership/subscribe",
+            json={"tier": "INVALID"},
+            headers={"Content-Type": "application/json"},
+            timeout=10
+        )
+        
+        if response.status_code == 400:
+            print_test_result("Subscribe with invalid tier", True, "400 status returned")
+        else:
+            print_test_result("Subscribe with invalid tier", False, f"Expected 400, got {response.status_code}")
+    except Exception as e:
+        print_test_result("Subscribe with invalid tier", False, f"Exception: {str(e)}")
+    
+    # Test 3: FREE tier (should be rejected)
+    try:
+        response = authenticated_session.post(
+            f"{API_BASE}/membership/subscribe",
+            json={"tier": "FREE"},
+            headers={"Content-Type": "application/json"},
+            timeout=10
+        )
+        
+        if response.status_code == 400:
+            data = response.json()
+            if "الباقة المجانية مفعلة تلقائياً" in data.get("error", ""):
+                print_test_result("Subscribe to FREE tier", True, "400 with Arabic error message")
+            else:
+                print_test_result("Subscribe to FREE tier", True, f"400 status (error: {data.get('error', 'N/A')})")
+        else:
+            print_test_result("Subscribe to FREE tier", False, f"Expected 400, got {response.status_code}")
+    except Exception as e:
+        print_test_result("Subscribe to FREE tier", False, f"Exception: {str(e)}")
+    
+    # Test 4: Valid subscription to BASIC
+    try:
+        response = authenticated_session.post(
+            f"{API_BASE}/membership/subscribe",
+            json={"tier": "BASIC"},
+            headers={"Content-Type": "application/json"},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            membership = data.get("membership", {})
+            user = data.get("user", {})
+            
+            # Verify response structure and values
+            checks = []
+            checks.append(("success field", data.get("success") == True))
+            checks.append(("membership.amountPaid", membership.get("amountPaid") == 50))
+            checks.append(("membership.paymentStatus", membership.get("paymentStatus") == "PAID"))
+            checks.append(("user.membershipTier", user.get("membershipTier") == "BASIC"))
+            
+            # Check endDate is approximately 1 year from now (tolerance ± 2 days)
+            end_date = membership.get("endDate")
+            if end_date:
+                from datetime import datetime, timedelta
+                end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                now = datetime.now(end_dt.tzinfo)
+                expected_end = now + timedelta(days=365)
+                diff_days = abs((end_dt - expected_end).days)
+                checks.append(("membership.endDate within ±2 days", diff_days <= 2))
+            else:
+                checks.append(("membership.endDate exists", False))
+            
+            # Check user.membershipExpiry matches endDate
+            user_expiry = user.get("membershipExpiry")
+            checks.append(("user.membershipExpiry matches endDate", user_expiry == end_date))
+            
+            all_passed = all(check[1] for check in checks)
+            failed_checks = [check[0] for check in checks if not check[1]]
+            
+            if all_passed:
+                print_test_result("Subscribe to BASIC tier", True, f"All validations passed")
+            else:
+                print_test_result("Subscribe to BASIC tier", False, f"Failed checks: {failed_checks}")
+        else:
+            print_test_result("Subscribe to BASIC tier", False, f"Status: {response.status_code}, Body: {response.text}")
+    except Exception as e:
+        print_test_result("Subscribe to BASIC tier", False, f"Exception: {str(e)}")
+    
+    # Test 5: Verify /api/me reflects new tier
+    try:
+        response = authenticated_session.get(f"{API_BASE}/me", timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if (data.get("membershipTier") == "BASIC" and 
+                data.get("membershipExpiry")):
+                print_test_result("GET /api/me after BASIC subscribe", True, f"Tier: {data['membershipTier']}")
+            else:
+                print_test_result("GET /api/me after BASIC subscribe", False, f"Tier: {data.get('membershipTier')}, Expiry: {data.get('membershipExpiry')}")
+        else:
+            print_test_result("GET /api/me after BASIC subscribe", False, f"Status: {response.status_code}")
+    except Exception as e:
+        print_test_result("GET /api/me after BASIC subscribe", False, f"Exception: {str(e)}")
+    
+    # Test 6: Subscribe to GOLD (upgrade)
+    try:
+        response = authenticated_session.post(
+            f"{API_BASE}/membership/subscribe",
+            json={"tier": "GOLD"},
+            headers={"Content-Type": "application/json"},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            membership = data.get("membership", {})
+            user = data.get("user", {})
+            
+            checks = []
+            checks.append(("membership.amountPaid", membership.get("amountPaid") == 100))
+            checks.append(("membership.paymentStatus", membership.get("paymentStatus") == "PAID"))
+            checks.append(("user.membershipTier", user.get("membershipTier") == "GOLD"))
+            
+            all_passed = all(check[1] for check in checks)
+            failed_checks = [check[0] for check in checks if not check[1]]
+            
+            if all_passed:
+                print_test_result("Subscribe to GOLD tier (upgrade)", True, "All validations passed")
+            else:
+                print_test_result("Subscribe to GOLD tier (upgrade)", False, f"Failed checks: {failed_checks}")
+        else:
+            print_test_result("Subscribe to GOLD tier (upgrade)", False, f"Status: {response.status_code}, Body: {response.text}")
+    except Exception as e:
+        print_test_result("Subscribe to GOLD tier (upgrade)", False, f"Exception: {str(e)}")
+
+def test_membership_history(authenticated_session):
+    """Test GET /api/membership/history endpoint"""
+    print("=== Testing Membership History ===")
+    
+    if not authenticated_session:
+        print_test_result("Membership history tests", False, "No authenticated session available")
+        return
+    
+    # Test 1: No session
+    try:
+        unauthenticated_session = requests.Session()
+        response = unauthenticated_session.get(f"{API_BASE}/membership/history", timeout=10)
+        
+        if response.status_code == 401:
+            print_test_result("History without session", True, "401 status returned")
+        else:
+            print_test_result("History without session", False, f"Expected 401, got {response.status_code}")
+    except Exception as e:
+        print_test_result("History without session", False, f"Exception: {str(e)}")
+    
+    # Test 2: With session (after subscribes)
+    try:
+        response = authenticated_session.get(f"{API_BASE}/membership/history", timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            history = data.get("history", [])
+            
+            # Should have at least 2 entries (BASIC then GOLD from previous tests)
+            if len(history) >= 2:
+                # Check if sorted desc by startDate (first should be GOLD)
+                first_entry = history[0]
+                if first_entry.get("tier") == "GOLD":
+                    print_test_result("Membership history with session", True, f"Found {len(history)} entries, latest is GOLD")
+                else:
+                    print_test_result("Membership history with session", False, f"Latest entry tier: {first_entry.get('tier')}, expected GOLD")
+            else:
+                print_test_result("Membership history with session", False, f"Expected ≥2 entries, got {len(history)}")
+        else:
+            print_test_result("Membership history with session", False, f"Status: {response.status_code}, Body: {response.text}")
+    except Exception as e:
+        print_test_result("Membership history with session", False, f"Exception: {str(e)}")
+
+def test_membership_discount(authenticated_session):
+    """Test POST /api/membership/discount endpoint"""
+    print("=== Testing Membership Discount ===")
+    
+    # Test 1: No session (should treat as FREE)
+    try:
+        unauthenticated_session = requests.Session()
+        response = unauthenticated_session.post(
+            f"{API_BASE}/membership/discount",
+            json={"price": 100},
+            headers={"Content-Type": "application/json"},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            expected = {
+                "tier": "FREE",
+                "originalPrice": 100,
+                "discountPercent": 0,
+                "discountAmount": 0,
+                "finalPrice": 100
+            }
+            
+            checks = []
+            for key, expected_value in expected.items():
+                checks.append((f"{key}", data.get(key) == expected_value))
+            
+            all_passed = all(check[1] for check in checks)
+            failed_checks = [check[0] for check in checks if not check[1]]
+            
+            if all_passed:
+                print_test_result("Discount without session (FREE)", True, "All validations passed")
+            else:
+                print_test_result("Discount without session (FREE)", False, f"Failed checks: {failed_checks}, Data: {data}")
+        else:
+            print_test_result("Discount without session (FREE)", False, f"Status: {response.status_code}, Body: {response.text}")
+    except Exception as e:
+        print_test_result("Discount without session (FREE)", False, f"Exception: {str(e)}")
+    
+    if not authenticated_session:
+        print_test_result("Authenticated discount tests", False, "No authenticated session available")
+        return
+    
+    # Test 2: As GOLD user (from previous subscribe test)
+    try:
+        response = authenticated_session.post(
+            f"{API_BASE}/membership/discount",
+            json={"price": 100},
+            headers={"Content-Type": "application/json"},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            expected = {
+                "tier": "GOLD",
+                "originalPrice": 100,
+                "discountPercent": 20,
+                "discountAmount": 20,
+                "finalPrice": 80
+            }
+            
+            checks = []
+            for key, expected_value in expected.items():
+                checks.append((f"{key}", data.get(key) == expected_value))
+            
+            all_passed = all(check[1] for check in checks)
+            failed_checks = [check[0] for check in checks if not check[1]]
+            
+            if all_passed:
+                print_test_result("Discount as GOLD user", True, "20% discount applied correctly")
+            else:
+                print_test_result("Discount as GOLD user", False, f"Failed checks: {failed_checks}, Data: {data}")
+        else:
+            print_test_result("Discount as GOLD user", False, f"Status: {response.status_code}, Body: {response.text}")
+    except Exception as e:
+        print_test_result("Discount as GOLD user", False, f"Exception: {str(e)}")
+    
+    # Test 3: Invalid price (negative)
+    try:
+        response = authenticated_session.post(
+            f"{API_BASE}/membership/discount",
+            json={"price": -50},
+            headers={"Content-Type": "application/json"},
+            timeout=10
+        )
+        
+        if response.status_code == 400:
+            data = response.json()
+            if "السعر غير صحيح" in data.get("error", ""):
+                print_test_result("Discount with invalid price", True, "400 with Arabic error message")
+            else:
+                print_test_result("Discount with invalid price", True, f"400 status (error: {data.get('error', 'N/A')})")
+        else:
+            print_test_result("Discount with invalid price", False, f"Expected 400, got {response.status_code}")
+    except Exception as e:
+        print_test_result("Discount with invalid price", False, f"Exception: {str(e)}")
+    
+    # Test 4: Invalid price (non-number)
+    try:
+        response = authenticated_session.post(
+            f"{API_BASE}/membership/discount",
+            json={"price": "invalid"},
+            headers={"Content-Type": "application/json"},
+            timeout=10
+        )
+        
+        if response.status_code == 400:
+            print_test_result("Discount with non-number price", True, "400 status returned")
+        else:
+            print_test_result("Discount with non-number price", False, f"Expected 400, got {response.status_code}")
+    except Exception as e:
+        print_test_result("Discount with non-number price", False, f"Exception: {str(e)}")
+
+def test_platinum_subscription_and_discount(authenticated_session):
+    """Test PLATINUM subscription and its 30% discount"""
+    print("=== Testing PLATINUM Subscription and Discount ===")
+    
+    if not authenticated_session:
+        print_test_result("PLATINUM tests", False, "No authenticated session available")
+        return
+    
+    # Subscribe to PLATINUM
+    try:
+        response = authenticated_session.post(
+            f"{API_BASE}/membership/subscribe",
+            json={"tier": "PLATINUM"},
+            headers={"Content-Type": "application/json"},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            membership = data.get("membership", {})
+            user = data.get("user", {})
+            
+            checks = []
+            checks.append(("membership.amountPaid", membership.get("amountPaid") == 200))
+            checks.append(("membership.paymentStatus", membership.get("paymentStatus") == "PAID"))
+            checks.append(("user.membershipTier", user.get("membershipTier") == "PLATINUM"))
+            
+            all_passed = all(check[1] for check in checks)
+            failed_checks = [check[0] for check in checks if not check[1]]
+            
+            if all_passed:
+                print_test_result("Subscribe to PLATINUM tier", True, "All validations passed")
+            else:
+                print_test_result("Subscribe to PLATINUM tier", False, f"Failed checks: {failed_checks}")
+        else:
+            print_test_result("Subscribe to PLATINUM tier", False, f"Status: {response.status_code}, Body: {response.text}")
+    except Exception as e:
+        print_test_result("Subscribe to PLATINUM tier", False, f"Exception: {str(e)}")
+    
+    # Test PLATINUM discount (30%)
+    try:
+        response = authenticated_session.post(
+            f"{API_BASE}/membership/discount",
+            json={"price": 100},
+            headers={"Content-Type": "application/json"},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            expected = {
+                "tier": "PLATINUM",
+                "originalPrice": 100,
+                "discountPercent": 30,
+                "discountAmount": 30,
+                "finalPrice": 70
+            }
+            
+            checks = []
+            for key, expected_value in expected.items():
+                checks.append((f"{key}", data.get(key) == expected_value))
+            
+            all_passed = all(check[1] for check in checks)
+            failed_checks = [check[0] for check in checks if not check[1]]
+            
+            if all_passed:
+                print_test_result("Discount as PLATINUM user", True, "30% discount applied correctly")
+            else:
+                print_test_result("Discount as PLATINUM user", False, f"Failed checks: {failed_checks}, Data: {data}")
+        else:
+            print_test_result("Discount as PLATINUM user", False, f"Status: {response.status_code}, Body: {response.text}")
+    except Exception as e:
+        print_test_result("Discount as PLATINUM user", False, f"Exception: {str(e)}")
+
 def main():
     """Run all backend tests"""
-    print("🚀 Starting Backend API Tests for Omani Entrepreneur Majles")
+    print("🚀 Starting Backend API Tests for Omani Entrepreneur Majles - Phase 2 (Membership)")
     print(f"Base URL: {BASE_URL}")
     print(f"API Base: {API_BASE}")
     print("=" * 60)
@@ -308,20 +700,43 @@ def main():
     # Test 1: API Health Check
     health_ok = test_api_health()
     
-    # Test 2: User Signup
+    # Test 2: User Signup (create fresh user for Phase 2 testing)
     created_user = test_signup()
     
     # Test 3: NextAuth Login
     if created_user:
         authenticated_session = test_nextauth_login(created_user["email"], "password123")
         
-        # Test 4: Wrong Password
-        test_wrong_password_login(created_user["email"])
-        
-        # Test 5: /api/me endpoint
-        test_me_endpoint(authenticated_session)
+        if authenticated_session:
+            # Phase 2 Membership Tests
+            print("\n" + "=" * 60)
+            print("🔥 PHASE 2 MEMBERSHIP TESTS")
+            print("=" * 60)
+            
+            # Test membership endpoints
+            test_membership_subscribe(authenticated_session)
+            test_membership_history(authenticated_session)
+            test_membership_discount(authenticated_session)
+            test_platinum_subscription_and_discount(authenticated_session)
+            
+            # Final verification: Check /api/me shows membershipExpiry
+            print("=== Final Verification ===")
+            try:
+                response = authenticated_session.get(f"{API_BASE}/me", timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("membershipExpiry"):
+                        print_test_result("GET /api/me exposes membershipExpiry", True, f"Expiry: {data['membershipExpiry']}")
+                    else:
+                        print_test_result("GET /api/me exposes membershipExpiry", False, "membershipExpiry field missing")
+                else:
+                    print_test_result("GET /api/me exposes membershipExpiry", False, f"Status: {response.status_code}")
+            except Exception as e:
+                print_test_result("GET /api/me exposes membershipExpiry", False, f"Exception: {str(e)}")
+        else:
+            print("⚠️  Skipping Phase 2 tests due to authentication failure")
     else:
-        print("⚠️  Skipping login and /api/me tests due to signup failure")
+        print("⚠️  Skipping all tests due to signup failure")
     
     print("=" * 60)
     print("🏁 Backend API Tests Complete")
