@@ -26,7 +26,11 @@ import {
   sendWelcomeEmail,
   sendSubscriptionEmail,
   sendPasswordResetEmail,
+  sendAppointmentConfirmationEmail,
+  sendNewBookingNotifyExpert,
+  sendAppointmentCancellationEmail,
 } from '@/lib/email'
+import { getPaymentProvider, isRealPayment } from '@/lib/payments'
 
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'
 
@@ -1017,6 +1021,37 @@ async function handleRoute(request, { params }) {
         originalPrice: price.originalPrice,
         discountPercent: price.discountPercent,
       })
+
+      // Fire-and-forget: emails to client + expert
+      try {
+        const expertUser = await User.findById(expert.userId)
+          .select({ email: 1, name: 1 })
+          .lean()
+        const dateFmt = formatArabicDate(day)
+        sendAppointmentConfirmationEmail({
+          to: client.email,
+          name: client.name,
+          expertName: expertUser?.name || 'الخبير',
+          dateFormatted: dateFmt,
+          startTime,
+          endTime,
+          amount: price.finalPrice,
+        }).catch((e) => console.error('[appt] client email failed:', e))
+        if (expertUser?.email) {
+          sendNewBookingNotifyExpert({
+            to: expertUser.email,
+            expertName: expertUser.name,
+            clientName: client.name,
+            dateFormatted: dateFmt,
+            startTime,
+            endTime,
+            amount: price.finalPrice,
+          }).catch((e) => console.error('[appt] expert email failed:', e))
+        }
+      } catch (emailErr) {
+        console.error('[appt] email lookup failed:', emailErr)
+      }
+
       return handleCORS(
         NextResponse.json({
           success: true,
@@ -1118,6 +1153,30 @@ async function handleRoute(request, { params }) {
         ? 'admin'
         : 'client'
       await appt.save()
+
+      // Fire-and-forget cancellation email to client
+      try {
+        const client = await User.findById(appt.clientId)
+          .select({ email: 1, name: 1 })
+          .lean()
+        const expert = await Expert.findById(appt.expertId).lean()
+        const expertUser = expert
+          ? await User.findById(expert.userId).select({ name: 1 }).lean()
+          : null
+        if (client?.email) {
+          sendAppointmentCancellationEmail({
+            to: client.email,
+            name: client.name,
+            expertName: expertUser?.name || 'الخبير',
+            dateFormatted: formatArabicDate(appt.date),
+            startTime: appt.startTime,
+            cancelledBy: appt.cancelledBy,
+          }).catch((e) => console.error('[cancel] email failed:', e))
+        }
+      } catch (e) {
+        console.error('[cancel] email lookup failed:', e)
+      }
+
       return handleCORS(NextResponse.json({ success: true }))
     }
 
@@ -1209,6 +1268,31 @@ async function handleRoute(request, { params }) {
     }
 
 
+
+    // -------- PAYMENT WEBHOOK (generic, routes to configured provider) --------
+    if (route === '/payments/webhook' && method === 'POST') {
+      try {
+        const provider = getPaymentProvider()
+        const event = await provider.parseWebhook(request)
+        if (!event) {
+          return handleCORS(
+            NextResponse.json({ received: false }, { status: 400 })
+          )
+        }
+        // At this layer we just acknowledge. Actual state mutation (mark
+        // Membership/Appointment as PAID) should be wired based on metadata
+        // when switching from 'mock' to a real gateway like Thawani.
+        console.log('[payments] webhook', provider.name, event)
+        return handleCORS(
+          NextResponse.json({ received: true, sessionId: event.sessionId })
+        )
+      } catch (err) {
+        console.error('[payments] webhook error:', err)
+        return handleCORS(
+          NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 })
+        )
+      }
+    }
 
     // -------- FORGOT PASSWORD --------
     if (route === '/forgot-password' && method === 'POST') {
