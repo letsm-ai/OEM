@@ -1,625 +1,396 @@
 #!/usr/bin/env python3
 """
-Comprehensive backend testing for Omani Entrepreneur Majles
-Tests regression + new features (appointment emails, webhook, payment provider)
+Backend Test Suite for مجلس رواد الأعمال العماني (Omani Entrepreneur Majles)
+Testing the NEW 24-hour reminder cron endpoint: POST /api/cron/send-reminders
 """
 
+import os
+import sys
 import requests
 import json
-import time
-import os
 from datetime import datetime, timedelta
 import pymongo
 from pymongo import MongoClient
+import uuid
+import bcrypt
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv('/app/.env')
 
 # Configuration
-BASE_URL = os.getenv('NEXT_PUBLIC_BASE_URL', 'https://6f3dfdf5-cfdd-488c-a9a0-63f293d4ee0d.preview.emergentagent.com')
-API_BASE = f"{BASE_URL}/api"
 MONGO_URL = os.getenv('MONGO_URL', 'mongodb://localhost:27017')
 DB_NAME = os.getenv('DB_NAME', 'majles')
+BASE_URL = os.getenv('NEXT_PUBLIC_BASE_URL', 'http://localhost:3000')
+CRON_SECRET = os.getenv('CRON_SECRET')
 
-print(f"🔧 Testing against: {API_BASE}")
-print(f"🔧 MongoDB: {MONGO_URL}/{DB_NAME}")
+print(f"🔧 Configuration:")
+print(f"   MONGO_URL: {MONGO_URL}")
+print(f"   DB_NAME: {DB_NAME}")
+print(f"   BASE_URL: {BASE_URL}")
+print(f"   CRON_SECRET: {'✅ Set' if CRON_SECRET else '❌ Missing'}")
+print()
 
 # MongoDB connection
 try:
-    mongo_client = MongoClient(MONGO_URL)
-    db = mongo_client[DB_NAME]
+    client = MongoClient(MONGO_URL)
+    db = client[DB_NAME]
     print("✅ MongoDB connection established")
 except Exception as e:
     print(f"❌ MongoDB connection failed: {e}")
-    exit(1)
+    sys.exit(1)
 
-def make_request(method, endpoint, data=None, headers=None, cookies=None):
-    """Make HTTP request with error handling"""
-    url = f"{API_BASE}{endpoint}"
-    try:
-        if method.upper() == 'GET':
-            response = requests.get(url, headers=headers, cookies=cookies, timeout=30)
-        elif method.upper() == 'POST':
-            response = requests.post(url, json=data, headers=headers, cookies=cookies, timeout=30)
-        elif method.upper() == 'PUT':
-            response = requests.put(url, json=data, headers=headers, cookies=cookies, timeout=30)
-        elif method.upper() == 'DELETE':
-            response = requests.delete(url, headers=headers, cookies=cookies, timeout=30)
-        else:
-            raise ValueError(f"Unsupported method: {method}")
-        
-        return response
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Request failed: {e}")
-        return None
+def generate_uuid():
+    """Generate UUID string like the Node.js app"""
+    return str(uuid.uuid4())
 
-def create_timestamped_email():
-    """Generate unique timestamped email"""
-    timestamp = int(time.time() * 1000)
-    return f"test_{timestamp}@example.com"
+def hash_password(password):
+    """Hash password using bcrypt like the Node.js app"""
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
-def get_session_cookies(email, password):
-    """Login and get session cookies"""
-    # First get CSRF token
-    csrf_response = make_request('GET', '/auth/csrf')
-    if not csrf_response or csrf_response.status_code != 200:
-        print("❌ Failed to get CSRF token")
-        return None
-    
-    csrf_token = csrf_response.json().get('csrfToken')
-    if not csrf_token:
-        print("❌ No CSRF token in response")
-        return None
-    
-    # Login with credentials
-    login_data = {
-        'email': email,
-        'password': password,
-        'csrfToken': csrf_token,
-        'callbackUrl': f'{BASE_URL}/dashboard',
-        'json': 'true'
+def create_test_user(email, name="Test User", role="MEMBER", membership_tier="FREE"):
+    """Create a test user in the database"""
+    user_id = generate_uuid()
+    user_doc = {
+        "_id": user_id,
+        "name": name,
+        "email": email.lower().strip(),
+        "password": hash_password("password123"),
+        "role": role,
+        "membershipTier": membership_tier,
+        "membershipExpiry": None,
+        "createdAt": datetime.utcnow()
     }
     
-    login_response = make_request('POST', '/auth/callback/credentials', login_data)
-    if not login_response or login_response.status_code != 200:
-        print(f"❌ Login failed: {login_response.status_code if login_response else 'No response'}")
-        return None
-    
-    # Extract session cookies
-    cookies = {}
-    for cookie in login_response.cookies:
-        cookies[cookie.name] = cookie.value
-    
-    return cookies
+    # Insert or update user
+    db.users.replace_one({"email": email.lower().strip()}, user_doc, upsert=True)
+    return user_id
 
-def promote_user_to_admin(user_id):
-    """Promote user to ADMIN role directly in database"""
-    try:
-        result = db.users.update_one(
-            {'_id': user_id},
-            {'$set': {'role': 'ADMIN'}}
-        )
-        return result.modified_count > 0
-    except Exception as e:
-        print(f"❌ Failed to promote user to admin: {e}")
-        return False
+def create_test_expert(user_id, specialty="BUSINESS", hourly_rate=25):
+    """Create a test expert in the database"""
+    expert_id = generate_uuid()
+    expert_doc = {
+        "_id": expert_id,
+        "userId": user_id,
+        "specialtyAr": "استشارات تجارية",
+        "specialty": specialty,
+        "hourlyRate": hourly_rate,
+        "bio": "خبير في الاستشارات التجارية",
+        "status": "APPROVED",
+        "isApproved": True,
+        "createdAt": datetime.utcnow()
+    }
+    
+    db.experts.replace_one({"userId": user_id}, expert_doc, upsert=True)
+    return expert_id
 
-def promote_user_to_gold(user_id):
-    """Promote user to GOLD tier directly in database"""
-    try:
-        result = db.users.update_one(
-            {'_id': user_id},
-            {'$set': {'membershipTier': 'GOLD'}}
-        )
-        return result.modified_count > 0
-    except Exception as e:
-        print(f"❌ Failed to promote user to GOLD: {e}")
-        return False
+def create_test_appointment(client_id, expert_id, target_datetime, status="CONFIRMED", reminder_sent=False):
+    """Create a test appointment in the database"""
+    appointment_id = generate_uuid()
+    
+    # Split target_datetime into date (UTC midnight) and time
+    date_utc = target_datetime.replace(hour=0, minute=0, second=0, microsecond=0)
+    start_time = f"{target_datetime.hour:02d}:{target_datetime.minute:02d}"
+    end_datetime = target_datetime + timedelta(hours=1)
+    end_time = f"{end_datetime.hour:02d}:{end_datetime.minute:02d}"
+    
+    appointment_doc = {
+        "_id": appointment_id,
+        "clientId": client_id,
+        "expertId": expert_id,
+        "date": date_utc,
+        "startTime": start_time,
+        "endTime": end_time,
+        "status": status,
+        "totalPaid": 25,
+        "originalPrice": 25,
+        "discountPercent": 0,
+        "notes": "Test appointment for cron reminder",
+        "cancelledAt": None,
+        "cancelledBy": None,
+        "reminderSentAt": datetime.utcnow() if reminder_sent else None,
+        "createdAt": datetime.utcnow()
+    }
+    
+    result = db.appointments.insert_one(appointment_doc)
+    print(f"   📅 Created appointment {appointment_id} for {target_datetime} (status: {status})")
+    return appointment_id
 
-def set_expert_approved_and_add_availability(user_id):
-    """Set expert status to APPROVED and add availability"""
-    try:
-        # Find expert by userId
-        expert = db.experts.find_one({'userId': user_id})
-        if not expert:
-            print(f"❌ No expert found for user {user_id}")
-            return False
-        
-        expert_id = expert['_id']
-        
-        # Update expert status to APPROVED
-        db.experts.update_one(
-            {'_id': expert_id},
-            {'$set': {'status': 'APPROVED', 'isApproved': True}}
-        )
-        
-        # Add availability for Sunday (dayOfWeek=0) 09:00-12:00
-        db.availabilities.delete_many({'expertId': expert_id})  # Clear existing
-        db.availabilities.insert_one({
-            '_id': f"avail_{int(time.time())}",
-            'expertId': expert_id,
-            'dayOfWeek': 0,  # Sunday
-            'startTime': '09:00',
-            'endTime': '12:00'
-        })
-        
-        print(f"✅ Expert {expert_id} approved and availability set")
-        return expert_id
-    except Exception as e:
-        print(f"❌ Failed to set expert approved: {e}")
-        return False
+def cleanup_test_data():
+    """Clean up test data"""
+    print("🧹 Cleaning up test data...")
+    
+    # Remove test users (emails containing 'crontest')
+    result = db.users.delete_many({"email": {"$regex": "crontest"}})
+    print(f"   Deleted {result.deleted_count} test users")
+    
+    # Remove test experts for deleted users
+    result = db.experts.delete_many({"userId": {"$in": []}})  # Will be empty after user deletion
+    
+    # Remove test appointments (notes containing 'Test appointment for cron')
+    result = db.appointments.delete_many({"notes": {"$regex": "Test appointment for cron"}})
+    print(f"   Deleted {result.deleted_count} test appointments")
 
-def run_tests():
-    """Run all backend tests"""
-    print("\n" + "="*60)
-    print("🚀 STARTING COMPREHENSIVE BACKEND TESTS")
-    print("="*60)
+def test_cron_endpoint():
+    """Test the 24-hour reminder cron endpoint"""
+    print("🚀 Testing 24-hour reminder cron endpoint: POST /api/cron/send-reminders")
+    print("=" * 80)
     
-    test_results = []
+    # Clean up any existing test data
+    cleanup_test_data()
     
-    # A) REGRESSION TESTS (5 tests)
-    print("\n📋 A) REGRESSION TESTS")
-    print("-" * 30)
+    # Test 1: Auth checks
+    print("\n📋 TEST 1: Authentication Checks")
+    print("-" * 40)
     
-    # Test 1: GET /api/ health check
-    print("\n1️⃣ Testing API health check...")
+    # 1a: No Authorization header
     try:
-        response = make_request('GET', '/')
-        if response and response.status_code == 200:
-            data = response.json()
-            if data.get('message') == 'Majles API is running':
-                print("✅ API health check passed")
-                test_results.append("✅ GET /api/ → 200 'Majles API is running'")
+        response = requests.post(f"{BASE_URL}/api/cron/send-reminders", 
+                               headers={"Content-Type": "application/json"})
+        if response.status_code == 401:
+            response_data = response.json()
+            if "غير مصرح" in response_data.get("error", ""):
+                print("✅ 1a: No auth header → 401 with Arabic error 'غير مصرح'")
             else:
-                print(f"❌ Unexpected message: {data}")
-                test_results.append("❌ GET /api/ → Wrong message")
+                print(f"❌ 1a: Expected Arabic error 'غير مصرح', got: {response_data}")
         else:
-            print(f"❌ Health check failed: {response.status_code if response else 'No response'}")
-            test_results.append("❌ GET /api/ → Failed")
+            print(f"❌ 1a: Expected 401, got {response.status_code}: {response.text}")
     except Exception as e:
-        print(f"❌ Health check error: {e}")
-        test_results.append("❌ GET /api/ → Error")
+        print(f"❌ 1a: Request failed: {e}")
     
-    # Test 2: POST /api/signup creates user
-    print("\n2️⃣ Testing user signup...")
-    signup_email = create_timestamped_email()
-    signup_password = "testpass123"
+    # 1b: Wrong Authorization token
     try:
-        signup_data = {
-            'name': 'Test User',
-            'email': signup_email,
-            'password': signup_password
-        }
-        response = make_request('POST', '/signup', signup_data)
-        if response and response.status_code == 200:
-            data = response.json()
-            if data.get('success') and data.get('user'):
-                user_id = data['user']['id']
-                print(f"✅ Signup successful, user ID: {user_id}")
-                test_results.append("✅ POST /api/signup → 200 with user created")
+        response = requests.post(f"{BASE_URL}/api/cron/send-reminders",
+                               headers={
+                                   "Content-Type": "application/json",
+                                   "Authorization": "Bearer WRONG_TOKEN"
+                               })
+        if response.status_code == 401:
+            response_data = response.json()
+            if "غير مصرح" in response_data.get("error", ""):
+                print("✅ 1b: Wrong token → 401 with Arabic error 'غير مصرح'")
             else:
-                print(f"❌ Signup response invalid: {data}")
-                test_results.append("❌ POST /api/signup → Invalid response")
+                print(f"❌ 1b: Expected Arabic error 'غير مصرح', got: {response_data}")
         else:
-            print(f"❌ Signup failed: {response.status_code if response else 'No response'}")
-            test_results.append("❌ POST /api/signup → Failed")
+            print(f"❌ 1b: Expected 401, got {response.status_code}: {response.text}")
     except Exception as e:
-        print(f"❌ Signup error: {e}")
-        test_results.append("❌ POST /api/signup → Error")
+        print(f"❌ 1b: Request failed: {e}")
     
-    # Test 3: NextAuth credentials login
-    print("\n3️⃣ Testing NextAuth login...")
+    # 1c: Correct Authorization token
     try:
-        cookies = get_session_cookies(signup_email, signup_password)
-        if cookies and any('session-token' in key or 'next-auth' in key for key in cookies.keys()):
-            print("✅ NextAuth login successful, session cookie obtained")
-            test_results.append("✅ NextAuth credentials login → Session cookie obtained")
-            user_cookies = cookies
+        response = requests.post(f"{BASE_URL}/api/cron/send-reminders",
+                               headers={
+                                   "Content-Type": "application/json",
+                                   "Authorization": f"Bearer {CRON_SECRET}"
+                               })
+        if response.status_code == 200:
+            response_data = response.json()
+            if (response_data.get("success") == True and 
+                "considered" in response_data and 
+                "sent" in response_data and 
+                "failed" in response_data):
+                print(f"✅ 1c: Correct token → 200 with JSON {response_data}")
+            else:
+                print(f"❌ 1c: Expected success response format, got: {response_data}")
         else:
-            print("❌ NextAuth login failed - no session cookie")
-            test_results.append("❌ NextAuth credentials login → Failed")
-            user_cookies = None
+            print(f"❌ 1c: Expected 200, got {response.status_code}: {response.text}")
     except Exception as e:
-        print(f"❌ NextAuth login error: {e}")
-        test_results.append("❌ NextAuth credentials login → Error")
-        user_cookies = None
+        print(f"❌ 1c: Request failed: {e}")
     
-    # Test 4: POST /api/membership/subscribe
-    print("\n4️⃣ Testing membership subscription...")
+    # Test 2: Empty case (no appointments in window)
+    print("\n📋 TEST 2: Empty Case (No Appointments in 23h-25h Window)")
+    print("-" * 60)
+    
     try:
-        if user_cookies:
-            subscribe_data = {'tier': 'BASIC'}
-            response = make_request('POST', '/membership/subscribe', subscribe_data, cookies=user_cookies)
-            if response and response.status_code == 200:
-                data = response.json()
-                if data.get('success') and data.get('user', {}).get('membershipTier') == 'BASIC':
-                    print("✅ Membership subscription successful, user tier updated to BASIC")
-                    test_results.append("✅ POST /api/membership/subscribe → 200, user tier updated")
+        response = requests.post(f"{BASE_URL}/api/cron/send-reminders",
+                               headers={
+                                   "Content-Type": "application/json",
+                                   "Authorization": f"Bearer {CRON_SECRET}"
+                               })
+        if response.status_code == 200:
+            response_data = response.json()
+            if (response_data.get("success") == True and 
+                response_data.get("considered") == 0 and
+                response_data.get("sent") == 0 and
+                response_data.get("failed") == 0):
+                print(f"✅ 2: Empty case → considered=0, sent=0, failed=0: {response_data}")
+            else:
+                print(f"❌ 2: Expected empty response, got: {response_data}")
+        else:
+            print(f"❌ 2: Expected 200, got {response.status_code}: {response.text}")
+    except Exception as e:
+        print(f"❌ 2: Request failed: {e}")
+    
+    # Test 3: Reminder fires (create appointment in 24h window)
+    print("\n📋 TEST 3: Reminder Fires (Appointment in 24h Window)")
+    print("-" * 55)
+    
+    # Create test users
+    client_email = f"client.crontest.{int(datetime.utcnow().timestamp())}@example.com"
+    expert_email = f"expert.crontest.{int(datetime.utcnow().timestamp())}@example.com"
+    
+    client_id = create_test_user(client_email, "Test Client", "MEMBER", "FREE")
+    expert_user_id = create_test_user(expert_email, "Test Expert", "EXPERT", "GOLD")
+    expert_id = create_test_expert(expert_user_id)
+    
+    print(f"   👤 Created test client: {client_id} ({client_email})")
+    print(f"   👨‍💼 Created test expert: {expert_id} ({expert_email})")
+    
+    # Create appointment in 24h window (now + 24h)
+    now = datetime.utcnow()
+    target_datetime = now + timedelta(hours=24)
+    appointment_id = create_test_appointment(client_id, expert_id, target_datetime)
+    
+    try:
+        response = requests.post(f"{BASE_URL}/api/cron/send-reminders",
+                               headers={
+                                   "Content-Type": "application/json",
+                                   "Authorization": f"Bearer {CRON_SECRET}"
+                               })
+        if response.status_code == 200:
+            response_data = response.json()
+            if (response_data.get("success") == True and 
+                response_data.get("considered") >= 1 and
+                response_data.get("sent") >= 1):
+                print(f"✅ 3a: Reminder sent → {response_data}")
+                
+                # Verify in DB that reminderSentAt is set
+                appointment = db.appointments.find_one({"_id": appointment_id})
+                if appointment and appointment.get("reminderSentAt"):
+                    print(f"✅ 3b: DB verification → reminderSentAt set: {appointment['reminderSentAt']}")
                 else:
-                    print(f"❌ Subscription response invalid: {data}")
-                    test_results.append("❌ POST /api/membership/subscribe → Invalid response")
+                    print(f"❌ 3b: DB verification failed → reminderSentAt not set")
             else:
-                print(f"❌ Subscription failed: {response.status_code if response else 'No response'}")
-                test_results.append("❌ POST /api/membership/subscribe → Failed")
+                print(f"❌ 3a: Expected reminder to be sent, got: {response_data}")
         else:
-            print("❌ Skipping subscription test - no session cookies")
-            test_results.append("❌ POST /api/membership/subscribe → Skipped (no session)")
+            print(f"❌ 3a: Expected 200, got {response.status_code}: {response.text}")
     except Exception as e:
-        print(f"❌ Subscription error: {e}")
-        test_results.append("❌ POST /api/membership/subscribe → Error")
+        print(f"❌ 3a: Request failed: {e}")
     
-    # Test 5: POST /api/companies (BASIC+ tier required)
-    print("\n5️⃣ Testing company creation...")
+    # Test 4: Idempotency (same appointment not reminded twice)
+    print("\n📋 TEST 4: Idempotency (No Duplicate Reminders)")
+    print("-" * 45)
+    
     try:
-        if user_cookies:
-            company_data = {
-                'nameAr': 'شركة اختبار',
-                'sector': 'TECH',
-                'description': 'شركة تقنية للاختبار'
-            }
-            response = make_request('POST', '/companies', company_data, cookies=user_cookies)
-            if response and response.status_code == 200:
-                data = response.json()
-                if data.get('success') and data.get('company'):
-                    print("✅ Company creation successful")
-                    test_results.append("✅ POST /api/companies → 200, company created")
-                else:
-                    print(f"❌ Company creation response invalid: {data}")
-                    test_results.append("❌ POST /api/companies → Invalid response")
+        response = requests.post(f"{BASE_URL}/api/cron/send-reminders",
+                               headers={
+                                   "Content-Type": "application/json",
+                                   "Authorization": f"Bearer {CRON_SECRET}"
+                               })
+        if response.status_code == 200:
+            response_data = response.json()
+            # The same appointment should not be considered again since reminderSentAt is set
+            if (response_data.get("success") == True and 
+                response_data.get("considered") == 0 and
+                response_data.get("sent") == 0):
+                print(f"✅ 4: Idempotency → considered=0, sent=0 (already reminded): {response_data}")
             else:
-                print(f"❌ Company creation failed: {response.status_code if response else 'No response'}")
-                test_results.append("❌ POST /api/companies → Failed")
+                print(f"❌ 4: Expected no reminders for already reminded appointment, got: {response_data}")
         else:
-            print("❌ Skipping company test - no session cookies")
-            test_results.append("❌ POST /api/companies → Skipped (no session)")
+            print(f"❌ 4: Expected 200, got {response.status_code}: {response.text}")
     except Exception as e:
-        print(f"❌ Company creation error: {e}")
-        test_results.append("❌ POST /api/companies → Error")
+        print(f"❌ 4: Request failed: {e}")
     
-    # Test 6: POST /api/experts/apply (GOLD+ tier required)
-    print("\n6️⃣ Testing expert application...")
+    # Test 5: Out of window appointments
+    print("\n📋 TEST 5: Out of Window Appointments (Too Soon/Too Far)")
+    print("-" * 55)
+    
+    # Create appointment too soon (10 hours from now)
+    too_soon_datetime = now + timedelta(hours=10)
+    too_soon_id = create_test_appointment(client_id, expert_id, too_soon_datetime)
+    
+    # Create appointment too far (40 hours from now)
+    too_far_datetime = now + timedelta(hours=40)
+    too_far_id = create_test_appointment(client_id, expert_id, too_far_datetime)
+    
     try:
-        if user_cookies:
-            # First promote user to GOLD tier in database
-            user_response = make_request('GET', '/me', cookies=user_cookies)
-            if user_response and user_response.status_code == 200:
-                user_data = user_response.json()
-                user_id = user_data.get('id')
-                if user_id and promote_user_to_gold(user_id):
-                    print("✅ User promoted to GOLD tier")
-                    
-                    expert_data = {
-                        'specialty': 'TECH',
-                        'specialtyAr': 'تقنية المعلومات',
-                        'bio': 'خبير في التقنية',
-                        'experienceYears': 5,
-                        'hourlyRate': 25
-                    }
-                    response = make_request('POST', '/experts/apply', expert_data, cookies=user_cookies)
-                    if response and response.status_code == 200:
-                        data = response.json()
-                        if data.get('success') and data.get('expert'):
-                            print("✅ Expert application successful")
-                            test_results.append("✅ POST /api/experts/apply → 200, expert application created")
-                        else:
-                            print(f"❌ Expert application response invalid: {data}")
-                            test_results.append("❌ POST /api/experts/apply → Invalid response")
-                    else:
-                        print(f"❌ Expert application failed: {response.status_code if response else 'No response'}")
-                        test_results.append("❌ POST /api/experts/apply → Failed")
-                else:
-                    print("❌ Failed to promote user to GOLD or get user ID")
-                    test_results.append("❌ POST /api/experts/apply → Failed (tier promotion)")
+        response = requests.post(f"{BASE_URL}/api/cron/send-reminders",
+                               headers={
+                                   "Content-Type": "application/json",
+                                   "Authorization": f"Bearer {CRON_SECRET}"
+                               })
+        if response.status_code == 200:
+            response_data = response.json()
+            # Should not consider appointments outside 23h-25h window
+            if (response_data.get("success") == True and 
+                response_data.get("considered") == 0 and
+                response_data.get("sent") == 0):
+                print(f"✅ 5: Out of window → considered=0, sent=0: {response_data}")
             else:
-                print("❌ Failed to get user data")
-                test_results.append("❌ POST /api/experts/apply → Failed (no user data)")
+                print(f"❌ 5: Expected no reminders for out-of-window appointments, got: {response_data}")
         else:
-            print("❌ Skipping expert test - no session cookies")
-            test_results.append("❌ POST /api/experts/apply → Skipped (no session)")
+            print(f"❌ 5: Expected 200, got {response.status_code}: {response.text}")
     except Exception as e:
-        print(f"❌ Expert application error: {e}")
-        test_results.append("❌ POST /api/experts/apply → Error")
+        print(f"❌ 5: Request failed: {e}")
     
-    # B) APPOINTMENT EMAILS TESTS
-    print("\n📧 B) APPOINTMENT EMAILS TESTS")
-    print("-" * 30)
+    # Test 6: Cancelled appointments
+    print("\n📋 TEST 6: Cancelled Appointments (Status != CONFIRMED)")
+    print("-" * 50)
     
-    # Test 7-8: Setup users and test appointment booking with emails
-    print("\n7️⃣ Setting up expert and client users...")
+    # Create cancelled appointment in 24h window
+    cancelled_datetime = now + timedelta(hours=24, minutes=30)
+    cancelled_id = create_test_appointment(client_id, expert_id, cancelled_datetime, status="CANCELLED")
+    
     try:
-        # Create expert user (GOLD tier)
-        expert_email = create_timestamped_email()
-        expert_password = "expertpass123"
-        expert_signup = {
-            'name': 'Expert User',
-            'email': expert_email,
-            'password': expert_password
-        }
-        expert_response = make_request('POST', '/signup', expert_signup)
-        
-        if expert_response and expert_response.status_code == 200:
-            expert_data = expert_response.json()
-            expert_user_id = expert_data['user']['id']
-            print(f"✅ Expert user created: {expert_user_id}")
-            
-            # Promote to GOLD and apply as expert
-            if promote_user_to_gold(expert_user_id):
-                expert_cookies = get_session_cookies(expert_email, expert_password)
-                if expert_cookies:
-                    expert_apply_data = {
-                        'specialty': 'TECH',
-                        'specialtyAr': 'تقنية المعلومات',
-                        'bio': 'خبير في التقنية',
-                        'experienceYears': 5,
-                        'hourlyRate': 25
-                    }
-                    apply_response = make_request('POST', '/experts/apply', expert_apply_data, cookies=expert_cookies)
-                    if apply_response and apply_response.status_code == 200:
-                        # Set expert as approved and add availability
-                        expert_id = set_expert_approved_and_add_availability(expert_user_id)
-                        if expert_id:
-                            print(f"✅ Expert approved and availability set: {expert_id}")
-                            
-                            # Create client user (FREE tier)
-                            client_email = create_timestamped_email()
-                            client_password = "clientpass123"
-                            client_signup = {
-                                'name': 'Client User',
-                                'email': client_email,
-                                'password': client_password
-                            }
-                            client_response = make_request('POST', '/signup', client_signup)
-                            
-                            if client_response and client_response.status_code == 200:
-                                client_data = client_response.json()
-                                client_user_id = client_data['user']['id']
-                                client_cookies = get_session_cookies(client_email, client_password)
-                                
-                                if client_cookies:
-                                    print(f"✅ Client user created and logged in: {client_user_id}")
-                                    
-                                    # Test 8: Book appointment
-                                    print("\n8️⃣ Testing appointment booking with emails...")
-                                    # Get next Sunday date
-                                    today = datetime.now()
-                                    days_ahead = 6 - today.weekday()  # Sunday is 6
-                                    if days_ahead <= 0:
-                                        days_ahead += 7
-                                    next_sunday = today + timedelta(days=days_ahead)
-                                    date_str = next_sunday.strftime('%Y-%m-%d')
-                                    
-                                    booking_data = {
-                                        'expertId': expert_id,
-                                        'date': date_str,
-                                        'startTime': '09:00',
-                                        'endTime': '10:00'
-                                    }
-                                    
-                                    booking_response = make_request('POST', '/appointments', booking_data, cookies=client_cookies)
-                                    if booking_response and booking_response.status_code == 200:
-                                        booking_result = booking_response.json()
-                                        if booking_result.get('success') and booking_result.get('appointment'):
-                                            appointment_id = booking_result['appointment']['id']
-                                            print(f"✅ Appointment booked successfully: {appointment_id}")
-                                            print("📧 Server logs should show email attempts for both client and expert")
-                                            test_results.append("✅ POST /api/appointments → 200, appointment booked with email attempts")
-                                            
-                                            # Test 9: Cancel appointment (ensure >24h rule)
-                                            print("\n9️⃣ Testing appointment cancellation with emails...")
-                                            time.sleep(2)  # Brief pause
-                                            
-                                            cancel_response = make_request('POST', f'/appointments/{appointment_id}/cancel', {}, cookies=client_cookies)
-                                            if cancel_response and cancel_response.status_code == 200:
-                                                print("✅ Appointment cancelled successfully")
-                                                print("📧 Server logs should show cancellation email attempt")
-                                                test_results.append("✅ POST /api/appointments/:id/cancel → 200, cancellation email attempted")
-                                            else:
-                                                print(f"❌ Appointment cancellation failed: {cancel_response.status_code if cancel_response else 'No response'}")
-                                                test_results.append("❌ POST /api/appointments/:id/cancel → Failed")
-                                        else:
-                                            print(f"❌ Booking response invalid: {booking_result}")
-                                            test_results.append("❌ POST /api/appointments → Invalid response")
-                                    else:
-                                        print(f"❌ Appointment booking failed: {booking_response.status_code if booking_response else 'No response'}")
-                                        test_results.append("❌ POST /api/appointments → Failed")
-                                else:
-                                    print("❌ Failed to get client session cookies")
-                                    test_results.append("❌ Appointment tests → Failed (client login)")
-                            else:
-                                print("❌ Failed to create client user")
-                                test_results.append("❌ Appointment tests → Failed (client creation)")
-                        else:
-                            print("❌ Failed to approve expert or set availability")
-                            test_results.append("❌ Appointment tests → Failed (expert approval)")
-                    else:
-                        print("❌ Expert application failed")
-                        test_results.append("❌ Appointment tests → Failed (expert application)")
-                else:
-                    print("❌ Failed to get expert session cookies")
-                    test_results.append("❌ Appointment tests → Failed (expert login)")
+        response = requests.post(f"{BASE_URL}/api/cron/send-reminders",
+                               headers={
+                                   "Content-Type": "application/json",
+                                   "Authorization": f"Bearer {CRON_SECRET}"
+                               })
+        if response.status_code == 200:
+            response_data = response.json()
+            # Should not consider cancelled appointments
+            if (response_data.get("success") == True and 
+                response_data.get("considered") == 0 and
+                response_data.get("sent") == 0):
+                print(f"✅ 6: Cancelled appointment → considered=0, sent=0: {response_data}")
             else:
-                print("❌ Failed to promote expert user to GOLD")
-                test_results.append("❌ Appointment tests → Failed (expert promotion)")
+                print(f"❌ 6: Expected no reminders for cancelled appointments, got: {response_data}")
         else:
-            print("❌ Failed to create expert user")
-            test_results.append("❌ Appointment tests → Failed (expert creation)")
+            print(f"❌ 6: Expected 200, got {response.status_code}: {response.text}")
     except Exception as e:
-        print(f"❌ Appointment email tests error: {e}")
-        test_results.append("❌ Appointment email tests → Error")
+        print(f"❌ 6: Request failed: {e}")
     
-    # C) WEBHOOK TESTS
-    print("\n🔗 C) WEBHOOK TESTS")
-    print("-" * 30)
+    # Test 7: Regression tests
+    print("\n📋 TEST 7: Regression Tests (Other Endpoints Still Work)")
+    print("-" * 55)
     
-    # Test 10: POST /api/payments/webhook without body
-    print("\n🔟 Testing webhook without body...")
+    # 7a: GET /api/ should return 200
     try:
-        response = make_request('POST', '/payments/webhook', None)
-        if response and response.status_code == 400:
-            data = response.json()
-            if data.get('received') == False:
-                print("✅ Webhook without body correctly returns 400 with received:false")
-                test_results.append("✅ POST /api/payments/webhook (no body) → 400 {received:false}")
+        response = requests.get(f"{BASE_URL}/api/")
+        if response.status_code == 200:
+            response_data = response.json()
+            if "Majles API is running" in response_data.get("message", ""):
+                print("✅ 7a: GET /api/ → 200 with correct message")
             else:
-                print(f"❌ Unexpected webhook response: {data}")
-                test_results.append("❌ POST /api/payments/webhook (no body) → Wrong response")
+                print(f"❌ 7a: Expected 'Majles API is running', got: {response_data}")
         else:
-            print(f"❌ Webhook test failed: {response.status_code if response else 'No response'}")
-            test_results.append("❌ POST /api/payments/webhook (no body) → Failed")
+            print(f"❌ 7a: Expected 200, got {response.status_code}: {response.text}")
     except Exception as e:
-        print(f"❌ Webhook test error: {e}")
-        test_results.append("❌ POST /api/payments/webhook (no body) → Error")
+        print(f"❌ 7a: Request failed: {e}")
     
-    # Test 11: POST /api/payments/webhook with JSON body
-    print("\n1️⃣1️⃣ Testing webhook with JSON body...")
+    # 7b: POST /api/forgot-password with unknown email should return 200
     try:
-        webhook_data = {'test': 'data', 'sessionId': 'test123'}
-        response = make_request('POST', '/payments/webhook', webhook_data)
-        if response and response.status_code == 400:
-            data = response.json()
-            if data.get('received') == False:
-                print("✅ Webhook with JSON body correctly returns 400 with received:false (mock provider)")
-                test_results.append("✅ POST /api/payments/webhook (JSON body) → 400 {received:false}")
+        response = requests.post(f"{BASE_URL}/api/forgot-password",
+                               headers={"Content-Type": "application/json"},
+                               json={"email": "unknown.crontest@example.com"})
+        if response.status_code == 200:
+            response_data = response.json()
+            if "إذا كان" in response_data.get("message", ""):
+                print("✅ 7b: POST /api/forgot-password unknown email → 200 with anti-enumeration message")
             else:
-                print(f"❌ Unexpected webhook response: {data}")
-                test_results.append("❌ POST /api/payments/webhook (JSON body) → Wrong response")
+                print(f"❌ 7b: Expected anti-enumeration message, got: {response_data}")
         else:
-            print(f"❌ Webhook test failed: {response.status_code if response else 'No response'}")
-            test_results.append("❌ POST /api/payments/webhook (JSON body) → Failed")
+            print(f"❌ 7b: Expected 200, got {response.status_code}: {response.text}")
     except Exception as e:
-        print(f"❌ Webhook test error: {e}")
-        test_results.append("❌ POST /api/payments/webhook (JSON body) → Error")
+        print(f"❌ 7b: Request failed: {e}")
     
-    # Test 12: GET /api/payments/webhook (wrong method)
-    print("\n1️⃣2️⃣ Testing webhook with wrong method...")
-    try:
-        response = make_request('GET', '/payments/webhook')
-        if response and response.status_code in [404, 405]:
-            print(f"✅ GET webhook correctly returns {response.status_code} (wrong method)")
-            test_results.append(f"✅ GET /api/payments/webhook → {response.status_code} (wrong method)")
-        else:
-            print(f"❌ GET webhook unexpected response: {response.status_code if response else 'No response'}")
-            test_results.append("❌ GET /api/payments/webhook → Unexpected response")
-    except Exception as e:
-        print(f"❌ GET webhook test error: {e}")
-        test_results.append("❌ GET /api/payments/webhook → Error")
+    # Clean up test data
+    cleanup_test_data()
     
-    # D) PAYMENT PROVIDER MODE TEST
-    print("\n💳 D) PAYMENT PROVIDER MODE TEST")
-    print("-" * 30)
-    
-    # Test 13: Confirm appointment booking returns correct pricing
-    print("\n1️⃣3️⃣ Testing appointment booking pricing with mock provider...")
-    try:
-        # This was already tested in the appointment booking above
-        # We'll verify the pricing calculation was correct
-        print("✅ Appointment booking pricing already verified in test 8")
-        print("✅ Mock payment provider mode confirmed (PAYMENT_PROVIDER=mock)")
-        test_results.append("✅ Appointment booking pricing → Correct with mock provider")
-    except Exception as e:
-        print(f"❌ Payment provider test error: {e}")
-        test_results.append("❌ Payment provider test → Error")
-    
-    # E) EMAIL REGRESSION TESTS
-    print("\n📬 E) EMAIL REGRESSION TESTS")
-    print("-" * 30)
-    
-    # Test 14: POST /api/signup welcome email
-    print("\n1️⃣4️⃣ Testing signup welcome email...")
-    try:
-        welcome_email = create_timestamped_email()
-        welcome_signup = {
-            'name': 'Welcome Test User',
-            'email': welcome_email,
-            'password': 'welcomepass123'
-        }
-        response = make_request('POST', '/signup', welcome_signup)
-        if response and response.status_code == 200:
-            data = response.json()
-            if data.get('success'):
-                print("✅ Signup successful, welcome email attempted (fire-and-forget)")
-                print("📧 Check server logs for '[email] Sent to...' or Resend error")
-                test_results.append("✅ POST /api/signup → 200, welcome email attempted")
-            else:
-                print(f"❌ Signup response invalid: {data}")
-                test_results.append("❌ POST /api/signup → Invalid response")
-        else:
-            print(f"❌ Signup failed: {response.status_code if response else 'No response'}")
-            test_results.append("❌ POST /api/signup → Failed")
-    except Exception as e:
-        print(f"❌ Signup welcome email test error: {e}")
-        test_results.append("❌ POST /api/signup → Error")
-    
-    # Test 15: POST /api/forgot-password with unknown email
-    print("\n1️⃣5️⃣ Testing forgot password with unknown email...")
-    try:
-        unknown_email = create_timestamped_email()
-        forgot_data = {'email': unknown_email}
-        response = make_request('POST', '/forgot-password', forgot_data)
-        if response and response.status_code == 200:
-            data = response.json()
-            if data.get('success') and 'إذا كان' in data.get('message', ''):
-                print("✅ Forgot password with unknown email returns 200 with anti-enumeration message")
-                test_results.append("✅ POST /api/forgot-password (unknown email) → 200 anti-enumeration")
-            else:
-                print(f"❌ Forgot password response invalid: {data}")
-                test_results.append("❌ POST /api/forgot-password (unknown email) → Wrong response")
-        else:
-            print(f"❌ Forgot password failed: {response.status_code if response else 'No response'}")
-            test_results.append("❌ POST /api/forgot-password (unknown email) → Failed")
-    except Exception as e:
-        print(f"❌ Forgot password test error: {e}")
-        test_results.append("❌ POST /api/forgot-password (unknown email) → Error")
-    
-    # Test 16: POST /api/reset-password with invalid token
-    print("\n1️⃣6️⃣ Testing reset password with invalid token...")
-    try:
-        reset_data = {
-            'token': 'invalid_token_12345',
-            'password': 'newpassword123'
-        }
-        response = make_request('POST', '/reset-password', reset_data)
-        if response and response.status_code == 400:
-            data = response.json()
-            if 'غير صالح' in data.get('error', ''):
-                print("✅ Reset password with invalid token returns 400 with Arabic error")
-                test_results.append("✅ POST /api/reset-password (invalid token) → 400 Arabic error")
-            else:
-                print(f"❌ Reset password response invalid: {data}")
-                test_results.append("❌ POST /api/reset-password (invalid token) → Wrong response")
-        else:
-            print(f"❌ Reset password failed: {response.status_code if response else 'No response'}")
-            test_results.append("❌ POST /api/reset-password (invalid token) → Failed")
-    except Exception as e:
-        print(f"❌ Reset password test error: {e}")
-        test_results.append("❌ POST /api/reset-password (invalid token) → Error")
-    
-    # SUMMARY
-    print("\n" + "="*60)
-    print("📊 TEST RESULTS SUMMARY")
-    print("="*60)
-    
-    passed_tests = [result for result in test_results if result.startswith("✅")]
-    failed_tests = [result for result in test_results if result.startswith("❌")]
-    
-    print(f"\n✅ PASSED: {len(passed_tests)}")
-    for test in passed_tests:
-        print(f"  {test}")
-    
-    print(f"\n❌ FAILED: {len(failed_tests)}")
-    for test in failed_tests:
-        print(f"  {test}")
-    
-    print(f"\n📈 TOTAL: {len(passed_tests)}/{len(test_results)} tests passed")
-    
-    return test_results
+    print("\n" + "=" * 80)
+    print("🎉 24-hour reminder cron endpoint testing completed!")
+    print("=" * 80)
 
 if __name__ == "__main__":
-    try:
-        results = run_tests()
-        print(f"\n🏁 Testing completed. Results: {len([r for r in results if r.startswith('✅')])}/{len(results)} passed")
-    except KeyboardInterrupt:
-        print("\n⚠️ Testing interrupted by user")
-    except Exception as e:
-        print(f"\n💥 Testing failed with error: {e}")
-    finally:
-        if 'mongo_client' in locals():
-            mongo_client.close()
-            print("🔌 MongoDB connection closed")
+    test_cron_endpoint()

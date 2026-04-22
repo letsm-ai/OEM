@@ -29,6 +29,7 @@ import {
   sendAppointmentConfirmationEmail,
   sendNewBookingNotifyExpert,
   sendAppointmentCancellationEmail,
+  sendAppointmentReminderEmail,
 } from '@/lib/email'
 import { getPaymentProvider, isRealPayment } from '@/lib/payments'
 
@@ -1268,6 +1269,95 @@ async function handleRoute(request, { params }) {
     }
 
 
+
+    // -------- CRON: send 24h reminders --------
+    // Triggered by an external scheduler (cron-job.org, UptimeRobot, vercel cron, etc.)
+    // hitting this URL every hour:
+    //   POST {BASE_URL}/api/cron/send-reminders
+    //   Header: Authorization: Bearer ${CRON_SECRET}
+    if (route === '/cron/send-reminders' && method === 'POST') {
+      const auth = request.headers.get('authorization') || ''
+      const secret = process.env.CRON_SECRET
+      if (!secret) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'CRON_SECRET غير مضبوط في البيئة' },
+            { status: 500 }
+          )
+        )
+      }
+      if (auth !== `Bearer ${secret}`) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+
+      await connectDB()
+      const now = new Date()
+      // Window: appointments starting between now+23h and now+25h, not yet reminded, still CONFIRMED.
+      const windowStart = new Date(now.getTime() + 23 * 60 * 60 * 1000)
+      const windowEnd = new Date(now.getTime() + 25 * 60 * 60 * 1000)
+
+      // Fetch all CONFIRMED that might be tomorrow and not reminded
+      const dayStartCandidate = new Date(windowStart)
+      dayStartCandidate.setUTCHours(0, 0, 0, 0)
+      const dayEndCandidate = new Date(windowEnd)
+      dayEndCandidate.setUTCHours(23, 59, 59, 999)
+
+      const candidates = await Appointment.find({
+        status: 'CONFIRMED',
+        reminderSentAt: null,
+        date: { $gte: dayStartCandidate, $lte: dayEndCandidate },
+      }).lean()
+
+      const toRemind = candidates.filter((a) => {
+        const d = new Date(a.date)
+        const [h, m] = (a.startTime || '00:00').split(':').map(Number)
+        d.setUTCHours(h, m, 0, 0)
+        return d >= windowStart && d <= windowEnd
+      })
+
+      let sent = 0
+      let failed = 0
+      for (const appt of toRemind) {
+        try {
+          const client = await User.findById(appt.clientId)
+            .select({ email: 1, name: 1 })
+            .lean()
+          const expert = await Expert.findById(appt.expertId).lean()
+          const expertUser = expert
+            ? await User.findById(expert.userId).select({ name: 1 }).lean()
+            : null
+          if (client?.email) {
+            await sendAppointmentReminderEmail({
+              to: client.email,
+              name: client.name,
+              expertName: expertUser?.name || 'الخبير',
+              dateFormatted: formatArabicDate(appt.date),
+              startTime: appt.startTime,
+              endTime: appt.endTime,
+            })
+          }
+          await Appointment.updateOne(
+            { _id: appt._id },
+            { $set: { reminderSentAt: new Date() } }
+          )
+          sent += 1
+        } catch (err) {
+          console.error('[cron] reminder failed for', appt._id, err)
+          failed += 1
+        }
+      }
+
+      return handleCORS(
+        NextResponse.json({
+          success: true,
+          considered: toRemind.length,
+          sent,
+          failed,
+        })
+      )
+    }
 
     // -------- PAYMENT WEBHOOK (generic, routes to configured provider) --------
     if (route === '/payments/webhook' && method === 'POST') {
