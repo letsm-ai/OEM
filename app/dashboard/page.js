@@ -192,19 +192,19 @@ export default async function DashboardPage() {
         {/* Quick links */}
         <div className="mt-8 grid gap-4 md:grid-cols-2">
           <QuickAction
+            href="/consultations/my-bookings"
+            title="استشاراتي المحجوزة"
+            desc="عرض جلسات الاستشارات القادمة والسابقة"
+          />
+          <QuickAction
+            href="/consultations/become-expert"
+            title="انضم كخبير استشاري"
+            desc="قدّم استشاراتك لأعضاء المجلس (ذهبي فأعلى)"
+          />
+          <QuickAction
             href="/directory/my-companies"
             title="شركاتي في الدليل"
             desc="إدارة شركاتك ومتابعة حالة الاعتماد"
-          />
-          <QuickAction
-            href="/directory/add-company"
-            title="أضف شركة جديدة للدليل"
-            desc="تطلب باقة أساسي فما فوق"
-          />
-          <QuickAction
-            href="/shop/become-vendor"
-            title="افتح متجرك كبائع"
-            desc="تطلب باقة ذهبي فما فوق"
           />
           <QuickAction
             href="/membership"

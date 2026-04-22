@@ -44,11 +44,27 @@ export default function Navbar() {
             </Link>
           ))}
           {session?.user?.role === 'ADMIN' && (
+            <>
+              <Link
+                href="/admin/companies"
+                className="inline-flex items-center gap-1 rounded-md bg-[#C9A84C]/20 px-3 py-2 text-sm font-semibold text-[#8a6f2d] hover:bg-[#C9A84C]/30"
+              >
+                الشركات
+              </Link>
+              <Link
+                href="/admin/experts"
+                className="inline-flex items-center gap-1 rounded-md bg-[#C9A84C]/20 px-3 py-2 text-sm font-semibold text-[#8a6f2d] hover:bg-[#C9A84C]/30"
+              >
+                الخبراء
+              </Link>
+            </>
+          )}
+          {session?.user?.role === 'EXPERT' && (
             <Link
-              href="/admin/companies"
-              className="inline-flex items-center gap-1 rounded-md bg-[#C9A84C]/20 px-3 py-2 text-sm font-semibold text-[#8a6f2d] hover:bg-[#C9A84C]/30"
+              href="/expert"
+              className="inline-flex items-center gap-1 rounded-md bg-[#1B3A6B]/10 px-3 py-2 text-sm font-semibold text-[#1B3A6B] hover:bg-[#1B3A6B]/20"
             >
-              الإدارة
+              لوحة الخبير
             </Link>
           )}
         </nav>

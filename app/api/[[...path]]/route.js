@@ -4,7 +4,7 @@ import crypto from 'crypto'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { connectDB } from '@/lib/db'
-import { User, Membership, PasswordResetToken, Company } from '@/lib/models'
+import { User, Membership, PasswordResetToken, Company, Expert, Availability, Appointment } from '@/lib/models'
 import {
   TIER_META,
   TIERS,
@@ -12,8 +12,16 @@ import {
   applyDiscount,
   formatArabicDate,
   canListCompany,
+  tierAtLeast,
+  TIER_DISCOUNT,
 } from '@/lib/membership'
 import { SECTOR_KEYS, GOVERNORATE_KEYS } from '@/lib/directory'
+import {
+  SPECIALTY_KEYS,
+  specialtyLabel,
+  generateHourlySlots,
+  computeSessionPrice,
+} from '@/lib/experts'
 import {
   sendWelcomeEmail,
   sendSubscriptionEmail,
@@ -662,6 +670,545 @@ async function handleRoute(request, { params }) {
         NextResponse.json({ success: true, status: 'REJECTED' })
       )
     }
+
+    /* ============================================================
+       EXPERTS & APPOINTMENTS
+       ============================================================ */
+
+    const expertDetailMatch = route.match(/^\/experts\/([A-Za-z0-9-]+)$/)
+    const expertAvailMatch = route.match(
+      /^\/experts\/([A-Za-z0-9-]+)\/availability$/
+    )
+    const expertSlotsMatch = route.match(
+      /^\/experts\/([A-Za-z0-9-]+)\/slots$/
+    )
+    const apptCancelMatch = route.match(
+      /^\/appointments\/([A-Za-z0-9-]+)\/cancel$/
+    )
+    const adminExpApproveMatch = route.match(
+      /^\/admin\/experts\/([A-Za-z0-9-]+)\/approve$/
+    )
+    const adminExpRejectMatch = route.match(
+      /^\/admin\/experts\/([A-Za-z0-9-]+)\/reject$/
+    )
+
+    // ---- GET /experts (public, APPROVED only) ----
+    if (route === '/experts' && method === 'GET') {
+      const url = new URL(request.url)
+      const specialty = url.searchParams.get('specialty') || ''
+      await connectDB()
+      const q = { status: 'APPROVED' }
+      if (specialty) q.specialty = specialty
+      const list = await Expert.find(q)
+        .sort({ rating: -1, createdAt: -1 })
+        .lean()
+      const users = await User.find({ _id: { $in: list.map((e) => e.userId) } })
+        .select({ _id: 1, name: 1 })
+        .lean()
+      const userMap = Object.fromEntries(users.map((u) => [u._id, u]))
+      return handleCORS(
+        NextResponse.json({
+          experts: list.map((e) => ({
+            id: e._id,
+            userId: e.userId,
+            name: userMap[e.userId]?.name,
+            specialty: e.specialty,
+            specialtyAr: e.specialtyAr,
+            bio: e.bio,
+            photo: e.photo,
+            hourlyRate: e.hourlyRate,
+            experienceYears: e.experienceYears,
+            rating: e.rating,
+            totalSessions: e.totalSessions,
+          })),
+        })
+      )
+    }
+
+    // ---- POST /experts/apply ----
+    if (route === '/experts/apply' && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'يجب تسجيل الدخول أولاً' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const dbUser = await User.findById(session.user.id).lean()
+      if (!tierAtLeast(dbUser?.membershipTier || 'FREE', 'GOLD')) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'الباقة الذهبية أو البلاتينية مطلوبة لتسجيل الخبير' },
+            { status: 403 }
+          )
+        )
+      }
+      const existing = await Expert.findOne({ userId: session.user.id }).lean()
+      if (existing) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'لديك طلب تسجيل خبير مسبقاً', status: existing.status },
+            { status: 409 }
+          )
+        )
+      }
+      const body = await request.json().catch(() => ({}))
+      const { specialty, specialtyAr, bio, experienceYears, hourlyRate, photo, cv } = body || {}
+      if (!specialty || !SPECIALTY_KEYS.includes(specialty)) {
+        return handleCORS(
+          NextResponse.json({ error: 'التخصص غير صحيح' }, { status: 400 })
+        )
+      }
+      if (!hourlyRate || Number(hourlyRate) <= 0) {
+        return handleCORS(
+          NextResponse.json({ error: 'سعر الساعة مطلوب' }, { status: 400 })
+        )
+      }
+      const expert = await Expert.create({
+        userId: session.user.id,
+        specialty,
+        specialtyAr: specialtyAr || specialtyLabel(specialty),
+        bio: bio || '',
+        experienceYears: Number(experienceYears) || 0,
+        hourlyRate: Number(hourlyRate),
+        photo: photo || '',
+        cv: cv || '',
+        status: 'PENDING',
+        isApproved: false,
+      })
+      return handleCORS(
+        NextResponse.json({
+          success: true,
+          expert: { id: expert._id, status: expert.status },
+        })
+      )
+    }
+
+    // ---- GET /experts/me ----
+    if (route === '/experts/me' && method === 'GET') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const expert = await Expert.findOne({ userId: session.user.id }).lean()
+      if (!expert) {
+        return handleCORS(
+          NextResponse.json({ error: 'لست خبيراً' }, { status: 404 })
+        )
+      }
+      const { _id, ...rest } = expert
+      return handleCORS(NextResponse.json({ id: _id, ...rest }))
+    }
+
+    // ---- PUT /experts/me/availability ----
+    if (route === '/experts/me/availability' && method === 'PUT') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const expert = await Expert.findOne({ userId: session.user.id })
+      if (!expert) {
+        return handleCORS(
+          NextResponse.json({ error: 'لست خبيراً' }, { status: 404 })
+        )
+      }
+      const body = await request.json().catch(() => ({}))
+      const items = Array.isArray(body?.availability) ? body.availability : []
+      // Validate items
+      for (const it of items) {
+        if (
+          typeof it.dayOfWeek !== 'number' ||
+          it.dayOfWeek < 0 ||
+          it.dayOfWeek > 6
+        ) {
+          return handleCORS(
+            NextResponse.json({ error: 'يوم غير صحيح' }, { status: 400 })
+          )
+        }
+        if (!/^\d{2}:\d{2}$/.test(it.startTime) || !/^\d{2}:\d{2}$/.test(it.endTime)) {
+          return handleCORS(
+            NextResponse.json({ error: 'صيغة الوقت غير صحيحة' }, { status: 400 })
+          )
+        }
+      }
+      // Replace all existing
+      await Availability.deleteMany({ expertId: expert._id })
+      if (items.length > 0) {
+        await Availability.insertMany(
+          items.map((it) => ({
+            expertId: expert._id,
+            dayOfWeek: it.dayOfWeek,
+            startTime: it.startTime,
+            endTime: it.endTime,
+          }))
+        )
+      }
+      return handleCORS(NextResponse.json({ success: true, count: items.length }))
+    }
+
+    // ---- GET /experts/:id/availability ----
+    if (expertAvailMatch && method === 'GET') {
+      const id = expertAvailMatch[1]
+      await connectDB()
+      const list = await Availability.find({ expertId: id })
+        .sort({ dayOfWeek: 1, startTime: 1 })
+        .lean()
+      return handleCORS(
+        NextResponse.json({
+          availability: list.map((a) => ({
+            dayOfWeek: a.dayOfWeek,
+            startTime: a.startTime,
+            endTime: a.endTime,
+          })),
+        })
+      )
+    }
+
+    // ---- GET /experts/:id/slots?date=YYYY-MM-DD ----
+    if (expertSlotsMatch && method === 'GET') {
+      const id = expertSlotsMatch[1]
+      const url = new URL(request.url)
+      const dateStr = url.searchParams.get('date')
+      if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        return handleCORS(
+          NextResponse.json({ error: 'تاريخ غير صحيح' }, { status: 400 })
+        )
+      }
+      const d = new Date(dateStr + 'T00:00:00.000Z')
+      if (isNaN(d.getTime())) {
+        return handleCORS(
+          NextResponse.json({ error: 'تاريخ غير صحيح' }, { status: 400 })
+        )
+      }
+      const dayOfWeek = d.getUTCDay()
+      await connectDB()
+      const avail = await Availability.find({
+        expertId: id,
+        dayOfWeek,
+      }).lean()
+      const slots = generateHourlySlots(avail)
+      // subtract already-booked (CONFIRMED or PENDING) on same date
+      const dayStart = new Date(d)
+      const dayEnd = new Date(d)
+      dayEnd.setUTCDate(dayEnd.getUTCDate() + 1)
+      const taken = await Appointment.find({
+        expertId: id,
+        status: { $in: ['CONFIRMED', 'PENDING'] },
+        date: { $gte: dayStart, $lt: dayEnd },
+      })
+        .select({ startTime: 1 })
+        .lean()
+      const takenSet = new Set(taken.map((a) => a.startTime))
+      const available = slots.filter((s) => !takenSet.has(s.startTime))
+      return handleCORS(NextResponse.json({ slots: available }))
+    }
+
+    // ---- GET /experts/:id (public) ----
+    if (expertDetailMatch && method === 'GET') {
+      const id = expertDetailMatch[1]
+      await connectDB()
+      const expert = await Expert.findById(id).lean()
+      if (!expert) {
+        return handleCORS(
+          NextResponse.json({ error: 'الخبير غير موجود' }, { status: 404 })
+        )
+      }
+      if (expert.status !== 'APPROVED') {
+        const session = await getServerSession(authOptions)
+        if (
+          session?.user?.id !== expert.userId &&
+          session?.user?.role !== 'ADMIN'
+        ) {
+          return handleCORS(
+            NextResponse.json({ error: 'الخبير غير متاح' }, { status: 404 })
+          )
+        }
+      }
+      const owner = await User.findById(expert.userId).select({ name: 1 }).lean()
+      const { _id, ...rest } = expert
+      return handleCORS(
+        NextResponse.json({ id: _id, ...rest, name: owner?.name })
+      )
+    }
+
+    // ---- POST /appointments (book) ----
+    if (route === '/appointments' && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'يجب تسجيل الدخول أولاً' }, { status: 401 })
+        )
+      }
+      const body = await request.json().catch(() => ({}))
+      const { expertId, date, startTime, endTime } = body || {}
+      if (!expertId || !date || !startTime || !endTime) {
+        return handleCORS(
+          NextResponse.json({ error: 'بيانات الحجز ناقصة' }, { status: 400 })
+        )
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return handleCORS(
+          NextResponse.json({ error: 'تاريخ غير صحيح' }, { status: 400 })
+        )
+      }
+      await connectDB()
+      const expert = await Expert.findById(expertId).lean()
+      if (!expert || expert.status !== 'APPROVED') {
+        return handleCORS(
+          NextResponse.json({ error: 'الخبير غير متاح' }, { status: 404 })
+        )
+      }
+      if (expert.userId === session.user.id) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'لا يمكنك حجز جلسة مع نفسك' },
+            { status: 400 }
+          )
+        )
+      }
+      // validate slot is in availability and not already taken
+      const day = new Date(date + 'T00:00:00.000Z')
+      const dayOfWeek = day.getUTCDay()
+      const availOk = await Availability.findOne({
+        expertId,
+        dayOfWeek,
+        startTime: { $lte: startTime },
+        endTime: { $gte: endTime },
+      }).lean()
+      if (!availOk) {
+        return handleCORS(
+          NextResponse.json({ error: 'الوقت غير ضمن أوقات المتاحة' }, { status: 400 })
+        )
+      }
+      const dayEnd = new Date(day)
+      dayEnd.setUTCDate(dayEnd.getUTCDate() + 1)
+      const conflict = await Appointment.findOne({
+        expertId,
+        status: { $in: ['CONFIRMED', 'PENDING'] },
+        date: { $gte: day, $lt: dayEnd },
+        startTime,
+      }).lean()
+      if (conflict) {
+        return handleCORS(
+          NextResponse.json({ error: 'هذا الموعد محجوز بالفعل' }, { status: 409 })
+        )
+      }
+      // pricing
+      const client = await User.findById(session.user.id).lean()
+      const clientTier = client?.membershipTier || 'FREE'
+      const price = computeSessionPrice(
+        expert.hourlyRate,
+        TIER_DISCOUNT[clientTier] || 0
+      )
+      const appt = await Appointment.create({
+        clientId: session.user.id,
+        expertId,
+        date: day,
+        startTime,
+        endTime,
+        status: 'CONFIRMED',
+        totalPaid: price.finalPrice,
+        originalPrice: price.originalPrice,
+        discountPercent: price.discountPercent,
+      })
+      return handleCORS(
+        NextResponse.json({
+          success: true,
+          appointment: {
+            id: appt._id,
+            date: appt.date,
+            startTime: appt.startTime,
+            endTime: appt.endTime,
+            totalPaid: appt.totalPaid,
+            status: appt.status,
+          },
+        })
+      )
+    }
+
+    // ---- GET /appointments (mine as client or expert) ----
+    if (route === '/appointments' && method === 'GET') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const url = new URL(request.url)
+      const as = url.searchParams.get('as') || 'client' // 'client' | 'expert'
+      const q = {}
+      if (as === 'expert') {
+        const expert = await Expert.findOne({ userId: session.user.id }).lean()
+        if (!expert) {
+          return handleCORS(NextResponse.json({ appointments: [] }))
+        }
+        q.expertId = expert._id
+      } else {
+        q.clientId = session.user.id
+      }
+      const appts = await Appointment.find(q)
+        .sort({ date: -1, startTime: -1 })
+        .lean()
+      return handleCORS(
+        NextResponse.json({
+          appointments: appts.map(({ _id, ...rest }) => ({ id: _id, ...rest })),
+        })
+      )
+    }
+
+    // ---- POST /appointments/:id/cancel ----
+    if (apptCancelMatch && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      const id = apptCancelMatch[1]
+      await connectDB()
+      const appt = await Appointment.findById(id)
+      if (!appt) {
+        return handleCORS(
+          NextResponse.json({ error: 'الحجز غير موجود' }, { status: 404 })
+        )
+      }
+      // Must be client, expert owner, or admin
+      let isExpert = false
+      if (appt.clientId !== session.user.id) {
+        const expert = await Expert.findById(appt.expertId).lean()
+        if (expert?.userId === session.user.id) isExpert = true
+        else if (session.user.role !== 'ADMIN') {
+          return handleCORS(
+            NextResponse.json({ error: 'غير مصرح' }, { status: 403 })
+          )
+        }
+      }
+      if (appt.status === 'CANCELLED') {
+        return handleCORS(
+          NextResponse.json({ error: 'الحجز ملغي مسبقاً' }, { status: 400 })
+        )
+      }
+      // 24h rule for clients (admin/expert bypass)
+      if (!isExpert && session.user.role !== 'ADMIN') {
+        const d = new Date(appt.date)
+        const [h, m] = appt.startTime.split(':').map(Number)
+        d.setUTCHours(h, m, 0, 0)
+        const hoursUntil = (d.getTime() - Date.now()) / (1000 * 60 * 60)
+        if (hoursUntil < 24) {
+          return handleCORS(
+            NextResponse.json(
+              { error: 'لا يمكن الإلغاء قبل الجلسة بأقل من 24 ساعة' },
+              { status: 400 }
+            )
+          )
+        }
+      }
+      appt.status = 'CANCELLED'
+      appt.cancelledAt = new Date()
+      appt.cancelledBy = isExpert
+        ? 'expert'
+        : session.user.role === 'ADMIN'
+        ? 'admin'
+        : 'client'
+      await appt.save()
+      return handleCORS(NextResponse.json({ success: true }))
+    }
+
+    /* ---- ADMIN EXPERTS ---- */
+    if (route === '/admin/experts' && method === 'GET') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user || session.user.role !== 'ADMIN') {
+        return handleCORS(
+          NextResponse.json({ error: 'صلاحيات مسؤول مطلوبة' }, { status: 403 })
+        )
+      }
+      const url = new URL(request.url)
+      const status = (url.searchParams.get('status') || 'PENDING').toUpperCase()
+      await connectDB()
+      const q = status === 'ALL' ? {} : { status }
+      const list = await Expert.find(q).sort({ createdAt: -1 }).lean()
+      return handleCORS(
+        NextResponse.json({
+          experts: list.map(({ _id, ...rest }) => ({ id: _id, ...rest })),
+        })
+      )
+    }
+
+    if (adminExpApproveMatch && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user || session.user.role !== 'ADMIN') {
+        return handleCORS(
+          NextResponse.json({ error: 'صلاحيات مسؤول مطلوبة' }, { status: 403 })
+        )
+      }
+      const id = adminExpApproveMatch[1]
+      await connectDB()
+      const updated = await Expert.findByIdAndUpdate(
+        id,
+        {
+          status: 'APPROVED',
+          isApproved: true,
+          rejectionReason: null,
+          updatedAt: new Date(),
+        },
+        { new: true }
+      ).lean()
+      if (!updated) {
+        return handleCORS(
+          NextResponse.json({ error: 'الخبير غير موجود' }, { status: 404 })
+        )
+      }
+      // promote user role to EXPERT
+      await User.findByIdAndUpdate(updated.userId, { role: 'EXPERT' })
+      return handleCORS(
+        NextResponse.json({ success: true, status: updated.status })
+      )
+    }
+
+    if (adminExpRejectMatch && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user || session.user.role !== 'ADMIN') {
+        return handleCORS(
+          NextResponse.json({ error: 'صلاحيات مسؤول مطلوبة' }, { status: 403 })
+        )
+      }
+      const id = adminExpRejectMatch[1]
+      const body = await request.json().catch(() => ({}))
+      const reason = (body?.reason || '').trim()
+      if (!reason) {
+        return handleCORS(
+          NextResponse.json({ error: 'سبب الرفض مطلوب' }, { status: 400 })
+        )
+      }
+      await connectDB()
+      const updated = await Expert.findByIdAndUpdate(
+        id,
+        {
+          status: 'REJECTED',
+          isApproved: false,
+          rejectionReason: reason,
+          updatedAt: new Date(),
+        },
+        { new: true }
+      ).lean()
+      if (!updated) {
+        return handleCORS(
+          NextResponse.json({ error: 'الخبير غير موجود' }, { status: 404 })
+        )
+      }
+      return handleCORS(
+        NextResponse.json({ success: true, status: updated.status })
+      )
+    }
+
+
 
     // -------- FORGOT PASSWORD --------
     if (route === '/forgot-password' && method === 'POST') {

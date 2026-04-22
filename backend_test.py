@@ -1,936 +1,860 @@
 #!/usr/bin/env python3
 """
-Backend Test Suite for Phase 3 (Business Directory) - Majles API
-Tests all company-related endpoints with comprehensive scenarios
+Phase 4 Expert Consultation Backend Testing
+Testing all expert-related endpoints with comprehensive scenarios
 """
 
 import requests
 import json
 import time
-import os
-from datetime import datetime
+import uuid
+from datetime import datetime, timedelta
+import pymongo
 from pymongo import MongoClient
+import os
+from urllib.parse import urljoin
 
 # Configuration
-BASE_URL = "https://6f3dfdf5-cfdd-488c-a9a0-63f293d4ee0d.preview.emergentagent.com"
-API_BASE = f"{BASE_URL}/api"
-MONGO_URL = "mongodb://localhost:27017"
-DB_NAME = "majles"
+BASE_URL = os.getenv('NEXT_PUBLIC_BASE_URL', 'https://omani-startup-hub.preview.emergentagent.com')
+API_BASE = urljoin(BASE_URL, '/api/')
+DB_NAME = os.getenv('DB_NAME', 'majles')
+MONGO_URL = os.getenv('MONGO_URL', 'mongodb://localhost:27017')
 
-def get_timestamp_email():
+print(f"🔧 Configuration:")
+print(f"   BASE_URL: {BASE_URL}")
+print(f"   API_BASE: {API_BASE}")
+print(f"   DB_NAME: {DB_NAME}")
+print(f"   MONGO_URL: {MONGO_URL}")
+
+# MongoDB connection
+try:
+    mongo_client = MongoClient(MONGO_URL)
+    db = mongo_client[DB_NAME]
+    print(f"✅ MongoDB connected to database: {DB_NAME}")
+except Exception as e:
+    print(f"❌ MongoDB connection failed: {e}")
+    exit(1)
+
+# Test session management
+session = requests.Session()
+
+def timestamp_email():
     """Generate unique timestamped email for testing"""
-    timestamp = int(time.time() * 1000)
-    return f"test_{timestamp}@example.com"
+    ts = int(time.time() * 1000)
+    return f"test_{ts}@example.com"
 
-def signup(name, email, password):
-    """Helper: Create new user account"""
-    response = requests.post(f"{API_BASE}/signup", json={
-        "name": name,
-        "email": email,
-        "password": password
-    })
-    return response
+def create_user(name, email, password, tier='FREE'):
+    """Create a user and optionally upgrade tier"""
+    try:
+        # Signup
+        signup_data = {'name': name, 'email': email, 'password': password}
+        resp = session.post(urljoin(API_BASE, 'signup'), json=signup_data)
+        if resp.status_code != 200:
+            print(f"❌ Signup failed: {resp.status_code} - {resp.text}")
+            return None
+        
+        user_data = resp.json()
+        user_id = user_data['user']['id']
+        print(f"✅ User created: {name} ({email}) - ID: {user_id}")
+        
+        # Upgrade tier via MongoDB if needed (to avoid JWT session issues)
+        if tier != 'FREE':
+            try:
+                # Update user tier directly in MongoDB
+                from datetime import datetime, timedelta
+                expiry_date = datetime.now() + timedelta(days=365)
+                
+                db.users.update_one(
+                    {"_id": user_id},
+                    {"$set": {"membershipTier": tier, "membershipExpiry": expiry_date}}
+                )
+                print(f"✅ User tier updated to {tier} via MongoDB")
+                
+                # Create membership record
+                tier_prices = {'BASIC': 50, 'GOLD': 100, 'PLATINUM': 200}
+                membership_doc = {
+                    '_id': str(uuid.uuid4()),
+                    'userId': user_id,
+                    'tier': tier,
+                    'startDate': datetime.now(),
+                    'endDate': expiry_date,
+                    'amountPaid': tier_prices.get(tier, 0),
+                    'paymentStatus': 'PAID'
+                }
+                db.memberships.insert_one(membership_doc)
+                print(f"✅ Membership record created for {tier}")
+                
+            except Exception as e:
+                print(f"❌ Tier upgrade failed: {e}")
+                return None
+        
+        # Login via NextAuth after tier upgrade
+        if not login_user(email, password):
+            print(f"❌ Login after tier upgrade failed")
+            return None
+        
+        return {'id': user_id, 'email': email, 'name': name, 'tier': tier}
+    except Exception as e:
+        print(f"❌ User creation failed: {e}")
+        return None
 
-def login(session, email, password):
-    """Helper: Login user via NextAuth credentials"""
-    # Get CSRF token first
-    csrf_response = session.get(f"{API_BASE}/auth/csrf")
-    if csrf_response.status_code != 200:
-        raise Exception(f"CSRF failed: {csrf_response.status_code}")
+def login_user(email, password):
+    """Login user and return session"""
+    try:
+        # Get CSRF token first
+        csrf_resp = session.get(urljoin(API_BASE, 'auth/csrf'))
+        if csrf_resp.status_code != 200:
+            print(f"❌ CSRF token failed: {csrf_resp.status_code}")
+            return False
+        
+        csrf_token = csrf_resp.json().get('csrfToken')
+        if not csrf_token:
+            print("❌ No CSRF token received")
+            return False
+        
+        # Login with credentials
+        login_data = {
+            'email': email,
+            'password': password,
+            'csrfToken': csrf_token,
+            'callbackUrl': BASE_URL,
+            'json': 'true'
+        }
+        
+        login_resp = session.post(
+            urljoin(API_BASE, 'auth/callback/credentials'),
+            data=login_data,
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            allow_redirects=False
+        )
+        
+        # Check if login was successful (should get redirect or session cookie)
+        if login_resp.status_code in [200, 302] or 'next-auth.session-token' in session.cookies:
+            print(f"✅ Logged in: {email}")
+            return True
+        else:
+            print(f"❌ Login failed: {login_resp.status_code} - {login_resp.text}")
+            return False
+    except Exception as e:
+        print(f"❌ Login error: {e}")
+        return False
+
+def promote_user_to_admin(user_id):
+    """Promote user to ADMIN role via MongoDB"""
+    try:
+        result = db.users.update_one(
+            {"_id": user_id},
+            {"$set": {"role": "ADMIN"}}
+        )
+        if result.modified_count > 0:
+            print(f"✅ User {user_id} promoted to ADMIN")
+            return True
+        else:
+            print(f"❌ Failed to promote user {user_id} to ADMIN")
+            return False
+    except Exception as e:
+        print(f"❌ Admin promotion error: {e}")
+        return False
+
+def get_next_date(days_ahead, day_of_week=None):
+    """Get next date N days ahead, optionally for specific day of week"""
+    target_date = datetime.now() + timedelta(days=days_ahead)
     
-    csrf_token = csrf_response.json().get("csrfToken")
+    if day_of_week is not None:
+        # Find next occurrence of specific day of week (0=Monday, 6=Sunday)
+        current_weekday = target_date.weekday()
+        days_until = (day_of_week - current_weekday) % 7
+        if days_until == 0 and days_ahead > 0:
+            days_until = 7  # Next week if today is the target day
+        target_date = target_date + timedelta(days=days_until)
     
-    # Login with credentials
-    login_response = session.post(f"{API_BASE}/auth/callback/credentials", data={
-        "email": email,
-        "password": password,
-        "csrfToken": csrf_token,
-        "callbackUrl": f"{BASE_URL}/dashboard",
-        "json": "true"
-    })
-    return login_response
+    return target_date.strftime('%Y-%m-%d')
 
-def subscribeTo(session, tier):
-    """Helper: Subscribe user to membership tier"""
-    response = session.post(f"{API_BASE}/membership/subscribe", json={
-        "tier": tier
-    })
-    return response
-
-def promoteToAdmin(userId):
-    """Helper: Promote user to ADMIN role via direct DB access"""
-    client = MongoClient(MONGO_URL)
-    db = client[DB_NAME]
-    result = db.users.update_one(
-        {"_id": userId},
-        {"$set": {"role": "ADMIN"}}
-    )
-    client.close()
-    return result.modified_count > 0
-
-def approveCompany(companyId):
-    """Helper: Approve company via direct DB access"""
-    client = MongoClient(MONGO_URL)
-    db = client[DB_NAME]
-    result = db.companies.update_one(
-        {"_id": companyId},
-        {"$set": {"status": "APPROVED", "isApproved": True}}
-    )
-    client.close()
-    return result.modified_count > 0
-
-def setCompanyStatus(companyId, status):
-    """Helper: Set company status via direct DB access"""
-    client = MongoClient(MONGO_URL)
-    db = client[DB_NAME]
-    result = db.companies.update_one(
-        {"_id": companyId},
-        {"$set": {"status": status, "isApproved": status == "APPROVED"}}
-    )
-    client.close()
-    return result.modified_count > 0
-
-def run_tests():
-    """Run comprehensive Phase 3 backend tests"""
-    print("🚀 Starting Phase 3 (Business Directory) Backend Tests")
-    print("=" * 60)
+def run_phase4_tests():
+    """Run comprehensive Phase 4 Expert Consultation tests"""
+    print("\n" + "="*80)
+    print("🧪 PHASE 4 EXPERT CONSULTATION BACKEND TESTING")
+    print("="*80)
     
-    # Test variables
-    created_companies = []
-    test_users = []
+    test_results = []
+    expert_id = None  # Initialize to avoid scope issues
+    appointment_id = None  # Initialize to avoid scope issues
     
     try:
-        # ============================================================
-        # A) TIER GATING & CREATE COMPANY TESTS
-        # ============================================================
-        print("\n📋 A) TIER GATING & CREATE COMPANY TESTS")
-        print("-" * 40)
+        # A) TIER GATE + APPLY
+        print("\n📋 A) TIER GATE + APPLY TESTS")
+        print("-" * 50)
         
-        # A1) No session → POST /api/companies {} → 401
-        print("A1) Testing company creation without session...")
-        try:
-            response = requests.post(f"{API_BASE}/companies", json={})
-            if response.status_code == 401:
-                print("✅ A1 PASS: No session returns 401")
-            else:
-                print(f"❌ A1 FAIL: Expected 401, got {response.status_code}")
-        except Exception as e:
-            print(f"❌ A1 ERROR: {e}")
-        
-        # A2) Create FREE user, try to create company → 403
-        print("\nA2) Testing FREE user company creation restriction...")
-        try:
-            free_email = get_timestamp_email()
-            signup_resp = signup("Free User", free_email, "password123")
-            if signup_resp.status_code != 200:
-                print(f"❌ A2 SETUP FAIL: Signup failed {signup_resp.status_code}")
-                return
-            
-            free_session = requests.Session()
-            login_resp = login(free_session, free_email, "password123")
-            if login_resp.status_code != 200:
-                print(f"❌ A2 SETUP FAIL: Login failed {login_resp.status_code}")
-                return
-            
-            # Try to create company as FREE user
-            company_resp = free_session.post(f"{API_BASE}/companies", json={
-                "nameAr": "شركة اختبار",
-                "sector": "TECH"
-            })
-            
-            if company_resp.status_code == 403:
-                error_msg = company_resp.json().get("error", "")
-                if "باقة أساسية" in error_msg:
-                    print("✅ A2 PASS: FREE user blocked with correct Arabic message")
-                else:
-                    print(f"❌ A2 FAIL: Wrong error message: {error_msg}")
-            else:
-                print(f"❌ A2 FAIL: Expected 403, got {company_resp.status_code}")
-        except Exception as e:
-            print(f"❌ A2 ERROR: {e}")
-        
-        # A3) Subscribe FREE user to BASIC, then test company creation validations
-        print("\nA3) Testing BASIC user company creation validations...")
-        try:
-            # Subscribe to BASIC
-            subscribe_resp = free_session.post(f"{API_BASE}/membership/subscribe", json={
-                "tier": "BASIC"
-            })
-            if subscribe_resp.status_code != 200:
-                print(f"❌ A3 SETUP FAIL: Subscribe failed {subscribe_resp.status_code}")
-                return
-            
-            # Test missing nameAr
-            resp1 = free_session.post(f"{API_BASE}/companies", json={
-                "sector": "TECH"
-            })
-            if resp1.status_code == 400 and "اسم الشركة" in resp1.json().get("error", ""):
-                print("✅ A3a PASS: Missing nameAr validation")
-            else:
-                print(f"❌ A3a FAIL: Expected 400 with Arabic error, got {resp1.status_code}")
-            
-            # Test missing sector
-            resp2 = free_session.post(f"{API_BASE}/companies", json={
-                "nameAr": "شركة اختبار"
-            })
-            if resp2.status_code == 400 and "القطاع" in resp2.json().get("error", ""):
-                print("✅ A3b PASS: Missing sector validation")
-            else:
-                print(f"❌ A3b FAIL: Expected 400 with Arabic error, got {resp2.status_code}")
-            
-            # Test invalid sector
-            resp3 = free_session.post(f"{API_BASE}/companies", json={
-                "nameAr": "شركة اختبار",
-                "sector": "FOO"
-            })
-            if resp3.status_code == 400 and "القطاع غير صحيح" in resp3.json().get("error", ""):
-                print("✅ A3c PASS: Invalid sector validation")
-            else:
-                print(f"❌ A3c FAIL: Expected 400 with Arabic error, got {resp3.status_code}")
-            
-            # Test invalid governorate
-            resp4 = free_session.post(f"{API_BASE}/companies", json={
-                "nameAr": "شركة اختبار",
-                "sector": "TECH",
-                "governorate": "XX"
-            })
-            if resp4.status_code == 400 and "المحافظة غير صحيحة" in resp4.json().get("error", ""):
-                print("✅ A3d PASS: Invalid governorate validation")
-            else:
-                print(f"❌ A3d FAIL: Expected 400 with Arabic error, got {resp4.status_code}")
-            
-            # Test valid company creation
-            valid_company = {
-                "nameAr": "شركة اختبار",
-                "sector": "TECH",
-                "governorate": "MUSCAT",
-                "description": "نبذة عن الشركة",
-                "phone": "+96899999999",
-                "email": "company@example.com",
-                "website": "https://example.com",
-                "services": ["خدمة 1", "خدمة 2"]
-            }
-            resp5 = free_session.post(f"{API_BASE}/companies", json=valid_company)
-            
-            if resp5.status_code == 200:
-                company_data = resp5.json()
-                if company_data.get("success") and not company_data.get("company", {}).get("isApproved"):
-                    company_id = company_data["company"]["id"]
-                    
-                    # Verify status in database since it might not be in response
-                    client = MongoClient(MONGO_URL)
-                    db = client[DB_NAME]
-                    db_company = db.companies.find_one({"_id": company_id})
-                    client.close()
-                    
-                    # Note: status field has a schema issue, but isApproved=false indicates PENDING
-                    if db_company and not db_company.get("isApproved", True):
-                        print("✅ A3e PASS: Valid company created with PENDING status (isApproved=false)")
-                        created_companies.append(company_id)
-                        test_users.append({
-                            "session": free_session,
-                            "email": free_email,
-                            "role": "MEMBER",
-                            "tier": "BASIC"
-                        })
-                    else:
-                        print(f"❌ A3e FAIL: Company not properly created: isApproved={db_company.get('isApproved') if db_company else 'Not found'}")
-                else:
-                    print(f"❌ A3e FAIL: Invalid response structure: {company_data}")
-            else:
-                print(f"❌ A3e FAIL: Expected 200, got {resp5.status_code}: {resp5.text}")
-                
-        except Exception as e:
-            print(f"❌ A3 ERROR: {e}")
-        
-        # ============================================================
-        # B) GET /api/companies (PUBLIC LIST) TESTS
-        # ============================================================
-        print("\n📋 B) GET /api/companies (PUBLIC LIST) TESTS")
-        print("-" * 40)
-        
-        if not created_companies:
-            print("❌ B SKIP: No companies created in previous tests")
+        # A1) Create FREE user and test tier gate
+        print("\n🔸 A1) Testing FREE user tier gate")
+        free_user = create_user("Free User", timestamp_email(), "password123", "FREE")
+        if not free_user:
+            test_results.append("❌ A1) FREE user creation failed")
         else:
-            C1 = created_companies[0]
-            
-            # B4) Without approving C1, GET /api/companies → C1 not included
-            print("B4) Testing public list excludes PENDING companies...")
-            try:
-                resp = requests.get(f"{API_BASE}/companies")
-                if resp.status_code == 200:
-                    companies = resp.json().get("companies", [])
-                    c1_found = any(c.get("id") == C1 for c in companies)
-                    if not c1_found:
-                        print("✅ B4 PASS: PENDING company not in public list")
-                    else:
-                        print("❌ B4 FAIL: PENDING company found in public list")
+            # Try to apply as expert (should fail)
+            apply_resp = session.post(urljoin(API_BASE, 'experts/apply'), 
+                                    json={'specialty': 'LEGAL', 'hourlyRate': 25})
+            if apply_resp.status_code == 403:
+                error_msg = apply_resp.json().get('error', '')
+                if 'الباقة الذهبية' in error_msg or 'البلاتينية' in error_msg:
+                    test_results.append("✅ A1) FREE user correctly blocked with Arabic error")
                 else:
-                    print(f"❌ B4 FAIL: Expected 200, got {resp.status_code}")
-            except Exception as e:
-                print(f"❌ B4 ERROR: {e}")
-            
-            # B5) Approve C1, then check it appears
-            print("\nB5) Testing approved company appears in public list...")
-            try:
-                if approveCompany(C1):
-                    resp = requests.get(f"{API_BASE}/companies")
-                    if resp.status_code == 200:
-                        companies = resp.json().get("companies", [])
-                        c1_found = any(c.get("id") == C1 for c in companies)
-                        if c1_found:
-                            print("✅ B5 PASS: APPROVED company appears in public list")
-                        else:
-                            print("❌ B5 FAIL: APPROVED company not found in public list")
-                    else:
-                        print(f"❌ B5 FAIL: Expected 200, got {resp.status_code}")
-                else:
-                    print("❌ B5 SETUP FAIL: Could not approve company in DB")
-            except Exception as e:
-                print(f"❌ B5 ERROR: {e}")
-            
-            # B6-B11) Test filtering
-            print("\nB6-B11) Testing company list filters...")
-            try:
-                # B6) Filter by sector=TECH
-                resp6 = requests.get(f"{API_BASE}/companies?sector=TECH")
-                if resp6.status_code == 200:
-                    companies = resp6.json().get("companies", [])
-                    c1_found = any(c.get("id") == C1 for c in companies)
-                    if c1_found:
-                        print("✅ B6 PASS: Sector filter includes matching company")
-                    else:
-                        print("❌ B6 FAIL: Sector filter excludes matching company")
-                else:
-                    print(f"❌ B6 FAIL: Expected 200, got {resp6.status_code}")
-                
-                # B7) Filter by sector=FOOD (should not include C1)
-                resp7 = requests.get(f"{API_BASE}/companies?sector=FOOD")
-                if resp7.status_code == 200:
-                    companies = resp7.json().get("companies", [])
-                    c1_found = any(c.get("id") == C1 for c in companies)
-                    if not c1_found:
-                        print("✅ B7 PASS: Sector filter excludes non-matching company")
-                    else:
-                        print("❌ B7 FAIL: Sector filter includes non-matching company")
-                else:
-                    print(f"❌ B7 FAIL: Expected 200, got {resp7.status_code}")
-                
-                # B8) Filter by governorate=MUSCAT (Note: governorate field has schema issues)
-                resp8 = requests.get(f"{API_BASE}/companies?governorate=MUSCAT")
-                if resp8.status_code == 200:
-                    companies = resp8.json().get("companies", [])
-                    # Due to schema issues, governorate field is not being saved
-                    print("✅ B8 PASS: Governorate filter works (schema issue noted)")
-                else:
-                    print(f"❌ B8 FAIL: Expected 200, got {resp8.status_code}")
-                
-                # B9) Filter by governorate=DHOFAR (should not include C1)
-                resp9 = requests.get(f"{API_BASE}/companies?governorate=DHOFAR")
-                if resp9.status_code == 200:
-                    companies = resp9.json().get("companies", [])
-                    c1_found = any(c.get("id") == C1 for c in companies)
-                    if not c1_found:
-                        print("✅ B9 PASS: Governorate filter excludes non-matching company")
-                    else:
-                        print("❌ B9 FAIL: Governorate filter includes non-matching company")
-                else:
-                    print(f"❌ B9 FAIL: Expected 200, got {resp9.status_code}")
-                
-                # B10) Search by Arabic name
-                resp10 = requests.get(f"{API_BASE}/companies?search=اختبار")
-                if resp10.status_code == 200:
-                    companies = resp10.json().get("companies", [])
-                    c1_found = any(c.get("id") == C1 for c in companies)
-                    if c1_found:
-                        print("✅ B10 PASS: Search filter finds matching company")
-                    else:
-                        print("❌ B10 FAIL: Search filter doesn't find matching company")
-                else:
-                    print(f"❌ B10 FAIL: Expected 200, got {resp10.status_code}")
-                
-                # B11) Search with non-matching term
-                resp11 = requests.get(f"{API_BASE}/companies?search=zzzzzz")
-                if resp11.status_code == 200:
-                    companies = resp11.json().get("companies", [])
-                    if len(companies) == 0:
-                        print("✅ B11 PASS: Search with non-matching term returns empty")
-                    else:
-                        print("❌ B11 FAIL: Search with non-matching term returns results")
-                else:
-                    print(f"❌ B11 FAIL: Expected 200, got {resp11.status_code}")
-                    
-            except Exception as e:
-                print(f"❌ B6-B11 ERROR: {e}")
-        
-        # ============================================================
-        # C) GET /api/companies/:id TESTS
-        # ============================================================
-        print("\n📋 C) GET /api/companies/:id TESTS")
-        print("-" * 40)
-        
-        if not created_companies:
-            print("❌ C SKIP: No companies created in previous tests")
-        else:
-            C1 = created_companies[0]
-            
-            # C12) Set C1 back to PENDING, try to access without auth → 404
-            print("C12) Testing PENDING company access without auth...")
-            try:
-                setCompanyStatus(C1, "PENDING")
-                resp = requests.get(f"{API_BASE}/companies/{C1}")
-                if resp.status_code == 404:
-                    error_msg = resp.json().get("error", "")
-                    if "غير متاحة" in error_msg or "غير موجودة" in error_msg:
-                        print("✅ C12 PASS: PENDING company returns 404 with Arabic error")
-                    else:
-                        print(f"❌ C12 FAIL: Wrong error message: {error_msg}")
-                else:
-                    print(f"❌ C12 FAIL: Expected 404, got {resp.status_code}")
-            except Exception as e:
-                print(f"❌ C12 ERROR: {e}")
-            
-            # C13) Access as owner → 200
-            print("\nC13) Testing PENDING company access as owner...")
-            try:
-                if test_users:
-                    owner_session = test_users[0]["session"]
-                    resp = owner_session.get(f"{API_BASE}/companies/{C1}")
-                    if resp.status_code == 200:
-                        company_data = resp.json()
-                        if company_data.get("id") == C1:
-                            print("✅ C13 PASS: Owner can access PENDING company")
-                        else:
-                            print(f"❌ C13 FAIL: Wrong company data returned")
-                    else:
-                        print(f"❌ C13 FAIL: Expected 200, got {resp.status_code}")
-                else:
-                    print("❌ C13 SKIP: No owner session available")
-            except Exception as e:
-                print(f"❌ C13 ERROR: {e}")
-            
-            # C14) Create another user (not owner, not admin), try to access → 404
-            print("\nC14) Testing PENDING company access as non-owner...")
-            try:
-                other_email = get_timestamp_email()
-                signup_resp = signup("Other User", other_email, "password123")
-                if signup_resp.status_code == 200:
-                    other_session = requests.Session()
-                    login_resp = login(other_session, other_email, "password123")
-                    if login_resp.status_code == 200:
-                        resp = other_session.get(f"{API_BASE}/companies/{C1}")
-                        if resp.status_code == 404:
-                            print("✅ C14 PASS: Non-owner cannot access PENDING company")
-                        else:
-                            print(f"❌ C14 FAIL: Expected 404, got {resp.status_code}")
-                    else:
-                        print(f"❌ C14 SETUP FAIL: Other user login failed")
-                else:
-                    print(f"❌ C14 SETUP FAIL: Other user signup failed")
-            except Exception as e:
-                print(f"❌ C14 ERROR: {e}")
-            
-            # C15) Set status back to APPROVED, access anonymously → 200
-            print("\nC15) Testing APPROVED company access without auth...")
-            try:
-                setCompanyStatus(C1, "APPROVED")
-                resp = requests.get(f"{API_BASE}/companies/{C1}")
-                if resp.status_code == 200:
-                    company_data = resp.json()
-                    if company_data.get("id") == C1:
-                        print("✅ C15 PASS: Anonymous user can access APPROVED company")
-                    else:
-                        print(f"❌ C15 FAIL: Wrong company data returned")
-                else:
-                    print(f"❌ C15 FAIL: Expected 200, got {resp.status_code}")
-            except Exception as e:
-                print(f"❌ C15 ERROR: {e}")
-        
-        # ============================================================
-        # D) PUT /api/companies/:id TESTS
-        # ============================================================
-        print("\n📋 D) PUT /api/companies/:id TESTS")
-        print("-" * 40)
-        
-        if not created_companies or not test_users:
-            print("❌ D SKIP: No companies or users available for testing")
-        else:
-            C1 = created_companies[0]
-            owner_session = test_users[0]["session"]
-            
-            # D16) Without session → 401
-            print("D16) Testing company update without session...")
-            try:
-                resp = requests.put(f"{API_BASE}/companies/{C1}", json={
-                    "description": "محدّث"
-                })
-                if resp.status_code == 401:
-                    print("✅ D16 PASS: No session returns 401")
-                else:
-                    print(f"❌ D16 FAIL: Expected 401, got {resp.status_code}")
-            except Exception as e:
-                print(f"❌ D16 ERROR: {e}")
-            
-            # D17) As non-owner non-admin → 403
-            print("\nD17) Testing company update as non-owner...")
-            try:
-                other_email = get_timestamp_email()
-                signup_resp = signup("Non Owner", other_email, "password123")
-                if signup_resp.status_code == 200:
-                    other_session = requests.Session()
-                    login_resp = login(other_session, other_email, "password123")
-                    if login_resp.status_code == 200:
-                        resp = other_session.put(f"{API_BASE}/companies/{C1}", json={
-                            "description": "محدّث"
-                        })
-                        if resp.status_code == 403:
-                            print("✅ D17 PASS: Non-owner returns 403")
-                        else:
-                            print(f"❌ D17 FAIL: Expected 403, got {resp.status_code}")
-                    else:
-                        print(f"❌ D17 SETUP FAIL: Non-owner login failed")
-                else:
-                    print(f"❌ D17 SETUP FAIL: Non-owner signup failed")
-            except Exception as e:
-                print(f"❌ D17 ERROR: {e}")
-            
-            # D18) As owner: PUT with description update → status reset to PENDING
-            print("\nD18) Testing owner update resets status to PENDING...")
-            try:
-                # Ensure company is APPROVED first
-                setCompanyStatus(C1, "APPROVED")
-                
-                resp = owner_session.put(f"{API_BASE}/companies/{C1}", json={
-                    "description": "محدّث من المالك"
-                })
-                if resp.status_code == 200:
-                    company_data = resp.json().get("company", {})
-                    if (company_data.get("status") == "PENDING" and 
-                        not company_data.get("isApproved") and
-                        company_data.get("description") == "محدّث من المالك"):
-                        print("✅ D18 PASS: Owner update resets to PENDING and updates description")
-                    else:
-                        print(f"❌ D18 FAIL: Unexpected response: {company_data}")
-                else:
-                    print(f"❌ D18 FAIL: Expected 200, got {resp.status_code}")
-            except Exception as e:
-                print(f"❌ D18 ERROR: {e}")
-            
-            # D19) Approve again, then test admin update preserves status
-            print("\nD19) Testing admin update preserves APPROVED status...")
-            try:
-                # Approve company again
-                setCompanyStatus(C1, "APPROVED")
-                
-                # Get owner user ID and promote to admin
-                owner_email = test_users[0]["email"]
-                client = MongoClient(MONGO_URL)
-                db = client[DB_NAME]
-                user_doc = db.users.find_one({"email": owner_email})
-                if user_doc:
-                    user_id = user_doc["_id"]
-                    promoteToAdmin(user_id)
-                    
-                    # Owner must re-login to get fresh JWT with ADMIN role
-                    admin_session = requests.Session()
-                    login_resp = login(admin_session, owner_email, "password123")
-                    if login_resp.status_code == 200:
-                        resp = admin_session.put(f"{API_BASE}/companies/{C1}", json={
-                            "description": "تحديث من المسؤول"
-                        })
-                        if resp.status_code == 200:
-                            company_data = resp.json().get("company", {})
-                            if (company_data.get("status") == "APPROVED" and
-                                company_data.get("description") == "تحديث من المسؤول"):
-                                print("✅ D19 PASS: Admin update preserves APPROVED status")
-                            else:
-                                print(f"❌ D19 FAIL: Status not preserved: {company_data}")
-                        else:
-                            print(f"❌ D19 FAIL: Expected 200, got {resp.status_code}")
-                    else:
-                        print(f"❌ D19 SETUP FAIL: Admin re-login failed")
-                else:
-                    print("❌ D19 SETUP FAIL: Could not find user in DB")
-                client.close()
-            except Exception as e:
-                print(f"❌ D19 ERROR: {e}")
-        
-        # ============================================================
-        # E) DELETE /api/companies/:id TESTS
-        # ============================================================
-        print("\n📋 E) DELETE /api/companies/:id TESTS")
-        print("-" * 40)
-        
-        if not created_companies or not test_users:
-            print("❌ E SKIP: No companies or users available for testing")
-        else:
-            # Create a new company for deletion tests
-            print("E) Creating new company for deletion tests...")
-            try:
-                owner_session = test_users[0]["session"]
-                create_resp = owner_session.post(f"{API_BASE}/companies", json={
-                    "nameAr": "شركة للحذف",
-                    "sector": "TECH",
-                    "description": "شركة للاختبار"
-                })
-                if create_resp.status_code == 200:
-                    delete_company_id = create_resp.json()["company"]["id"]
-                    
-                    # E21) Non-owner non-admin → 403
-                    print("\nE21) Testing delete as non-owner...")
-                    other_email = get_timestamp_email()
-                    signup_resp = signup("Delete Tester", other_email, "password123")
-                    if signup_resp.status_code == 200:
-                        other_session = requests.Session()
-                        login_resp = login(other_session, other_email, "password123")
-                        if login_resp.status_code == 200:
-                            resp = other_session.delete(f"{API_BASE}/companies/{delete_company_id}")
-                            if resp.status_code == 403:
-                                print("✅ E21 PASS: Non-owner delete returns 403")
-                            else:
-                                print(f"❌ E21 FAIL: Expected 403, got {resp.status_code}")
-                        else:
-                            print(f"❌ E21 SETUP FAIL: Delete tester login failed")
-                    else:
-                        print(f"❌ E21 SETUP FAIL: Delete tester signup failed")
-                    
-                    # E22) Owner → 200, then verify deletion
-                    print("\nE22) Testing delete as owner...")
-                    resp = owner_session.delete(f"{API_BASE}/companies/{delete_company_id}")
-                    if resp.status_code == 200:
-                        # Verify company is deleted
-                        get_resp = requests.get(f"{API_BASE}/companies/{delete_company_id}")
-                        if get_resp.status_code == 404:
-                            print("✅ E22 PASS: Owner can delete company, verified deletion")
-                        else:
-                            print(f"❌ E22 FAIL: Company still exists after deletion")
-                    else:
-                        print(f"❌ E22 FAIL: Expected 200, got {resp.status_code}")
-                        
-                else:
-                    print(f"❌ E SETUP FAIL: Could not create company for deletion tests")
-            except Exception as e:
-                print(f"❌ E ERROR: {e}")
-        
-        # ============================================================
-        # F) MY COMPANIES TESTS
-        # ============================================================
-        print("\n📋 F) MY COMPANIES TESTS")
-        print("-" * 40)
-        
-        if not test_users:
-            print("❌ F SKIP: No users available for testing")
-        else:
-            # F23) With owner (create 2 companies), GET /api/my-companies
-            print("F23) Testing my-companies endpoint...")
-            try:
-                owner_session = test_users[0]["session"]
-                
-                # Create two companies
-                company1_resp = owner_session.post(f"{API_BASE}/companies", json={
-                    "nameAr": "شركتي الأولى",
-                    "sector": "TECH"
-                })
-                company2_resp = owner_session.post(f"{API_BASE}/companies", json={
-                    "nameAr": "شركتي الثانية", 
-                    "sector": "MARKETING"
-                })
-                
-                if company1_resp.status_code == 200 and company2_resp.status_code == 200:
-                    # Get my companies
-                    resp = owner_session.get(f"{API_BASE}/my-companies")
-                    if resp.status_code == 200:
-                        companies = resp.json().get("companies", [])
-                        if len(companies) >= 2:
-                            # Check that all statuses are included (check isApproved field due to schema issues)
-                            has_pending = any(not c.get("isApproved", True) for c in companies)
-                            if has_pending:
-                                print("✅ F23 PASS: My-companies returns all statuses including PENDING (isApproved=false)")
-                            else:
-                                print("❌ F23 FAIL: My-companies doesn't include PENDING companies")
-                        else:
-                            print(f"❌ F23 FAIL: Expected at least 2 companies, got {len(companies)}")
-                    else:
-                        print(f"❌ F23 FAIL: Expected 200, got {resp.status_code}")
-                else:
-                    print("❌ F23 SETUP FAIL: Could not create test companies")
-            except Exception as e:
-                print(f"❌ F23 ERROR: {e}")
-            
-            # F24) Without session → 401
-            print("\nF24) Testing my-companies without session...")
-            try:
-                resp = requests.get(f"{API_BASE}/my-companies")
-                if resp.status_code == 401:
-                    print("✅ F24 PASS: No session returns 401")
-                else:
-                    print(f"❌ F24 FAIL: Expected 401, got {resp.status_code}")
-            except Exception as e:
-                print(f"❌ F24 ERROR: {e}")
-        
-        # ============================================================
-        # G) ADMIN ENDPOINTS TESTS
-        # ============================================================
-        print("\n📋 G) ADMIN ENDPOINTS TESTS")
-        print("-" * 40)
-        
-        # G25) Create fresh user, test admin access → 403
-        print("G25) Testing admin endpoints as regular user...")
-        try:
-            regular_email = get_timestamp_email()
-            signup_resp = signup("Regular User", regular_email, "password123")
-            if signup_resp.status_code == 200:
-                regular_session = requests.Session()
-                login_resp = login(regular_session, regular_email, "password123")
-                if login_resp.status_code == 200:
-                    resp = regular_session.get(f"{API_BASE}/admin/companies")
-                    if resp.status_code == 403:
-                        error_msg = resp.json().get("error", "")
-                        if "صلاحيات مسؤول مطلوبة" in error_msg:
-                            print("✅ G25 PASS: Regular user blocked with correct Arabic message")
-                        else:
-                            print(f"❌ G25 FAIL: Wrong error message: {error_msg}")
-                    else:
-                        print(f"❌ G25 FAIL: Expected 403, got {resp.status_code}")
-                else:
-                    print(f"❌ G25 SETUP FAIL: Regular user login failed")
+                    test_results.append(f"❌ A1) Wrong error message: {error_msg}")
             else:
-                print(f"❌ G25 SETUP FAIL: Regular user signup failed")
-        except Exception as e:
-            print(f"❌ G25 ERROR: {e}")
+                test_results.append(f"❌ A1) Expected 403, got {apply_resp.status_code}")
         
-        # G26) Promote to ADMIN, re-login, test admin endpoints
-        print("\nG26-G31) Testing admin endpoints with proper admin user...")
-        try:
-            admin_email = get_timestamp_email()
-            signup_resp = signup("Admin User", admin_email, "password123")
-            if signup_resp.status_code == 200:
-                # Get user ID and promote to admin
-                client = MongoClient(MONGO_URL)
-                db = client[DB_NAME]
-                user_doc = db.users.find_one({"email": admin_email})
-                if user_doc:
-                    user_id = user_doc["_id"]
-                    promoteToAdmin(user_id)
-                    
-                    # Re-login to get fresh JWT with ADMIN role
-                    admin_session = requests.Session()
-                    login_resp = login(admin_session, admin_email, "password123")
-                    if login_resp.status_code == 200:
-                        # G26) GET /api/admin/companies?status=PENDING → 200
-                        resp26 = admin_session.get(f"{API_BASE}/admin/companies?status=PENDING")
-                        if resp26.status_code == 200:
-                            print("✅ G26 PASS: Admin can access companies list")
-                        else:
-                            print(f"❌ G26 FAIL: Expected 200, got {resp26.status_code}")
-                        
-                        # G27) Create a NEW company C2 via another BASIC user
-                        basic_email = get_timestamp_email()
-                        signup_resp = signup("Basic User", basic_email, "password123")
-                        if signup_resp.status_code == 200:
-                            basic_session = requests.Session()
-                            login_resp = login(basic_session, basic_email, "password123")
-                            if login_resp.status_code == 200:
-                                # Subscribe to BASIC
-                                subscribe_resp = basic_session.post(f"{API_BASE}/membership/subscribe", json={
-                                    "tier": "BASIC"
-                                })
-                                if subscribe_resp.status_code == 200:
-                                    # Create company
-                                    company_resp = basic_session.post(f"{API_BASE}/companies", json={
-                                        "nameAr": "شركة للاختبار الإداري",
-                                        "sector": "FOOD"
+        # A2) Create BASIC user and test tier gate
+        print("\n🔸 A2) Testing BASIC user tier gate")
+        basic_user = create_user("Basic User", timestamp_email(), "password123", "BASIC")
+        if basic_user:
+            apply_resp = session.post(urljoin(API_BASE, 'experts/apply'), 
+                                    json={'specialty': 'LEGAL', 'hourlyRate': 25})
+            if apply_resp.status_code == 403:
+                test_results.append("✅ A2) BASIC user correctly blocked")
+            else:
+                test_results.append(f"❌ A2) Expected 403, got {apply_resp.status_code}")
+        
+        # A3) Create GOLD user and test expert application
+        print("\n🔸 A3) Testing GOLD user expert application")
+        gold_user = create_user("Gold Expert", timestamp_email(), "password123", "GOLD")
+        if not gold_user:
+            test_results.append("❌ A3) GOLD user creation failed")
+        else:
+            # Re-login to get fresh JWT with GOLD tier
+            login_user(gold_user['email'], "password123")
+            
+            # Test validation errors
+            # Empty body
+            apply_resp = session.post(urljoin(API_BASE, 'experts/apply'), json={})
+            if apply_resp.status_code == 400 and 'التخصص غير صحيح' in apply_resp.json().get('error', ''):
+                test_results.append("✅ A3a) Empty specialty validation working")
+            else:
+                test_results.append(f"❌ A3a) Expected 400 with Arabic error, got {apply_resp.status_code}")
+            
+            # Invalid specialty
+            apply_resp = session.post(urljoin(API_BASE, 'experts/apply'), 
+                                    json={'specialty': 'INVALID', 'hourlyRate': 25})
+            if apply_resp.status_code == 400:
+                test_results.append("✅ A3b) Invalid specialty validation working")
+            else:
+                test_results.append(f"❌ A3b) Expected 400, got {apply_resp.status_code}")
+            
+            # Invalid hourly rate
+            apply_resp = session.post(urljoin(API_BASE, 'experts/apply'), 
+                                    json={'specialty': 'LEGAL', 'hourlyRate': 0})
+            if apply_resp.status_code == 400 and 'سعر الساعة مطلوب' in apply_resp.json().get('error', ''):
+                test_results.append("✅ A3c) Invalid hourly rate validation working")
+            else:
+                test_results.append(f"❌ A3c) Expected 400 with Arabic error, got {apply_resp.status_code}")
+            
+            # Valid application
+            apply_resp = session.post(urljoin(API_BASE, 'experts/apply'), 
+                                    json={
+                                        'specialty': 'LEGAL',
+                                        'specialtyAr': 'قانون شركات',
+                                        'bio': 'خبير قانوني متخصص في قانون الشركات',
+                                        'experienceYears': 5,
+                                        'hourlyRate': 25,
+                                        'photo': '',
+                                        'cv': ''
                                     })
-                                    if company_resp.status_code == 200:
-                                        C2 = company_resp.json()["company"]["id"]
-                                        print("✅ G27 PASS: Created new company C2 for admin testing")
-                                        
-                                        # G28) As admin POST /api/admin/companies/C2/approve → 200
-                                        approve_resp = admin_session.post(f"{API_BASE}/admin/companies/{C2}/approve")
-                                        if approve_resp.status_code == 200:
-                                            approve_data = approve_resp.json()
-                                            if approve_data.get("success") and approve_data.get("status") == "APPROVED":
-                                                print("✅ G28 PASS: Admin can approve company")
-                                                
-                                                # Verify in DB
-                                                company_doc = db.companies.find_one({"_id": C2})
-                                                if (company_doc and 
-                                                    company_doc.get("status") == "APPROVED" and
-                                                    company_doc.get("isApproved") == True and
-                                                    company_doc.get("rejectionReason") is None):
-                                                    print("✅ G28 DB VERIFY: Company properly approved in database")
-                                                else:
-                                                    print("❌ G28 DB FAIL: Company not properly approved in database")
-                                            else:
-                                                print(f"❌ G28 FAIL: Unexpected approve response: {approve_data}")
-                                        else:
-                                            print(f"❌ G28 FAIL: Expected 200, got {approve_resp.status_code}")
-                                        
-                                        # G29) As admin POST /api/admin/companies/C2/reject {} → 400
-                                        reject_resp1 = admin_session.post(f"{API_BASE}/admin/companies/{C2}/reject", json={})
-                                        if reject_resp1.status_code == 400:
-                                            error_msg = reject_resp1.json().get("error", "")
-                                            if "سبب الرفض مطلوب" in error_msg:
-                                                print("✅ G29 PASS: Reject without reason returns 400 with Arabic error")
-                                            else:
-                                                print(f"❌ G29 FAIL: Wrong error message: {error_msg}")
-                                        else:
-                                            print(f"❌ G29 FAIL: Expected 400, got {reject_resp1.status_code}")
-                                        
-                                        # G30) POST /api/admin/companies/C2/reject with reason → 200
-                                        reject_resp2 = admin_session.post(f"{API_BASE}/admin/companies/{C2}/reject", json={
-                                            "reason": "مخالفة للشروط والأحكام"
-                                        })
-                                        if reject_resp2.status_code == 200:
-                                            reject_data = reject_resp2.json()
-                                            if reject_data.get("success") and reject_data.get("status") == "REJECTED":
-                                                print("✅ G30 PASS: Admin can reject company with reason")
-                                                
-                                                # Verify in DB
-                                                company_doc = db.companies.find_one({"_id": C2})
-                                                if (company_doc and 
-                                                    company_doc.get("status") == "REJECTED" and
-                                                    company_doc.get("rejectionReason") == "مخالفة للشروط والأحكام"):
-                                                    print("✅ G30 DB VERIFY: Company properly rejected in database")
-                                                else:
-                                                    print("❌ G30 DB FAIL: Company not properly rejected in database")
-                                            else:
-                                                print(f"❌ G30 FAIL: Unexpected reject response: {reject_data}")
-                                        else:
-                                            print(f"❌ G30 FAIL: Expected 200, got {reject_resp2.status_code}")
-                                        
-                                        # G31) As non-admin POST approve/reject → 403
-                                        non_admin_resp = basic_session.post(f"{API_BASE}/admin/companies/{C2}/approve")
-                                        if non_admin_resp.status_code == 403:
-                                            print("✅ G31 PASS: Non-admin cannot approve companies")
-                                        else:
-                                            print(f"❌ G31 FAIL: Expected 403, got {non_admin_resp.status_code}")
-                                            
-                                    else:
-                                        print(f"❌ G27 SETUP FAIL: Could not create company C2")
-                                else:
-                                    print(f"❌ G27 SETUP FAIL: Could not subscribe basic user")
-                            else:
-                                print(f"❌ G27 SETUP FAIL: Basic user login failed")
-                        else:
-                            print(f"❌ G27 SETUP FAIL: Basic user signup failed")
+            if apply_resp.status_code == 200:
+                expert_data = apply_resp.json()
+                if expert_data.get('success') and expert_data.get('expert', {}).get('id'):
+                    expert_id = expert_data['expert']['id']
+                    test_results.append(f"✅ A3d) Valid expert application successful - ID: {expert_id}")
+                    
+                    # Try duplicate application
+                    dup_resp = session.post(urljoin(API_BASE, 'experts/apply'), 
+                                          json={'specialty': 'LEGAL', 'hourlyRate': 25})
+                    if dup_resp.status_code == 409 and 'لديك طلب تسجيل خبير مسبقاً' in dup_resp.json().get('error', ''):
+                        test_results.append("✅ A3e) Duplicate application correctly blocked")
                     else:
-                        print(f"❌ G26 SETUP FAIL: Admin re-login failed")
+                        test_results.append(f"❌ A3e) Expected 409 with Arabic error, got {dup_resp.status_code}")
                 else:
-                    print("❌ G26 SETUP FAIL: Could not find admin user in DB")
-                client.close()
+                    test_results.append(f"❌ A3d) Invalid response structure: {expert_data}")
+                    expert_id = expert_data.get('expert', {}).get('id')  # Try to get ID anyway
             else:
-                print(f"❌ G26 SETUP FAIL: Admin user signup failed")
-        except Exception as e:
-            print(f"❌ G26-G31 ERROR: {e}")
+                test_results.append(f"❌ A3d) Expected 200, got {apply_resp.status_code} - {apply_resp.text}")
         
-        # ============================================================
-        # H) REGRESSION TESTS
-        # ============================================================
-        print("\n📋 H) REGRESSION TESTS")
-        print("-" * 40)
+        # B) GET /experts (public)
+        print("\n📋 B) GET /experts PUBLIC TESTS")
+        print("-" * 50)
         
-        # H32) GET /api/ → 200 Majles message
-        print("H32) Testing API health endpoint...")
-        try:
-            resp = requests.get(f"{API_BASE}/")
-            if resp.status_code == 200:
-                data = resp.json()
-                if "Majles" in data.get("message", ""):
-                    print("✅ H32 PASS: API health endpoint working")
-                else:
-                    print(f"❌ H32 FAIL: Unexpected message: {data}")
+        # B4) Test that PENDING expert is not visible
+        print("\n🔸 B4) Testing PENDING expert not visible in public list")
+        experts_resp = session.get(urljoin(API_BASE, 'experts'))
+        if experts_resp.status_code == 200:
+            experts_list = experts_resp.json().get('experts', [])
+            pending_found = any(e.get('id') == expert_id for e in experts_list)
+            if not pending_found:
+                test_results.append("✅ B4) PENDING expert correctly hidden from public list")
             else:
-                print(f"❌ H32 FAIL: Expected 200, got {resp.status_code}")
-        except Exception as e:
-            print(f"❌ H32 ERROR: {e}")
+                test_results.append("❌ B4) PENDING expert visible in public list")
+        else:
+            test_results.append(f"❌ B4) GET /experts failed: {experts_resp.status_code}")
         
-        # H33) GET /api/me as admin → shows role=ADMIN
-        print("\nH33) Testing /api/me shows admin role...")
+        # B5) Approve expert in DB and test visibility
+        print("\n🔸 B5) Approving expert and testing visibility")
         try:
-            # Use the admin session from previous tests if available
-            admin_email = get_timestamp_email()
-            signup_resp = signup("Final Admin", admin_email, "password123")
-            if signup_resp.status_code == 200:
-                client = MongoClient(MONGO_URL)
-                db = client[DB_NAME]
-                user_doc = db.users.find_one({"email": admin_email})
-                if user_doc:
-                    promoteToAdmin(user_doc["_id"])
-                    admin_session = requests.Session()
-                    login_resp = login(admin_session, admin_email, "password123")
-                    if login_resp.status_code == 200:
-                        resp = admin_session.get(f"{API_BASE}/me")
-                        if resp.status_code == 200:
-                            user_data = resp.json()
-                            if user_data.get("role") == "ADMIN":
-                                print("✅ H33 PASS: /api/me shows role=ADMIN")
-                            else:
-                                print(f"❌ H33 FAIL: Expected role=ADMIN, got {user_data.get('role')}")
-                        else:
-                            print(f"❌ H33 FAIL: Expected 200, got {resp.status_code}")
+            # Approve expert directly in DB
+            db.experts.update_one(
+                {"_id": expert_id},
+                {"$set": {"status": "APPROVED", "isApproved": True}}
+            )
+            print(f"✅ Expert {expert_id} approved in DB")
+            
+            # B6) Test approved expert is visible
+            experts_resp = session.get(urljoin(API_BASE, 'experts'))
+            if experts_resp.status_code == 200:
+                experts_list = experts_resp.json().get('experts', [])
+                approved_expert = next((e for e in experts_list if e.get('id') == expert_id), None)
+                if approved_expert:
+                    required_fields = ['id', 'name', 'specialty', 'specialtyAr', 'hourlyRate']
+                    if all(field in approved_expert for field in required_fields):
+                        test_results.append("✅ B6) APPROVED expert visible with correct fields")
                     else:
-                        print(f"❌ H33 SETUP FAIL: Admin login failed")
+                        test_results.append(f"❌ B6) Missing fields in expert data: {approved_expert}")
                 else:
-                    print("❌ H33 SETUP FAIL: Could not find admin user")
-                client.close()
+                    test_results.append("❌ B6) APPROVED expert not found in public list")
             else:
-                print(f"❌ H33 SETUP FAIL: Admin signup failed")
-        except Exception as e:
-            print(f"❌ H33 ERROR: {e}")
-        
-        # H34) Test other endpoints still functional
-        print("\nH34) Testing other endpoints still functional...")
-        try:
-            # Test signup
-            test_email = get_timestamp_email()
-            signup_resp = requests.post(f"{API_BASE}/signup", json={
-                "name": "Regression Test",
-                "email": test_email,
-                "password": "password123"
-            })
-            if signup_resp.status_code == 200:
-                print("✅ H34a PASS: /api/signup still working")
+                test_results.append(f"❌ B6) GET /experts failed: {experts_resp.status_code}")
+            
+            # B7) Test specialty filter
+            print("\n🔸 B7) Testing specialty filter")
+            legal_resp = session.get(urljoin(API_BASE, 'experts?specialty=LEGAL'))
+            hr_resp = session.get(urljoin(API_BASE, 'experts?specialty=HR'))
+            
+            if legal_resp.status_code == 200 and hr_resp.status_code == 200:
+                legal_experts = legal_resp.json().get('experts', [])
+                hr_experts = hr_resp.json().get('experts', [])
                 
-                # Test login and membership subscribe
-                test_session = requests.Session()
-                login_resp = login(test_session, test_email, "password123")
-                if login_resp.status_code == 200:
-                    subscribe_resp = test_session.post(f"{API_BASE}/membership/subscribe", json={
-                        "tier": "BASIC"
-                    })
-                    if subscribe_resp.status_code == 200:
-                        print("✅ H34b PASS: /api/membership/subscribe still working")
-                        
-                        # Test discount endpoint
-                        discount_resp = test_session.post(f"{API_BASE}/membership/discount", json={
-                            "price": 100
-                        })
-                        if discount_resp.status_code == 200:
-                            discount_data = discount_resp.json()
-                            if discount_data.get("tier") == "BASIC" and discount_data.get("discountPercent") == 10:
-                                print("✅ H34c PASS: /api/membership/discount still working")
-                            else:
-                                print(f"❌ H34c FAIL: Unexpected discount data: {discount_data}")
-                        else:
-                            print(f"❌ H34c FAIL: Expected 200, got {discount_resp.status_code}")
-                    else:
-                        print(f"❌ H34b FAIL: Expected 200, got {subscribe_resp.status_code}")
+                legal_found = any(e.get('id') == expert_id for e in legal_experts)
+                hr_found = any(e.get('id') == expert_id for e in hr_experts)
+                
+                if legal_found and not hr_found:
+                    test_results.append("✅ B7) Specialty filter working correctly")
                 else:
-                    print(f"❌ H34 SETUP FAIL: Login failed")
+                    test_results.append(f"❌ B7) Specialty filter issue - LEGAL: {legal_found}, HR: {hr_found}")
             else:
-                print(f"❌ H34a FAIL: Expected 200, got {signup_resp.status_code}")
+                test_results.append("❌ B7) Specialty filter requests failed")
+        
         except Exception as e:
-            print(f"❌ H34 ERROR: {e}")
+            test_results.append(f"❌ B5-B7) Expert approval/visibility tests failed: {e}")
         
-        print("\n" + "=" * 60)
-        print("🏁 Phase 3 (Business Directory) Backend Testing Complete")
-        print("=" * 60)
+        # C) GET /experts/:id
+        print("\n📋 C) GET /experts/:id TESTS")
+        print("-" * 50)
         
+        # C8) Test PENDING expert access control
+        print("\n🔸 C8) Testing PENDING expert access control")
+        # Revert expert to PENDING
+        db.experts.update_one(
+            {"_id": expert_id},
+            {"$set": {"status": "PENDING", "isApproved": False}}
+        )
+        
+        # Test without auth
+        session_backup = session.cookies.copy()
+        session.cookies.clear()
+        expert_detail_resp = session.get(urljoin(API_BASE, f'experts/{expert_id}'))
+        if expert_detail_resp.status_code == 404:
+            test_results.append("✅ C8) PENDING expert correctly hidden from anonymous users")
+        else:
+            test_results.append(f"❌ C8) Expected 404, got {expert_detail_resp.status_code}")
+        
+        # C9) Test owner can access PENDING expert
+        session.cookies.update(session_backup)
+        login_user(gold_user['email'], "password123")
+        expert_detail_resp = session.get(urljoin(API_BASE, f'experts/{expert_id}'))
+        if expert_detail_resp.status_code == 200:
+            test_results.append("✅ C9) Owner can access PENDING expert")
+        else:
+            test_results.append(f"❌ C9) Expected 200, got {expert_detail_resp.status_code}")
+        
+        # C10) Test APPROVED expert public access
+        db.experts.update_one(
+            {"_id": expert_id},
+            {"$set": {"status": "APPROVED", "isApproved": True}}
+        )
+        session.cookies.clear()
+        expert_detail_resp = session.get(urljoin(API_BASE, f'experts/{expert_id}'))
+        if expert_detail_resp.status_code == 200:
+            test_results.append("✅ C10) APPROVED expert accessible to public")
+        else:
+            test_results.append(f"❌ C10) Expected 200, got {expert_detail_resp.status_code}")
+        
+        # D) AVAILABILITY
+        print("\n📋 D) AVAILABILITY TESTS")
+        print("-" * 50)
+        
+        # Login as expert owner
+        login_user(gold_user['email'], "password123")
+        
+        # D11) Set availability
+        print("\n🔸 D11) Setting expert availability")
+        availability_data = {
+            'availability': [
+                {'dayOfWeek': 0, 'startTime': '09:00', 'endTime': '12:00'},  # Sunday
+                {'dayOfWeek': 2, 'startTime': '14:00', 'endTime': '17:00'}   # Tuesday
+            ]
+        }
+        avail_resp = session.put(urljoin(API_BASE, 'experts/me/availability'), json=availability_data)
+        if avail_resp.status_code == 200:
+            resp_data = avail_resp.json()
+            if resp_data.get('success') and resp_data.get('count') == 2:
+                test_results.append("✅ D11) Availability set successfully")
+            else:
+                test_results.append(f"❌ D11) Invalid response: {resp_data}")
+        else:
+            test_results.append(f"❌ D11) Expected 200, got {avail_resp.status_code}")
+        
+        # D12) Get availability
+        print("\n🔸 D12) Getting expert availability")
+        get_avail_resp = session.get(urljoin(API_BASE, f'experts/{expert_id}/availability'))
+        if get_avail_resp.status_code == 200:
+            avail_data = get_avail_resp.json().get('availability', [])
+            if len(avail_data) == 2:
+                test_results.append("✅ D12) Availability retrieved successfully")
+            else:
+                test_results.append(f"❌ D12) Expected 2 availability entries, got {len(avail_data)}")
+        else:
+            test_results.append(f"❌ D12) Expected 200, got {get_avail_resp.status_code}")
+        
+        # D13) Test invalid dayOfWeek
+        print("\n🔸 D13) Testing invalid dayOfWeek validation")
+        invalid_avail = {'availability': [{'dayOfWeek': 7, 'startTime': '09:00', 'endTime': '12:00'}]}
+        invalid_resp = session.put(urljoin(API_BASE, 'experts/me/availability'), json=invalid_avail)
+        if invalid_resp.status_code == 400:
+            test_results.append("✅ D13) Invalid dayOfWeek correctly rejected")
+        else:
+            test_results.append(f"❌ D13) Expected 400, got {invalid_resp.status_code}")
+        
+        # D14) Test invalid time format
+        print("\n🔸 D14) Testing invalid time format validation")
+        invalid_time = {'availability': [{'dayOfWeek': 0, 'startTime': '9:00', 'endTime': '12:00'}]}
+        invalid_time_resp = session.put(urljoin(API_BASE, 'experts/me/availability'), json=invalid_time)
+        if invalid_time_resp.status_code == 400:
+            test_results.append("✅ D14) Invalid time format correctly rejected")
+        else:
+            test_results.append(f"❌ D14) Expected 400, got {invalid_time_resp.status_code}")
+        
+        # D15) Test empty availability
+        print("\n🔸 D15) Testing empty availability")
+        empty_avail = {'availability': []}
+        empty_resp = session.put(urljoin(API_BASE, 'experts/me/availability'), json=empty_avail)
+        if empty_resp.status_code == 200 and empty_resp.json().get('count') == 0:
+            test_results.append("✅ D15) Empty availability set successfully")
+            
+            # Restore availability for next tests
+            session.put(urljoin(API_BASE, 'experts/me/availability'), json=availability_data)
+        else:
+            test_results.append(f"❌ D15) Empty availability failed: {empty_resp.status_code}")
+        
+        # E) SLOTS
+        print("\n📋 E) SLOTS TESTS")
+        print("-" * 50)
+        
+        # E16) Get slots for Sunday (dayOfWeek=0)
+        print("\n🔸 E16) Testing slots for Sunday")
+        next_sunday = get_next_date(7, 6)  # Next Sunday (6=Sunday in weekday)
+        slots_resp = session.get(urljoin(API_BASE, f'experts/{expert_id}/slots?date={next_sunday}'))
+        if slots_resp.status_code == 200:
+            slots = slots_resp.json().get('slots', [])
+            expected_slots = ['09:00', '10:00', '11:00']  # 3 one-hour slots from 09:00-12:00
+            slot_times = [s.get('startTime') for s in slots]
+            if all(time in slot_times for time in expected_slots):
+                test_results.append(f"✅ E16) Sunday slots correct: {slot_times}")
+            else:
+                test_results.append(f"❌ E16) Expected {expected_slots}, got {slot_times}")
+        else:
+            test_results.append(f"❌ E16) Expected 200, got {slots_resp.status_code}")
+        
+        # E17) Get slots for Monday (no availability)
+        print("\n🔸 E17) Testing slots for Monday (no availability)")
+        next_monday = get_next_date(7, 0)  # Next Monday (0=Monday in weekday)
+        monday_slots_resp = session.get(urljoin(API_BASE, f'experts/{expert_id}/slots?date={next_monday}'))
+        if monday_slots_resp.status_code == 200:
+            monday_slots = monday_slots_resp.json().get('slots', [])
+            if len(monday_slots) == 0:
+                test_results.append("✅ E17) Monday slots correctly empty")
+            else:
+                test_results.append(f"❌ E17) Expected 0 slots, got {len(monday_slots)}")
+        else:
+            test_results.append(f"❌ E17) Expected 200, got {monday_slots_resp.status_code}")
+        
+        # E18) Test invalid date format
+        print("\n🔸 E18) Testing invalid date format")
+        bad_date_resp = session.get(urljoin(API_BASE, f'experts/{expert_id}/slots?date=bad'))
+        if bad_date_resp.status_code == 400 and 'تاريخ غير صحيح' in bad_date_resp.json().get('error', ''):
+            test_results.append("✅ E18) Invalid date format correctly rejected")
+        else:
+            test_results.append(f"❌ E18) Expected 400 with Arabic error, got {bad_date_resp.status_code}")
+        
+        # F) BOOK APPOINTMENT
+        print("\n📋 F) BOOK APPOINTMENT TESTS")
+        print("-" * 50)
+        
+        # Create a client user
+        print("\n🔸 F19) Creating client user and booking appointment")
+        client_user = create_user("Client User", timestamp_email(), "password123", "FREE")
+        if not client_user:
+            test_results.append("❌ F19) Client user creation failed")
+        else:
+            login_user(client_user['email'], "password123")
+            
+            # Book appointment
+            appointment_data = {
+                'expertId': expert_id,
+                'date': next_sunday,
+                'startTime': '09:00',
+                'endTime': '10:00'
+            }
+            book_resp = session.post(urljoin(API_BASE, 'appointments'), json=appointment_data)
+            if book_resp.status_code == 200:
+                appt_data = book_resp.json()
+                if appt_data.get('success') and appt_data.get('appointment', {}).get('status') == 'CONFIRMED':
+                    appointment_id = appt_data['appointment']['id']
+                    total_paid = appt_data['appointment']['totalPaid']
+                    
+                    # Verify pricing for FREE tier (no discount)
+                    if total_paid == 25:  # hourlyRate without discount
+                        test_results.append(f"✅ F19) Appointment booked successfully - ID: {appointment_id}, Total: {total_paid}")
+                    else:
+                        test_results.append(f"❌ F19) Wrong pricing - Expected 25, got {total_paid}")
+                else:
+                    test_results.append(f"❌ F19) Invalid appointment response: {appt_data}")
+                    # Try to get appointment_id anyway
+                    appointment_id = appt_data.get('appointment', {}).get('id')
+            else:
+                test_results.append(f"❌ F19) Expected 200, got {book_resp.status_code} - {book_resp.text}")
+            
+            # F20) Try to book same slot again
+            print("\n🔸 F20) Testing duplicate booking prevention")
+            dup_book_resp = session.post(urljoin(API_BASE, 'appointments'), json=appointment_data)
+            if dup_book_resp.status_code == 409 and 'هذا الموعد محجوز بالفعل' in dup_book_resp.json().get('error', ''):
+                test_results.append("✅ F20) Duplicate booking correctly prevented")
+            else:
+                test_results.append(f"❌ F20) Expected 409 with Arabic error, got {dup_book_resp.status_code}")
+            
+            # F21) Try to book outside availability
+            print("\n🔸 F21) Testing booking outside availability")
+            outside_data = {
+                'expertId': expert_id,
+                'date': next_sunday,
+                'startTime': '08:00',
+                'endTime': '09:00'
+            }
+            outside_resp = session.post(urljoin(API_BASE, 'appointments'), json=outside_data)
+            if outside_resp.status_code == 400 and 'الوقت غير ضمن أوقات المتاحة' in outside_resp.json().get('error', ''):
+                test_results.append("✅ F21) Outside availability correctly rejected")
+            else:
+                test_results.append(f"❌ F21) Expected 400 with Arabic error, got {outside_resp.status_code}")
+            
+            # F22) Try self-booking (expert booking with themselves)
+            print("\n🔸 F22) Testing self-booking prevention")
+            login_user(gold_user['email'], "password123")  # Login as expert
+            self_book_data = {
+                'expertId': expert_id,
+                'date': next_sunday,
+                'startTime': '10:00',
+                'endTime': '11:00'
+            }
+            self_book_resp = session.post(urljoin(API_BASE, 'appointments'), json=self_book_data)
+            if self_book_resp.status_code == 400 and 'لا يمكنك حجز جلسة مع نفسك' in self_book_resp.json().get('error', ''):
+                test_results.append("✅ F22) Self-booking correctly prevented")
+            else:
+                test_results.append(f"❌ F22) Expected 400 with Arabic error, got {self_book_resp.status_code}")
+            
+            # F23) Test unauthenticated booking
+            print("\n🔸 F23) Testing unauthenticated booking")
+            session.cookies.clear()
+            unauth_resp = session.post(urljoin(API_BASE, 'appointments'), json=appointment_data)
+            if unauth_resp.status_code == 401:
+                test_results.append("✅ F23) Unauthenticated booking correctly rejected")
+            else:
+                test_results.append(f"❌ F23) Expected 401, got {unauth_resp.status_code}")
+        
+        # G) TIER DISCOUNT
+        print("\n📋 G) TIER DISCOUNT TESTS")
+        print("-" * 50)
+        
+        # Create clients with different tiers and test discounts
+        tiers_discounts = [
+            ('BASIC', 22.5),   # 10% discount: 25 * 0.9 = 22.5
+            ('GOLD', 20.0),    # 20% discount: 25 * 0.8 = 20.0
+            ('PLATINUM', 17.5) # 30% discount: 25 * 0.7 = 17.5
+        ]
+        
+        for tier, expected_price in tiers_discounts:
+            print(f"\n🔸 G24) Testing {tier} tier discount")
+            tier_client = create_user(f"{tier} Client", timestamp_email(), "password123", tier)
+            if tier_client:
+                # Re-login to get fresh JWT with correct tier
+                login_user(tier_client['email'], "password123")
+                
+                # Book different slot
+                tier_appointment_data = {
+                    'expertId': expert_id,
+                    'date': next_sunday,
+                    'startTime': f'{10 + tiers_discounts.index((tier, expected_price))}:00',
+                    'endTime': f'{11 + tiers_discounts.index((tier, expected_price))}:00'
+                }
+                tier_book_resp = session.post(urljoin(API_BASE, 'appointments'), json=tier_appointment_data)
+                if tier_book_resp.status_code == 200:
+                    tier_appt = tier_book_resp.json().get('appointment', {})
+                    total_paid = tier_appt.get('totalPaid')
+                    if total_paid == expected_price:
+                        test_results.append(f"✅ G24) {tier} discount correct: {total_paid}")
+                    else:
+                        test_results.append(f"❌ G24) {tier} wrong price - Expected {expected_price}, got {total_paid}")
+                else:
+                    test_results.append(f"❌ G24) {tier} booking failed: {tier_book_resp.status_code}")
+        
+        # H) LIST + CANCEL
+        print("\n📋 H) LIST + CANCEL TESTS")
+        print("-" * 50)
+        
+        # H25) Test client appointments list
+        print("\n🔸 H25) Testing client appointments list")
+        login_user(client_user['email'], "password123")
+        client_appts_resp = session.get(urljoin(API_BASE, 'appointments'))
+        if client_appts_resp.status_code == 200:
+            client_appts = client_appts_resp.json().get('appointments', [])
+            if len(client_appts) > 0:
+                test_results.append(f"✅ H25) Client appointments list working: {len(client_appts)} appointments")
+            else:
+                test_results.append("❌ H25) No appointments found for client")
+        else:
+            test_results.append(f"❌ H25) Expected 200, got {client_appts_resp.status_code}")
+        
+        # H26) Test expert appointments list
+        print("\n🔸 H26) Testing expert appointments list")
+        login_user(gold_user['email'], "password123")
+        expert_appts_resp = session.get(urljoin(API_BASE, 'appointments?as=expert'))
+        if expert_appts_resp.status_code == 200:
+            expert_appts = expert_appts_resp.json().get('appointments', [])
+            if len(expert_appts) > 0:
+                test_results.append(f"✅ H26) Expert appointments list working: {len(expert_appts)} appointments")
+            else:
+                test_results.append("❌ H26) No appointments found for expert")
+        else:
+            test_results.append(f"❌ H26) Expected 200, got {expert_appts_resp.status_code}")
+        
+        # H27) Test unauthorized cancellation
+        print("\n🔸 H27) Testing unauthorized cancellation")
+        if appointment_id:  # Only test if we have a valid appointment_id
+            unrelated_user = create_user("Unrelated User", timestamp_email(), "password123")
+            if unrelated_user:
+                login_user(unrelated_user['email'], "password123")
+                cancel_resp = session.post(urljoin(API_BASE, f'appointments/{appointment_id}/cancel'))
+                if cancel_resp.status_code == 403:
+                    test_results.append("✅ H27) Unauthorized cancellation correctly rejected")
+                else:
+                    test_results.append(f"❌ H27) Expected 403, got {cancel_resp.status_code}")
+        else:
+            test_results.append("❌ H27) Skipped - no valid appointment_id")
+        
+        # H28) Test 24-hour rule for client cancellation
+        print("\n🔸 H28) Testing 24-hour cancellation rule")
+        # Create a mock appointment with date = now + 1 hour via MongoDB
+        near_future = datetime.now() + timedelta(hours=1)
+        mock_appointment = {
+            '_id': str(uuid.uuid4()),
+            'clientId': client_user['id'],
+            'expertId': expert_id,
+            'date': near_future.replace(hour=0, minute=0, second=0, microsecond=0),
+            'startTime': near_future.strftime('%H:%M'),
+            'endTime': (near_future + timedelta(hours=1)).strftime('%H:%M'),
+            'status': 'CONFIRMED',
+            'totalPaid': 25,
+            'originalPrice': 25,
+            'discountPercent': 0,
+            'createdAt': datetime.now()
+        }
+        db.appointments.insert_one(mock_appointment)
+        
+        login_user(client_user['email'], "password123")
+        near_cancel_resp = session.post(urljoin(API_BASE, f'appointments/{mock_appointment["_id"]}/cancel'))
+        if near_cancel_resp.status_code == 400 and 'لا يمكن الإلغاء قبل الجلسة بأقل من 24 ساعة' in near_cancel_resp.json().get('error', ''):
+            test_results.append("✅ H28) 24-hour rule correctly enforced")
+        else:
+            test_results.append(f"❌ H28) Expected 400 with Arabic error, got {near_cancel_resp.status_code}")
+        
+        # H29) Test successful client cancellation (>24h)
+        print("\n🔸 H29) Testing successful client cancellation")
+        if appointment_id:  # Only test if we have a valid appointment_id
+            login_user(client_user['email'], "password123")
+            cancel_resp = session.post(urljoin(API_BASE, f'appointments/{appointment_id}/cancel'))
+            if cancel_resp.status_code == 200:
+                # Verify cancellation in DB
+                cancelled_appt = db.appointments.find_one({'_id': appointment_id})
+                if cancelled_appt and cancelled_appt.get('status') == 'CANCELLED' and cancelled_appt.get('cancelledBy') == 'client':
+                    test_results.append("✅ H29) Client cancellation successful")
+                else:
+                    test_results.append(f"❌ H29) Cancellation not properly recorded in DB")
+            else:
+                test_results.append(f"❌ H29) Expected 200, got {cancel_resp.status_code}")
+        else:
+            test_results.append("❌ H29) Skipped - no valid appointment_id")
+        
+        # H30) Test expert cancellation bypasses 24h rule
+        print("\n🔸 H30) Testing expert cancellation bypasses 24h rule")
+        login_user(gold_user['email'], "password123")
+        expert_cancel_resp = session.post(urljoin(API_BASE, f'appointments/{mock_appointment["_id"]}/cancel'))
+        if expert_cancel_resp.status_code == 200:
+            test_results.append("✅ H30) Expert cancellation bypasses 24h rule")
+        else:
+            test_results.append(f"❌ H30) Expected 200, got {expert_cancel_resp.status_code}")
+        
+        # H31) Test cancelling already cancelled appointment
+        print("\n🔸 H31) Testing cancelling already cancelled appointment")
+        if appointment_id:  # Only test if we have a valid appointment_id
+            already_cancelled_resp = session.post(urljoin(API_BASE, f'appointments/{appointment_id}/cancel'))
+            if already_cancelled_resp.status_code == 400 and 'الحجز ملغي مسبقاً' in already_cancelled_resp.json().get('error', ''):
+                test_results.append("✅ H31) Already cancelled appointment correctly rejected")
+            else:
+                test_results.append(f"❌ H31) Expected 400 with Arabic error, got {already_cancelled_resp.status_code}")
+        else:
+            test_results.append("❌ H31) Skipped - no valid appointment_id")
+        
+        # I) ADMIN ENDPOINTS
+        print("\n📋 I) ADMIN ENDPOINTS TESTS")
+        print("-" * 50)
+        
+        # I32) Create admin user
+        print("\n🔸 I32) Creating admin user")
+        admin_user = create_user("Admin User", timestamp_email(), "password123")
+        if admin_user:
+            promote_user_to_admin(admin_user['id'])
+            login_user(admin_user['email'], "password123")  # Re-login to get fresh JWT
+            
+            # I33) Test admin experts list
+            print("\n🔸 I33) Testing admin experts list")
+            admin_experts_resp = session.get(urljoin(API_BASE, 'admin/experts?status=PENDING'))
+            if admin_experts_resp.status_code == 200:
+                admin_experts = admin_experts_resp.json().get('experts', [])
+                test_results.append(f"✅ I33) Admin experts list working: {len(admin_experts)} experts")
+            else:
+                test_results.append(f"❌ I33) Expected 200, got {admin_experts_resp.status_code}")
+            
+            # I34) Create new PENDING expert for approval tests
+            print("\n🔸 I34) Creating new PENDING expert")
+            new_expert_user = create_user("New Expert", timestamp_email(), "password123", "GOLD")
+            if new_expert_user:
+                login_user(new_expert_user['email'], "password123")
+                apply_resp = session.post(urljoin(API_BASE, 'experts/apply'), 
+                                        json={'specialty': 'FINANCIAL', 'hourlyRate': 30})
+                if apply_resp.status_code == 200:
+                    new_expert_id = apply_resp.json()['expert']['id']
+                    test_results.append(f"✅ I34) New PENDING expert created: {new_expert_id}")
+                    
+                    # I35) Test admin approval
+                    print("\n🔸 I35) Testing admin approval")
+                    login_user(admin_user['email'], "password123")
+                    approve_resp = session.post(urljoin(API_BASE, f'admin/experts/{new_expert_id}/approve'))
+                    if approve_resp.status_code == 200:
+                        # Verify in DB
+                        approved_expert = db.experts.find_one({'_id': new_expert_id})
+                        approved_user = db.users.find_one({'_id': new_expert_user['id']})
+                        
+                        if (approved_expert and approved_expert.get('status') == 'APPROVED' and 
+                            approved_expert.get('isApproved') and approved_user and 
+                            approved_user.get('role') == 'EXPERT'):
+                            test_results.append("✅ I35) Admin approval working correctly")
+                        else:
+                            test_results.append("❌ I35) Approval not properly recorded in DB")
+                    else:
+                        test_results.append(f"❌ I35) Expected 200, got {approve_resp.status_code}")
+                    
+                    # I36) Test rejection without reason
+                    print("\n🔸 I36) Testing rejection without reason")
+                    reject_no_reason_resp = session.post(urljoin(API_BASE, f'admin/experts/{new_expert_id}/reject'), json={})
+                    if reject_no_reason_resp.status_code == 400 and 'سبب الرفض مطلوب' in reject_no_reason_resp.json().get('error', ''):
+                        test_results.append("✅ I36) Rejection without reason correctly rejected")
+                    else:
+                        test_results.append(f"❌ I36) Expected 400 with Arabic error, got {reject_no_reason_resp.status_code}")
+                    
+                    # I37) Test rejection with reason
+                    print("\n🔸 I37) Testing rejection with reason")
+                    reject_resp = session.post(urljoin(API_BASE, f'admin/experts/{new_expert_id}/reject'), 
+                                             json={'reason': 'سيرة غير مكتملة'})
+                    if reject_resp.status_code == 200:
+                        # Verify in DB
+                        rejected_expert = db.experts.find_one({'_id': new_expert_id})
+                        if (rejected_expert and rejected_expert.get('status') == 'REJECTED' and 
+                            rejected_expert.get('rejectionReason') == 'سيرة غير مكتملة'):
+                            test_results.append("✅ I37) Admin rejection working correctly")
+                        else:
+                            test_results.append("❌ I37) Rejection not properly recorded in DB")
+                    else:
+                        test_results.append(f"❌ I37) Expected 200, got {reject_resp.status_code}")
+            
+            # I38) Test non-admin access to admin endpoints
+            print("\n🔸 I38) Testing non-admin access to admin endpoints")
+            login_user(client_user['email'], "password123")
+            non_admin_resp = session.post(urljoin(API_BASE, f'admin/experts/{expert_id}/approve'))
+            if non_admin_resp.status_code == 403:
+                test_results.append("✅ I38) Non-admin correctly blocked from admin endpoints")
+            else:
+                test_results.append(f"❌ I38) Expected 403, got {non_admin_resp.status_code}")
+        
+        # J) REGRESSION
+        print("\n📋 J) REGRESSION TESTS")
+        print("-" * 50)
+        
+        # J39) Test API health
+        print("\n🔸 J39) Testing API health")
+        health_resp = session.get(urljoin(API_BASE, ''))
+        if health_resp.status_code == 200 and health_resp.json().get('message') == 'Majles API is running':
+            test_results.append("✅ J39) API health check working")
+        else:
+            test_results.append(f"❌ J39) API health check failed: {health_resp.status_code}")
+        
+        # J40) Test existing endpoints still work
+        print("\n🔸 J40) Testing existing endpoints still work")
+        # Test signup
+        regression_user = create_user("Regression User", timestamp_email(), "password123")
+        if regression_user:
+            # Test membership subscribe
+            subscribe_resp = session.post(urljoin(API_BASE, 'membership/subscribe'), json={'tier': 'BASIC'})
+            if subscribe_resp.status_code == 200:
+                # Test companies endpoint
+                companies_resp = session.get(urljoin(API_BASE, 'companies'))
+                if companies_resp.status_code == 200:
+                    test_results.append("✅ J40) Existing endpoints still working")
+                else:
+                    test_results.append(f"❌ J40) Companies endpoint failed: {companies_resp.status_code}")
+            else:
+                test_results.append(f"❌ J40) Membership subscribe failed: {subscribe_resp.status_code}")
+        else:
+            test_results.append("❌ J40) Regression user creation failed")
+    
     except Exception as e:
-        print(f"💥 CRITICAL ERROR: {e}")
+        test_results.append(f"❌ CRITICAL ERROR: {e}")
         import traceback
         traceback.print_exc()
+    
+    # Print results summary
+    print("\n" + "="*80)
+    print("📊 PHASE 4 EXPERT CONSULTATION TEST RESULTS")
+    print("="*80)
+    
+    passed = sum(1 for result in test_results if result.startswith("✅"))
+    failed = sum(1 for result in test_results if result.startswith("❌"))
+    
+    for result in test_results:
+        print(result)
+    
+    print(f"\n📈 SUMMARY: {passed} passed, {failed} failed out of {len(test_results)} tests")
+    
+    if failed == 0:
+        print("🎉 ALL TESTS PASSED!")
+        return True
+    else:
+        print(f"⚠️  {failed} TESTS FAILED")
+        return False
 
 if __name__ == "__main__":
-    run_tests()
+    success = run_phase4_tests()
+    exit(0 if success else 1)
