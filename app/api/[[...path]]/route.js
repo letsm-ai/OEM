@@ -156,11 +156,262 @@ async function handleRoute(request, { params }) {
           id: user._id,
           name: user.name,
           email: user.email,
+          phone: user.phone || '',
+          photo: user.photo || '',
           role: user.role,
           membershipTier: user.membershipTier,
           membershipExpiry: user.membershipExpiry,
           createdAt: user.createdAt,
         })
+      )
+    }
+
+    // -------- PUT /me (update profile: name, phone, photo) --------
+    if (route === '/me' && method === 'PUT') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      const body = await request.json().catch(() => ({}))
+      const updates = {}
+
+      if (typeof body.name === 'string') {
+        const name = body.name.trim()
+        if (name.length < 2 || name.length > 80) {
+          return handleCORS(
+            NextResponse.json(
+              { error: 'الاسم يجب أن يكون بين 2 و 80 حرفاً' },
+              { status: 400 }
+            )
+          )
+        }
+        updates.name = name
+      }
+
+      if (typeof body.phone === 'string') {
+        const phone = body.phone.trim()
+        if (phone && !/^[+\d\s-]{6,25}$/.test(phone)) {
+          return handleCORS(
+            NextResponse.json(
+              { error: 'رقم الهاتف غير صحيح' },
+              { status: 400 }
+            )
+          )
+        }
+        updates.phone = phone
+      }
+
+      if (typeof body.photo === 'string') {
+        const photo = body.photo
+        if (photo === '') {
+          updates.photo = ''
+        } else {
+          // Must be a data URL image, size <= ~1.5MB base64
+          if (!/^data:image\/(png|jpe?g|webp|gif);base64,/.test(photo)) {
+            return handleCORS(
+              NextResponse.json(
+                { error: 'صيغة الصورة غير مدعومة' },
+                { status: 400 }
+              )
+            )
+          }
+          if (photo.length > 2_000_000) {
+            return handleCORS(
+              NextResponse.json(
+                { error: 'حجم الصورة كبير جداً (الحد الأقصى 1.5MB)' },
+                { status: 400 }
+              )
+            )
+          }
+          updates.photo = photo
+        }
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return handleCORS(
+          NextResponse.json({ error: 'لا توجد تغييرات' }, { status: 400 })
+        )
+      }
+
+      await connectDB()
+      const user = await User.findByIdAndUpdate(
+        session.user.id,
+        { $set: updates },
+        { new: true }
+      ).lean()
+      if (!user) {
+        return handleCORS(
+          NextResponse.json({ error: 'المستخدم غير موجود' }, { status: 404 })
+        )
+      }
+      return handleCORS(
+        NextResponse.json({
+          success: true,
+          user: {
+            id: user._id,
+            name: user.name,
+            email: user.email,
+            phone: user.phone || '',
+            photo: user.photo || '',
+            role: user.role,
+            membershipTier: user.membershipTier,
+          },
+        })
+      )
+    }
+
+    // -------- POST /me/change-password --------
+    if (route === '/me/change-password' && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      const body = await request.json().catch(() => ({}))
+      const currentPassword = (body?.currentPassword || '').toString()
+      const newPassword = (body?.newPassword || '').toString()
+
+      if (!currentPassword || !newPassword) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'كلمة المرور الحالية والجديدة مطلوبتان' },
+            { status: 400 }
+          )
+        )
+      }
+      if (newPassword.length < 6) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'يجب أن تكون كلمة المرور 6 أحرف على الأقل' },
+            { status: 400 }
+          )
+        )
+      }
+      if (currentPassword === newPassword) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'كلمة المرور الجديدة يجب أن تختلف عن الحالية' },
+            { status: 400 }
+          )
+        )
+      }
+
+      await connectDB()
+      const user = await User.findById(session.user.id)
+      if (!user) {
+        return handleCORS(
+          NextResponse.json({ error: 'المستخدم غير موجود' }, { status: 404 })
+        )
+      }
+      const ok = await bcrypt.compare(currentPassword, user.password)
+      if (!ok) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'كلمة المرور الحالية غير صحيحة' },
+            { status: 400 }
+          )
+        )
+      }
+      user.password = await bcrypt.hash(newPassword, 10)
+      await user.save()
+      // Invalidate any outstanding reset tokens for safety
+      await PasswordResetToken.updateMany(
+        { userId: user._id, usedAt: null },
+        { $set: { usedAt: new Date() } }
+      )
+      return handleCORS(
+        NextResponse.json({ success: true, message: 'تم تحديث كلمة المرور بنجاح' })
+      )
+    }
+
+    // -------- DELETE /me (delete account with password confirmation) --------
+    if (route === '/me' && method === 'DELETE') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      const body = await request.json().catch(() => ({}))
+      const password = (body?.password || '').toString()
+      const confirm = (body?.confirm || '').toString()
+
+      if (!password) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'كلمة المرور مطلوبة لتأكيد الحذف' },
+            { status: 400 }
+          )
+        )
+      }
+      if (confirm !== 'DELETE' && confirm !== 'حذف') {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'يجب كتابة كلمة "حذف" لتأكيد العملية' },
+            { status: 400 }
+          )
+        )
+      }
+
+      await connectDB()
+      const user = await User.findById(session.user.id)
+      if (!user) {
+        return handleCORS(
+          NextResponse.json({ error: 'المستخدم غير موجود' }, { status: 404 })
+        )
+      }
+      if (user.role === 'ADMIN') {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'لا يمكن حذف حساب المسؤول من هذه الصفحة' },
+            { status: 403 }
+          )
+        )
+      }
+      const ok = await bcrypt.compare(password, user.password)
+      if (!ok) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'كلمة المرور غير صحيحة' },
+            { status: 400 }
+          )
+        )
+      }
+
+      const uid = user._id
+
+      // Cancel user's future CONFIRMED appointments as client
+      await Appointment.updateMany(
+        { clientId: uid, status: 'CONFIRMED', date: { $gte: new Date() } },
+        { $set: { status: 'CANCELLED', cancelledAt: new Date(), cancelledBy: 'client' } }
+      )
+
+      // If user is an expert, cancel their future appointments and remove their expert record + availability
+      const expert = await Expert.findOne({ userId: uid })
+      if (expert) {
+        await Appointment.updateMany(
+          { expertId: expert._id, status: 'CONFIRMED', date: { $gte: new Date() } },
+          { $set: { status: 'CANCELLED', cancelledAt: new Date(), cancelledBy: 'expert' } }
+        )
+        await Availability.deleteMany({ expertId: expert._id })
+        await Expert.deleteOne({ _id: expert._id })
+      }
+
+      // Delete user's companies
+      await Company.deleteMany({ userId: uid })
+
+      // Delete memberships & password reset tokens
+      await Membership.deleteMany({ userId: uid })
+      await PasswordResetToken.deleteMany({ userId: uid })
+
+      // Finally delete user
+      await User.deleteOne({ _id: uid })
+
+      return handleCORS(
+        NextResponse.json({ success: true, message: 'تم حذف الحساب' })
       )
     }
 

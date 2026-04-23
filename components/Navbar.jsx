@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useSession, signOut } from 'next-auth/react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Menu, X, LogOut, User as UserIcon } from 'lucide-react'
 
 const navLinks = [
@@ -17,6 +17,24 @@ const navLinks = [
 export default function Navbar() {
   const { data: session, status } = useSession()
   const [open, setOpen] = useState(false)
+  const [photo, setPhoto] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    if (session?.user?.id) {
+      fetch('/api/me')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (!cancelled && d?.photo) setPhoto(d.photo)
+        })
+        .catch(() => {})
+    } else {
+      setPhoto('')
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [session?.user?.id, session?.user?.name])
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-[#E5E7EB] bg-white/95 backdrop-blur">
@@ -75,12 +93,24 @@ export default function Navbar() {
             <div className="h-9 w-24 animate-pulse rounded-md bg-gray-200" />
           ) : session?.user ? (
             <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 rounded-full bg-[#F8F9FA] px-3 py-1.5">
-                <UserIcon className="h-4 w-4 text-[#1B3A6B]" />
+              <Link
+                href="/settings"
+                className="flex items-center gap-2 rounded-full bg-[#F8F9FA] px-3 py-1.5 transition hover:bg-[#eef1f5]"
+                title="إعدادات الحساب"
+              >
+                {photo ? (
+                  <img
+                    src={photo}
+                    alt=""
+                    className="h-6 w-6 rounded-full border border-gray-200 object-cover"
+                  />
+                ) : (
+                  <UserIcon className="h-4 w-4 text-[#1B3A6B]" />
+                )}
                 <span className="text-sm font-medium text-[#1B3A6B]">
                   {session.user.name}
                 </span>
-              </div>
+              </Link>
               <button
                 onClick={() => signOut({ callbackUrl: '/' })}
                 className="inline-flex items-center gap-1 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
@@ -137,6 +167,13 @@ export default function Navbar() {
                 <div className="px-3 py-2 text-sm text-gray-600">
                   مرحباً، <span className="font-semibold text-[#1B3A6B]">{session.user.name}</span>
                 </div>
+                <Link
+                  href="/settings"
+                  onClick={() => setOpen(false)}
+                  className="rounded-md px-3 py-2 text-sm font-medium text-[#1B3A6B] hover:bg-[#F8F9FA]"
+                >
+                  إعدادات الحساب
+                </Link>
                 <button
                   onClick={() => {
                     setOpen(false)

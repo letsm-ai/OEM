@@ -168,6 +168,31 @@ backend:
       - working: true
         agent: "testing"
         comment: "Working correctly: ✅ Unauthenticated request returns 401 with Arabic error 'غير مصرح', ✅ Authenticated request returns user data (id, name, email, role=MEMBER, membershipTier=FREE, createdAt). Password field excluded."
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ GET /api/me REGRESSION TEST COMPLETE - Phone and photo fields working correctly:
+          
+          🎯 REGRESSION VERIFICATION (2/2 PASSED):
+          • Unauthenticated request → 401 with Arabic error 'غير مصرح'
+          • Authenticated request → 200 with all required fields including new phone and photo fields
+          
+          🔧 RESPONSE STRUCTURE VERIFIED:
+          • id: user UUID
+          • name: user name
+          • email: user email
+          • phone: empty string default for new users
+          • photo: empty string default for new users
+          • role: MEMBER
+          • membershipTier: FREE
+          • membershipExpiry: null
+          • createdAt: timestamp
+          
+          📊 NEW FIELDS INTEGRATION:
+          • phone field defaults to empty string for new users
+          • photo field defaults to empty string for new users
+          • Existing users migrated to include phone and photo fields
+          • All field validation working correctly
 
   - task: "POST /api/membership/subscribe (mock payment, update tier+expiry, create Membership record)"
     implemented: true
@@ -818,15 +843,179 @@ frontend:
           
           🎉 CONCLUSION: The expert review UI is fully functional and production-ready. All user flows work correctly, from review submission to display on expert profiles. The system properly handles Arabic text, RTL layout, and integrates seamlessly with the backend APIs.
 
+  - task: "PUT /api/me (update profile: name, phone, photo base64)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW endpoint for profile settings page. Auth required (401 with Arabic 'غير مصرح' otherwise).
+          Schema added fields on User: phone (string, default ''), photo (string base64 data URL, default '').
+          Validations:
+          - name: trim, length 2..80 → 400 'الاسم يجب أن يكون بين 2 و 80 حرفاً'
+          - phone: trim, allowed empty string OR regex ^[+\d\s-]{6,25}$ → else 400 'رقم الهاتف غير صحيح'
+          - photo: '' to clear OR must match data:image/(png|jpe?g|webp|gif);base64,... AND length <= 2_000_000 → else 400 'صيغة الصورة غير مدعومة' or 'حجم الصورة كبير جداً (الحد الأقصى 1.5MB)'
+          - No recognized fields at all → 400 'لا توجد تغييرات'
+          On success → 200 {success:true, user:{id, name, email, phone, photo, role, membershipTier}}.
+          Also: NextAuth JWT callback updated to support trigger==='update' so client `update()` refreshes name/email/role/tier from DB.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ PUT /api/me TESTING COMPLETE - All functionality working perfectly:
+          
+          🎯 VALIDATION TESTS (8/8 PASSED):
+          • Unauthenticated request → 401 with Arabic error 'غير مصرح'
+          • No fields provided → 400 'لا توجد تغييرات'
+          • Name too short (1 char) → 400 'الاسم يجب أن يكون بين 2 و 80 حرفاً'
+          • Name too long (81 chars) → 400 'الاسم يجب أن يكون بين 2 و 80 حرفاً'
+          • Invalid phone format → 400 'رقم الهاتف غير صحيح'
+          • Invalid photo format → 400 'صيغة الصورة غير مدعومة'
+          • Photo too large (>2MB) → 400 'حجم الصورة كبير جداً (الحد الأقصى 1.5MB)'
+          
+          🎯 HAPPY PATH TESTS (4/4 PASSED):
+          • Name update → 200 with updated name in response and DB
+          • Phone update (+968 9123 4567) → 200 with updated phone in response and DB
+          • Photo update (valid base64 data URL) → 200 with updated photo in response and DB
+          • Photo clear (empty string) → 200 with empty photo in response and DB
+          
+          🔧 TECHNICAL FIXES APPLIED:
+          • Fixed schema migration issue: Updated existing users in DB to include phone and photo fields
+          • Restarted Next.js service to reload Mongoose models with new schema
+          • All new users now created with phone='' and photo='' defaults
+          • Database updates working correctly with proper field validation
+
+  - task: "POST /api/me/change-password (change password with currentPassword + newPassword)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW endpoint. Auth required.
+          Validations:
+          - Missing currentPassword or newPassword → 400 'كلمة المرور الحالية والجديدة مطلوبتان'
+          - newPassword.length < 6 → 400 'يجب أن تكون كلمة المرور 6 أحرف على الأقل'
+          - new == current → 400 'كلمة المرور الجديدة يجب أن تختلف عن الحالية'
+          - wrong current (bcrypt.compare false) → 400 'كلمة المرور الحالية غير صحيحة'
+          On success: bcrypt-hashes new password, saves user, invalidates all outstanding PasswordResetTokens of the user (sets usedAt=now).
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ POST /api/me/change-password TESTING COMPLETE - All functionality working perfectly:
+          
+          🎯 VALIDATION TESTS (5/5 PASSED):
+          • Unauthenticated request → 401 with Arabic error 'غير مصرح'
+          • Missing fields → 400 'كلمة المرور الحالية والجديدة مطلوبتان'
+          • Short new password (<6 chars) → 400 'يجب أن تكون كلمة المرور 6 أحرف على الأقل'
+          • Same password → 400 'كلمة المرور الجديدة يجب أن تختلف عن الحالية'
+          • Wrong current password → 400 'كلمة المرور الحالية غير صحيحة'
+          
+          🎯 SUCCESS FLOW (4/4 PASSED):
+          • Password change successful → 200 'تم تحديث كلمة المرور بنجاح'
+          • Cannot login with old password (verified)
+          • Can login with new password (verified)
+          • Password reset tokens invalidated (verified in DB)
+          
+          🔧 TECHNICAL VERIFICATION:
+          • bcrypt password hashing working correctly
+          • Database password update successful
+          • PasswordResetToken invalidation working (usedAt field set)
+          • NextAuth credentials authentication working with new password
+
+  - task: "DELETE /api/me (delete account with password + confirm)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW endpoint. Auth required. Body: {password, confirm}.
+          - Missing password → 400 'كلمة المرور مطلوبة لتأكيد الحذف'
+          - confirm not in ['DELETE','حذف'] → 400 'يجب كتابة كلمة "حذف" لتأكيد العملية'
+          - role === 'ADMIN' → 403 'لا يمكن حذف حساب المسؤول من هذه الصفحة' (safety guard)
+          - wrong password → 400 'كلمة المرور غير صحيحة'
+          Cascade on success:
+          * Set to CANCELLED: future CONFIRMED appointments where clientId==user._id (cancelledBy='client', cancelledAt=now)
+          * If user has Expert record:
+              - Set to CANCELLED: future CONFIRMED appointments where expertId==expert._id (cancelledBy='expert')
+              - Delete all Availability for that expert
+              - Delete Expert document
+          * Delete all Company docs owned by the user
+          * Delete all Membership docs of the user
+          * Delete all PasswordResetToken docs of the user
+          * Delete User doc
+          Returns 200 {success:true, message:'تم حذف الحساب'}.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ DELETE /api/me TESTING COMPLETE - All functionality working perfectly:
+          
+          🎯 VALIDATION TESTS (4/4 PASSED):
+          • Unauthenticated request → 401 with Arabic error 'غير مصرح'
+          • Missing password → 400 'كلمة المرور مطلوبة لتأكيد الحذف'
+          • Wrong confirm word → 400 'يجب كتابة كلمة "حذف" لتأكيد العملية'
+          • Wrong password → 400 'كلمة المرور غير صحيحة'
+          
+          🎯 ADMIN PROTECTION (1/1 PASSED):
+          • ADMIN user deletion → 403 'لا يمكن حذف حساب المسؤول من هذه الصفحة'
+          
+          🎯 CASCADE DELETION (9/9 PASSED):
+          • User document deleted from database
+          • Company documents owned by user deleted
+          • Expert record deleted (if exists)
+          • Availability records for expert deleted
+          • Membership records deleted
+          • PasswordResetToken records deleted
+          • Future CONFIRMED appointments as client → status=CANCELLED, cancelledBy=client
+          • Future CONFIRMED appointments as expert → status=CANCELLED, cancelledBy=expert
+          • Past COMPLETED appointments → UNCHANGED (preserved for historical records)
+          
+          🔧 TECHNICAL VERIFICATION:
+          • Account deletion successful → 200 'تم حذف الحساب'
+          • Cannot login after deletion (verified)
+          • All cascade operations working correctly
+          • Database integrity maintained
+
+frontend:
+  - task: "Profile settings page (/settings): name + phone + photo upload + change password + delete account"
+    implemented: true
+    working: "NA"
+    file: "/app/app/settings/page.js, /app/app/settings/_SettingsClient.jsx, /app/components/Navbar.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW Arabic RTL page /settings with three cards:
+          1) Profile: avatar with upload button (compresses client-side to 512px, JPEG/PNG data URL). Name, email (readonly), phone inputs. Save button calls PUT /api/me and refreshes NextAuth session via update() + router.refresh(). Remove photo button clears photo.
+          2) Change password: 3 password fields (current, new, confirm new) with show/hide toggles, validates new>=6 and match, calls POST /api/me/change-password. Success message clears the fields.
+          3) Danger zone: red-border card. For ADMIN users shows info message that admin accounts can't be deleted here. Otherwise shows "حذف الحساب" button opening a confirmation modal requiring password + typing 'حذف' (or 'DELETE'). On success calls signOut({callbackUrl:'/'}).
+          Navbar updates: user chip on desktop is now a Link to /settings (with optional avatar fetched via GET /api/me). Mobile menu gets a new "إعدادات الحساب" link.
+          Also: lib/auth.js JWT callback now handles trigger==='update' to refresh token fields from DB, so name change propagates to session without relogin.
+
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 6
+  test_sequence: 7
   run_ui: false
 
 test_plan:
-  current_focus:
-    - "Expert review UI (my-bookings + expert profile reviews section)"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -1371,3 +1560,68 @@ agent_communication:
       📋 TEST DATA SETUP: Used pymongo to create realistic test data (client user, expert user, expert document, past appointment) with proper UUID format and bcrypt password hashing matching the application structure.
       
       🚀 NEXT STEPS: The expert review system is complete and ready for production. All scenarios from the review request have been successfully tested and verified.
+
+  - agent: "testing"
+    message: |
+      ✅ PROFILE SETTINGS BACKEND TESTING COMPLETE - All NEW endpoints working perfectly:
+      
+      🎯 COMPREHENSIVE TEST RESULTS (7/7 PASSED - 100% SUCCESS RATE):
+      
+      📋 GET /api/me REGRESSION ✅
+         • Unauthenticated request → 401 with Arabic error 'غير مصرح'
+         • Authenticated request → 200 with all required fields including NEW phone and photo fields
+         • phone field defaults to empty string for new users
+         • photo field defaults to empty string for new users
+      
+      📋 PUT /api/me VALIDATIONS ✅ (8/8 validation tests passed)
+         • Unauthenticated request → 401 'غير مصرح'
+         • No fields provided → 400 'لا توجد تغييرات'
+         • Name validation: too short/long → 400 'الاسم يجب أن يكون بين 2 و 80 حرفاً'
+         • Phone validation: invalid format → 400 'رقم الهاتف غير صحيح'
+         • Photo validation: invalid format → 400 'صيغة الصورة غير مدعومة'
+         • Photo validation: too large → 400 'حجم الصورة كبير جداً (الحد الأقصى 1.5MB)'
+      
+      📋 PUT /api/me HAPPY PATH ✅ (4/4 update tests passed)
+         • Name update → 200 with updated name in response and DB
+         • Phone update (+968 9123 4567) → 200 with updated phone in response and DB
+         • Photo update (valid base64 data URL) → 200 with updated photo in response and DB
+         • Photo clear (empty string) → 200 with empty photo in response and DB
+      
+      📋 POST /api/me/change-password ✅ (9/9 tests passed)
+         • Validation errors: unauthenticated, missing fields, short password, same password, wrong current
+         • Password change successful → 200 'تم تحديث كلمة المرور بنجاح'
+         • Cannot login with old password (verified)
+         • Can login with new password (verified)
+         • Password reset tokens invalidated (verified in DB)
+      
+      📋 DELETE /api/me ADMIN GUARD ✅
+         • ADMIN user deletion → 403 'لا يمكن حذف حساب المسؤول من هذه الصفحة'
+      
+      📋 DELETE /api/me CASCADE DELETION ✅ (13/13 tests passed)
+         • Validation errors: unauthenticated, missing password, wrong confirm, wrong password
+         • Account deletion successful → 200 'تم حذف الحساب'
+         • Complete cascade deletion verified:
+           * User document deleted
+           * Company documents deleted
+           * Expert record and availability deleted
+           * Membership records deleted
+           * PasswordResetToken records deleted
+           * Future appointments cancelled (client/expert roles)
+           * Past COMPLETED appointments preserved
+         • Cannot login after deletion (verified)
+      
+      📋 REGRESSION ENDPOINTS ✅
+         • GET /api/ → 200 "Majles API is running"
+         • POST /api/signup → 200 with user object
+         • POST /api/forgot-password → 200 with anti-enumeration
+      
+      🔧 TECHNICAL FIXES APPLIED:
+      • Fixed schema migration: Updated 84 existing users to include phone and photo fields
+      • Restarted Next.js service to reload Mongoose models
+      • All new users now created with proper phone and photo defaults
+      • Database operations working correctly with field validation
+      • NextAuth session authentication working with all endpoints
+      • bcrypt password hashing and validation working correctly
+      • Cascade deletion logic working perfectly
+      
+      🎉 CONCLUSION: All Profile Settings endpoints are fully functional and production-ready. The system properly handles Arabic text, validation, authentication, and complex cascade operations while maintaining data integrity.
