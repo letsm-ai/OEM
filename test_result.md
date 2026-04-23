@@ -1244,14 +1244,160 @@ frontend:
           
           🎉 CONCLUSION: The Admin Analytics Dashboard is FULLY FUNCTIONAL and production-ready. All authentication, authorization, data visualization, and user interaction requirements are met. The dashboard provides comprehensive KPIs, multiple chart types, and proper Arabic localization with RTL support.
 
+  - task: "GET /api/companies (extended: supports ?sort=newest|oldest|name|name_desc + search now covers services & location)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Enhanced public listing: search now matches nameAr, nameEn, description, services (array), location. sort param: newest (default), oldest, name (A→Z by nameAr), name_desc. limit param 1..500 (default 200). Only APPROVED companies.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ GET /api/companies EXTENDED FUNCTIONALITY TESTING COMPLETE - All functionality working perfectly:
+          
+          🎯 COMPREHENSIVE TEST RESULTS (6/6 PASSED - 100% SUCCESS RATE):
+          
+          📋 SORT FUNCTIONALITY:
+          • Sort by newest (default) → شركة الياء للاختبار comes first (most recent)
+          • Sort by oldest → شركة الألف للاختبار comes first (oldest)
+          • Sort by name (alphabetical) → شركة الألف للاختبار comes first alphabetically
+          • Sort by name_desc (reverse alphabetical) → شركة الياء للاختبار comes first in reverse order
+          
+          📋 ENHANCED SEARCH FUNCTIONALITY:
+          • Search by services array → Found شركة الألف للاختبار by 'استشارات قانونية' (matches services field)
+          • Search by location → Found شركة الألف للاختبار by 'الغبرة' (matches location field)
+          • Search by nameAr → Found شركة الياء للاختبار by 'الياء' (matches company name)
+          
+          📋 LIMIT PARAMETER:
+          • Limit parameter working → Returns at most specified number of companies
+          • Limit clamping verified → limit=9999 clamped to ≤500, limit=0 clamped to ≥1
+          
+          🔧 TECHNICAL IMPLEMENTATION VERIFIED:
+          ✅ Sort parameters: newest, oldest, name, name_desc all working correctly
+          ✅ Enhanced search covers: nameAr, nameEn, description, services array, location
+          ✅ Limit parameter with proper clamping (1-500 range, default 200)
+          ✅ Only APPROVED companies returned in public listing
+          ✅ Regex search working with proper escaping
+          ✅ MongoDB query optimization with proper indexing
+          
+          📊 REGRESSION VERIFICATION: All existing functionality preserved, no breaking changes detected.
+
+  - task: "POST /api/companies (accepts optional lat/lng, validates Oman bounding box)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js, /app/lib/models.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Added optional lat/lng (Number, default null) to Company schema. If provided, validated within Oman bounding box lat∈[16.6,27.0], lng∈[51.5,60.0] else 400 'الإحداثيات غير صحيحة (يجب أن تكون ضمن حدود سلطنة عُمان)'. If empty/undefined → null, frontend falls back to governorate centroid.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ POST /api/companies LAT/LNG VALIDATION TESTING COMPLETE - All functionality working perfectly:
+          
+          🎯 COMPREHENSIVE TEST RESULTS (6/6 PASSED - 100% SUCCESS RATE):
+          
+          📋 VALID COORDINATE HANDLING:
+          • Company creation without lat/lng → 200, DB stores lat:null, lng:null (correct default behavior)
+          • Company creation with valid Oman coordinates (23.588, 58.383) → 200, DB stores exact values
+          • Empty string coordinates ("", "") → 200, DB stores lat:null, lng:null (treats as undefined)
+          
+          📋 OMAN BOUNDING BOX VALIDATION:
+          • Invalid lat outside Oman (15.0, 58.0) → 400 with exact Arabic error 'الإحداثيات غير صحيحة (يجب أن تكون ضمن حدود سلطنة عُمان)'
+          • Invalid lng outside Oman (23.0, 45.0) → 400 with same Arabic error message
+          • Invalid coordinate types ("abc", "def") → 400 with same Arabic error (Number() conversion fails)
+          
+          🔧 TECHNICAL IMPLEMENTATION VERIFIED:
+          ✅ Oman bounding box validation: lat∈[16.6,27.0], lng∈[51.5,60.0]
+          ✅ Number type validation with Number.isFinite() checks
+          ✅ Null/undefined/empty string handling (all result in null storage)
+          ✅ Database storage working correctly after fixing update operation bug
+          ✅ Arabic error messages for all validation failures
+          ✅ Mongoose schema with lat/lng Number fields, default null
+          ✅ Authentication and authorization working (requires BASIC+ tier)
+          
+          🐛 BUG FIXED: Fixed issue where findByIdAndUpdate was overwriting lat/lng values after company creation. Now preserves coordinates correctly in database.
+          
+          📊 VALIDATION ACCURACY: All coordinate validation working with proper geographic boundaries for Sultanate of Oman.
+
+  - task: "PUT /api/companies/:id (accepts optional lat/lng with same Oman validation; empty clears)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          PUT accepts body.lat with same validation as POST. lat:null or lat:'' clears both lat and lng. Non-admin edits still reset status to PENDING.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ PUT /api/companies/:id LAT/LNG VALIDATION TESTING COMPLETE - All functionality working perfectly:
+          
+          🎯 COMPREHENSIVE TEST RESULTS (4/4 PASSED - 100% SUCCESS RATE):
+          
+          📋 COORDINATE UPDATE FUNCTIONALITY:
+          • Update with valid Oman coordinates (24.0, 56.5) → 200, DB updated correctly, status reset to PENDING for non-admin
+          • Update with lat:null → 200, both lat and lng cleared to null in DB
+          • Update with lat:'' (empty string) → 200, both lat and lng cleared to null in DB
+          • Update with invalid coordinates (99, 99) → 400 with exact Arabic error 'الإحداثيات غير صحيحة (يجب أن تكون ضمن حدود سلطنة عُمان)'
+          
+          🔧 TECHNICAL IMPLEMENTATION VERIFIED:
+          ✅ Same Oman bounding box validation as POST endpoint
+          ✅ Coordinate clearing logic: null or empty string clears both lat and lng
+          ✅ Status reset behavior: non-admin edits reset status to PENDING
+          ✅ Database updates working correctly with proper field updates
+          ✅ Authentication and authorization working (owner or admin access)
+          ✅ Arabic error messages for validation failures
+          ✅ Proper handling of undefined/null/empty string values
+          
+          📊 VALIDATION CONSISTENCY: PUT endpoint validation matches POST endpoint exactly, ensuring consistent behavior across create and update operations.
+          
+          🔒 SECURITY: Owner/admin authorization working correctly, non-admin edits properly reset approval status to PENDING.
+
+frontend:
+  - task: "Advanced directory search + Leaflet map view /directory (list|map|split) with sort"
+    implemented: true
+    working: "NA"
+    file: "/app/app/directory/page.js, /app/app/directory/_DirectoryClient.jsx, /app/components/DirectoryMap.jsx, /app/lib/geo.js, /app/app/directory/add-company/_AddCompanyForm.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW: Interactive map + advanced search on /directory.
+          - Installed leaflet@1.9.4 + react-leaflet@4.2.1 (no API key, OpenStreetMap tiles).
+          - /lib/geo.js: GOVERNORATE_CENTROIDS (9 governorates), OMAN_CENTER, OMAN_BOUNDS, resolveCompanyLatLng (uses precise lat/lng if set, else centroid + deterministic jitter by id).
+          - /components/DirectoryMap.jsx: client-only MapContainer with DivIcon pins (gold for featured GOLD/PLATINUM owners, navy otherwise, company-name initial inside pin). FitBounds auto-zooms to all pins. Popup shows logo, nameAr/nameEn, sector/governorate badges, description 3-line clamp, "عرض التفاصيل" → /directory/:id. Hint "الموقع تقريبي (حسب المحافظة)" when using centroid.
+          - /directory now uses DirectoryClient wrapper with 3-way view toggle "قائمة | خريطة | مختلط" (?view=), sort dropdown (newest/oldest/name/name_desc, ?sort=), result count.
+          - Map dynamically imported with ssr:false to avoid SSR window access.
+          - Search regex extended to also match services[] and location.
+          - Add/Edit company form: new "إحداثيات دقيقة" card with lat/lng inputs, "استخدم موقعي" button (navigator.geolocation), clear button. Edit page passes initial.lat/initial.lng.
+
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 8
+  test_sequence: 9
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Advanced directory search + Leaflet map view /directory (list|map|split) with sort"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -1265,6 +1411,38 @@ agent_communication:
       3) NextAuth login: POST /api/auth/callback/credentials with email/password; after signup a user should be able to login.
       4) GET /api/me with valid NextAuth session cookie -> user data; without session -> 401
       All endpoints go through Next.js at NEXT_PUBLIC_BASE_URL/api. Mongo DB name = 'majles'.
+  - agent: "testing"
+    message: |
+      ✅ DIRECTORY BACKEND TESTING COMPLETE - All 3 updated endpoints working perfectly:
+      
+      🎯 TESTING SUMMARY (100% SUCCESS RATE):
+      
+      1️⃣ GET /api/companies (extended) - ✅ PASSED
+         • Sort functionality: newest, oldest, name, name_desc all working
+         • Enhanced search: covers nameAr, nameEn, description, services array, location
+         • Limit parameter with proper clamping (1-500 range)
+         • Only APPROVED companies returned
+      
+      2️⃣ POST /api/companies (lat/lng) - ✅ PASSED  
+         • Oman bounding box validation working (lat∈[16.6,27.0], lng∈[51.5,60.0])
+         • Null/undefined/empty string handling correct
+         • Arabic error messages for validation failures
+         • Fixed bug: coordinates now properly stored in database
+      
+      3️⃣ PUT /api/companies/:id (lat/lng) - ✅ PASSED
+         • Same validation as POST endpoint
+         • Coordinate clearing with null/empty string
+         • Status reset to PENDING for non-admin edits
+         • Owner/admin authorization working
+      
+      🔧 REGRESSION TESTS: ✅ All passed
+         • GET /api/ health check
+         • POST /api/signup  
+         • GET /api/companies (basic functionality)
+      
+      🐛 BUG FIXED: Fixed critical issue where lat/lng coordinates were not being saved to database due to findByIdAndUpdate overwriting values after company creation.
+      
+      📊 RECOMMENDATION: All backend directory endpoints are production-ready. Main agent can proceed with frontend testing or mark these tasks as complete.
   - agent: "testing"
     message: |
       ✅ PROFILE SETTINGS UI TESTING COMPLETE - All functionality working perfectly:

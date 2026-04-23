@@ -1,8 +1,8 @@
 import Link from 'next/link'
 import { connectDB } from '@/lib/db'
 import { Company, User } from '@/lib/models'
-import CompanyCard from '@/components/CompanyCard'
 import DirectoryFilters from './_DirectoryFilters'
+import DirectoryClient from './_DirectoryClient'
 import { Search, Building2, Plus } from 'lucide-react'
 import {
   SECTOR_KEYS,
@@ -13,11 +13,19 @@ import {
 
 export const dynamic = 'force-dynamic'
 
+const SORT_MAP = {
+  newest: { createdAt: -1 },
+  oldest: { createdAt: 1 },
+  name: { nameAr: 1 },
+  name_desc: { nameAr: -1 },
+}
+
 export default async function DirectoryPage({ searchParams }) {
   const params = searchParams || {}
   const search = (params.search || '').toString().trim()
   const sector = SECTOR_KEYS.includes(params.sector) ? params.sector : ''
   const gov = GOVERNORATE_KEYS.includes(params.gov) ? params.gov : ''
+  const sortKey = SORT_MAP[params.sort] ? params.sort : 'newest'
 
   await connectDB()
 
@@ -33,12 +41,14 @@ export default async function DirectoryPage({ searchParams }) {
       { nameAr: rx },
       { nameEn: rx },
       { description: rx },
+      { services: rx },
+      { location: rx },
     ]
   }
 
   const companies = await Company.find(query)
-    .sort({ createdAt: -1 })
-    .limit(200)
+    .sort(SORT_MAP[sortKey])
+    .limit(500)
     .lean()
 
   // Fetch owners' tiers to mark "featured" (GOLD+) cards
@@ -51,12 +61,21 @@ export default async function DirectoryPage({ searchParams }) {
   )
   const isFeatured = (tier) => tier === 'GOLD' || tier === 'PLATINUM'
 
-  // Sort: featured first
-  const ordered = [...companies].sort((a, b) => {
-    const af = isFeatured(tierByUser[a.userId]) ? 1 : 0
-    const bf = isFeatured(tierByUser[b.userId]) ? 1 : 0
-    return bf - af
-  })
+  // Sort featured first only if user chose default (newest)
+  const ordered = sortKey === 'newest'
+    ? [...companies].sort((a, b) => {
+        const af = isFeatured(tierByUser[a.userId]) ? 1 : 0
+        const bf = isFeatured(tierByUser[b.userId]) ? 1 : 0
+        return bf - af
+      })
+    : companies
+
+  const mapped = ordered.map((c) => ({ ...c, id: c._id }))
+  const featuredIds = mapped
+    .filter((c) => isFeatured(tierByUser[c.userId]))
+    .map((c) => c.id)
+
+  const hasFilter = !!(sector || gov || search)
 
   return (
     <div className="bg-[#F8F9FA] py-10">
@@ -72,8 +91,8 @@ export default async function DirectoryPage({ searchParams }) {
               شركات رواد الأعمال العمانيين
             </h1>
             <p className="mt-1 text-sm text-gray-600">
-              {ordered.length} شركة معتمدة
-              {(sector || gov || search) && ' بعد التصفية'}
+              {mapped.length} شركة معتمدة
+              {hasFilter && ' بعد التصفية'}
             </p>
           </div>
           <Link
@@ -94,7 +113,7 @@ export default async function DirectoryPage({ searchParams }) {
           {/* Results */}
           <section>
             {/* Active filter chips */}
-            {(sector || gov || search) && (
+            {hasFilter && (
               <div className="mb-4 flex flex-wrap items-center gap-2">
                 {search && (
                   <span className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-1 text-xs font-medium text-gray-700 shadow-sm ring-1 ring-gray-200">
@@ -121,27 +140,11 @@ export default async function DirectoryPage({ searchParams }) {
               </div>
             )}
 
-            {ordered.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-gray-300 bg-white p-12 text-center">
-                <Building2 className="mx-auto h-10 w-10 text-gray-400" />
-                <h3 className="mt-3 text-lg font-bold text-gray-700">
-                  لا توجد شركات مطابقة
-                </h3>
-                <p className="mt-1 text-sm text-gray-500">
-                  جرِّب تعديل البحث أو مسح التصفية
-                </p>
-              </div>
-            ) : (
-              <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
-                {ordered.map((c) => (
-                  <CompanyCard
-                    key={c._id}
-                    company={{ ...c, id: c._id }}
-                    featured={isFeatured(tierByUser[c.userId])}
-                  />
-                ))}
-              </div>
-            )}
+            <DirectoryClient
+              companies={mapped}
+              featuredIds={featuredIds}
+              filtered={hasFilter}
+            />
           </section>
         </div>
       </div>

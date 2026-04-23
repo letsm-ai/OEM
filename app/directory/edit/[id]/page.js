@@ -50,6 +50,8 @@ export default async function EditCompanyPage({ params }) {
           email: company.email,
           website: company.website,
           location: company.location,
+          lat: company.lat,
+          lng: company.lng,
           logo: company.logo,
         }}
         companyId={company._id}

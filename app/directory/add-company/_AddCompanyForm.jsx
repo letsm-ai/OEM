@@ -20,11 +20,41 @@ export default function AddCompanyForm({ initial = null, companyId = null }) {
     email: initial?.email || '',
     website: initial?.website || '',
     location: initial?.location || '',
+    lat: typeof initial?.lat === 'number' ? String(initial.lat) : '',
+    lng: typeof initial?.lng === 'number' ? String(initial.lng) : '',
     logo: initial?.logo || '',
   })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(false)
+  const [locating, setLocating] = useState(false)
+
+  const useMyLocation = () => {
+    if (!navigator.geolocation) {
+      setError('المتصفح لا يدعم تحديد الموقع')
+      return
+    }
+    setLocating(true)
+    setError('')
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setForm((f) => ({
+          ...f,
+          lat: pos.coords.latitude.toFixed(6),
+          lng: pos.coords.longitude.toFixed(6),
+        }))
+        setLocating(false)
+      },
+      (err) => {
+        setError(err.message || 'تعذر تحديد الموقع')
+        setLocating(false)
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    )
+  }
+
+  const clearLatLng = () =>
+    setForm((f) => ({ ...f, lat: '', lng: '' }))
 
   const onFile = (e) => {
     const file = e.target.files?.[0]
@@ -62,6 +92,8 @@ export default function AddCompanyForm({ initial = null, companyId = null }) {
         .split(/[،,\n]/)
         .map((s) => s.trim())
         .filter(Boolean),
+      lat: form.lat === '' ? null : Number(form.lat),
+      lng: form.lng === '' ? null : Number(form.lng),
     }
 
     const url = companyId ? `/api/companies/${companyId}` : '/api/companies'
@@ -256,6 +288,68 @@ export default function AddCompanyForm({ initial = null, companyId = null }) {
             placeholder="مثال: الحي التجاري، الغبرة"
           />
         </Field>
+      </div>
+
+      {/* Location coordinates */}
+      <div className="rounded-xl border border-dashed border-gray-300 bg-[#F8F9FA] p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-sm font-bold text-[#1B3A6B]">
+              إحداثيات دقيقة (اختياري)
+            </div>
+            <p className="mt-0.5 text-xs text-gray-500">
+              لتظهر شركتك في مكانها الدقيق على خريطة الدليل. اتركها فارغة
+              لاستخدام مركز المحافظة كموقع تقريبي.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={useMyLocation}
+              disabled={locating}
+              className="inline-flex items-center gap-1 rounded-lg border border-[#1B3A6B] bg-white px-3 py-1.5 text-xs font-semibold text-[#1B3A6B] hover:bg-[#1B3A6B]/5 disabled:opacity-60"
+            >
+              {locating ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <span>📍</span>
+              )}
+              استخدم موقعي
+            </button>
+            {(form.lat || form.lng) && (
+              <button
+                type="button"
+                onClick={clearLatLng}
+                className="inline-flex items-center gap-1 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+              >
+                <X className="h-3 w-3" />
+                مسح
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="خط العرض (Latitude)" hint="مثال: 23.588">
+            <input
+              dir="ltr"
+              value={form.lat}
+              onChange={(e) => setForm({ ...form, lat: e.target.value })}
+              className="input text-right"
+              placeholder="23.588"
+              inputMode="decimal"
+            />
+          </Field>
+          <Field label="خط الطول (Longitude)" hint="مثال: 58.383">
+            <input
+              dir="ltr"
+              value={form.lng}
+              onChange={(e) => setForm({ ...form, lng: e.target.value })}
+              className="input text-right"
+              placeholder="58.383"
+              inputMode="decimal"
+            />
+          </Field>
+        </div>
       </div>
 
       <div className="flex justify-end gap-3 pt-2">

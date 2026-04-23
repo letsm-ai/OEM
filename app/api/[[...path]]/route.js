@@ -572,6 +572,11 @@ async function handleRoute(request, { params }) {
       const q = (url.searchParams.get('search') || '').trim()
       const sector = url.searchParams.get('sector') || ''
       const gov = url.searchParams.get('governorate') || ''
+      const sortParam = (url.searchParams.get('sort') || 'newest').toLowerCase()
+      const limit = Math.min(
+        Math.max(parseInt(url.searchParams.get('limit') || '200', 10) || 200, 1),
+        500
+      )
 
       await connectDB()
       const query = { status: 'APPROVED' }
@@ -579,12 +584,22 @@ async function handleRoute(request, { params }) {
       if (gov) query.governorate = gov
       if (q) {
         const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
-        query.$or = [{ nameAr: rx }, { nameEn: rx }, { description: rx }]
+        query.$or = [
+          { nameAr: rx },
+          { nameEn: rx },
+          { description: rx },
+          { services: rx },
+          { location: rx },
+        ]
       }
-      const list = await Company.find(query)
-        .sort({ createdAt: -1 })
-        .limit(200)
-        .lean()
+      const sortMap = {
+        newest: { createdAt: -1 },
+        oldest: { createdAt: 1 },
+        name: { nameAr: 1 },
+        name_desc: { nameAr: -1 },
+      }
+      const sort = sortMap[sortParam] || sortMap.newest
+      const list = await Company.find(query).sort(sort).limit(limit).lean()
       return handleCORS(
         NextResponse.json({
           companies: list.map(({ _id, ...rest }) => ({ id: _id, ...rest })),
@@ -633,6 +648,27 @@ async function handleRoute(request, { params }) {
         )
       }
 
+      // Optional lat/lng (Oman bounding box)
+      let latVal = null
+      let lngVal = null
+      if (body.lat !== undefined && body.lat !== null && body.lat !== '') {
+        latVal = Number(body.lat)
+        lngVal = Number(body.lng)
+        if (
+          !Number.isFinite(latVal) ||
+          !Number.isFinite(lngVal) ||
+          latVal < 16.6 || latVal > 27.0 ||
+          lngVal < 51.5 || lngVal > 60.0
+        ) {
+          return handleCORS(
+            NextResponse.json(
+              { error: 'الإحداثيات غير صحيحة (يجب أن تكون ضمن حدود سلطنة عُمان)' },
+              { status: 400 }
+            )
+          )
+        }
+      }
+
       const company = await Company.create({
         userId: session.user.id,
         nameAr: String(nameAr).trim(),
@@ -647,6 +683,8 @@ async function handleRoute(request, { params }) {
         email: body.email || '',
         website: body.website || '',
         location: body.location || '',
+        lat: latVal,
+        lng: lngVal,
         logo: body.logo || '',
         status: 'PENDING',
         isApproved: false,
@@ -655,7 +693,9 @@ async function handleRoute(request, { params }) {
       // Ensure status is set using update operation (workaround for schema issue)
       await Company.findByIdAndUpdate(company._id, { 
         status: 'PENDING', 
-        isApproved: false 
+        isApproved: false,
+        lat: latVal,
+        lng: lngVal
       })
 
       const companyObj = company.toObject()
@@ -748,6 +788,32 @@ async function handleRoute(request, { params }) {
         return handleCORS(
           NextResponse.json({ error: 'المحافظة غير صحيحة' }, { status: 400 })
         )
+      }
+
+      // Optional lat/lng update (null/'' clears; otherwise validate Oman bbox)
+      if (body.lat !== undefined) {
+        if (body.lat === null || body.lat === '') {
+          company.lat = null
+          company.lng = null
+        } else {
+          const latVal = Number(body.lat)
+          const lngVal = Number(body.lng)
+          if (
+            !Number.isFinite(latVal) ||
+            !Number.isFinite(lngVal) ||
+            latVal < 16.6 || latVal > 27.0 ||
+            lngVal < 51.5 || lngVal > 60.0
+          ) {
+            return handleCORS(
+              NextResponse.json(
+                { error: 'الإحداثيات غير صحيحة (يجب أن تكون ضمن حدود سلطنة عُمان)' },
+                { status: 400 }
+              )
+            )
+          }
+          company.lat = latVal
+          company.lng = lngVal
+        }
       }
 
       // Any user edit resets approval (admin edits keep current status)
