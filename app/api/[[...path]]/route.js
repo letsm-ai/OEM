@@ -690,6 +690,9 @@ async function handleRoute(request, { params }) {
     const apptCancelMatch = route.match(
       /^\/appointments\/([A-Za-z0-9-]+)\/cancel$/
     )
+    const apptReviewMatch = route.match(
+      /^\/appointments\/([A-Za-z0-9-]+)\/review$/
+    )
     const adminExpApproveMatch = route.match(
       /^\/admin\/experts\/([A-Za-z0-9-]+)\/approve$/
     )
@@ -855,6 +858,38 @@ async function handleRoute(request, { params }) {
         )
       }
       return handleCORS(NextResponse.json({ success: true, count: items.length }))
+    }
+
+    // ---- GET /experts/:id/reviews (public reviews for an expert) ----
+    if (
+      /^\/experts\/([A-Za-z0-9-]+)\/reviews$/.test(route) &&
+      method === 'GET'
+    ) {
+      const id = route.match(/^\/experts\/([A-Za-z0-9-]+)\/reviews$/)[1]
+      await connectDB()
+      const list = await Appointment.find({
+        expertId: id,
+        rating: { $gte: 1 },
+      })
+        .sort({ reviewedAt: -1 })
+        .limit(50)
+        .lean()
+      const clientIds = Array.from(new Set(list.map((a) => a.clientId)))
+      const clients = await User.find({ _id: { $in: clientIds } })
+        .select({ _id: 1, name: 1 })
+        .lean()
+      const clientMap = Object.fromEntries(clients.map((c) => [c._id, c]))
+      return handleCORS(
+        NextResponse.json({
+          reviews: list.map((a) => ({
+            id: a._id,
+            rating: a.rating,
+            comment: a.reviewComment,
+            reviewedAt: a.reviewedAt,
+            clientName: clientMap[a.clientId]?.name || 'عميل',
+          })),
+        })
+      )
     }
 
     // ---- GET /experts/:id/availability ----
@@ -1181,7 +1216,97 @@ async function handleRoute(request, { params }) {
       return handleCORS(NextResponse.json({ success: true }))
     }
 
-    /* ---- ADMIN EXPERTS ---- */
+    // ---- POST /appointments/:id/review (client rates expert after session) ----
+    if (apptReviewMatch && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      const id = apptReviewMatch[1]
+      const body = await request.json().catch(() => ({}))
+      const rating = Number(body?.rating)
+      const comment = (body?.comment || '').toString().slice(0, 1000)
+      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+        return handleCORS(
+          NextResponse.json({ error: 'التقييم يجب أن يكون بين 1 و 5 نجوم' }, { status: 400 })
+        )
+      }
+
+      await connectDB()
+      const appt = await Appointment.findById(id)
+      if (!appt) {
+        return handleCORS(
+          NextResponse.json({ error: 'الحجز غير موجود' }, { status: 404 })
+        )
+      }
+      if (appt.clientId !== session.user.id) {
+        return handleCORS(
+          NextResponse.json({ error: 'لا يمكنك تقييم جلسة ليست لك' }, { status: 403 })
+        )
+      }
+      // Must be a past appointment (end datetime passed)
+      const apptEnd = new Date(appt.date)
+      const [eh, em] = (appt.endTime || '00:00').split(':').map(Number)
+      apptEnd.setUTCHours(eh, em, 0, 0)
+      if (apptEnd > new Date()) {
+        return handleCORS(
+          NextResponse.json({ error: 'لا يمكن التقييم قبل انتهاء الجلسة' }, { status: 400 })
+        )
+      }
+      if (appt.status === 'CANCELLED') {
+        return handleCORS(
+          NextResponse.json({ error: 'لا يمكن تقييم جلسة ملغاة' }, { status: 400 })
+        )
+      }
+      if (appt.reviewedAt) {
+        return handleCORS(
+          NextResponse.json({ error: 'لقد قمت بتقييم هذه الجلسة مسبقاً' }, { status: 409 })
+        )
+      }
+
+      appt.rating = rating
+      appt.reviewComment = comment
+      appt.reviewedAt = new Date()
+      if (appt.status === 'CONFIRMED') appt.status = 'COMPLETED'
+      await appt.save()
+
+      // Recompute expert aggregate rating & session count
+      const agg = await Appointment.aggregate([
+        {
+          $match: {
+            expertId: appt.expertId,
+            rating: { $gte: 1 },
+          },
+        },
+        {
+          $group: {
+            _id: '$expertId',
+            avg: { $avg: '$rating' },
+            count: { $sum: 1 },
+          },
+        },
+      ])
+      const row = agg[0]
+      const completedCount = await Appointment.countDocuments({
+        expertId: appt.expertId,
+        status: 'COMPLETED',
+      })
+      await Expert.updateOne(
+        { _id: appt.expertId },
+        {
+          $set: {
+            rating: row ? Number(row.avg.toFixed(2)) : 0,
+            totalSessions: completedCount,
+          },
+        }
+      )
+
+      return handleCORS(
+        NextResponse.json({ success: true, appointment: { id: appt._id, rating, comment, status: appt.status } })
+      )
+    }
     if (route === '/admin/experts' && method === 'GET') {
       const session = await getServerSession(authOptions)
       if (!session?.user || session.user.role !== 'ADMIN') {

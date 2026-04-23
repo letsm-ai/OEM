@@ -3,11 +3,11 @@ import Link from 'next/link'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { connectDB } from '@/lib/db'
-import { Expert, User } from '@/lib/models'
+import { Expert, User, Appointment } from '@/lib/models'
 import { specialtyLabel } from '@/lib/experts'
 import { TIER_DISCOUNT } from '@/lib/membership'
 import BookingWidget from './_BookingWidget'
-import { Star, Clock, Award, ArrowRight, Percent } from 'lucide-react'
+import { Star, Clock, Award, ArrowRight, Percent, MessageSquare } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
@@ -30,6 +30,20 @@ export default async function ExpertProfilePage({ params }) {
   const finalPrice = +(expert.hourlyRate * (1 - discount / 100)).toFixed(3)
 
   const stars = Math.round(expert.rating || 0)
+
+  // Fetch recent reviews
+  const reviews = await Appointment.find({
+    expertId: expert._id,
+    rating: { $gte: 1 },
+  })
+    .sort({ reviewedAt: -1 })
+    .limit(5)
+    .lean()
+  const reviewerIds = Array.from(new Set(reviews.map((r) => r.clientId)))
+  const reviewers = await User.find({ _id: { $in: reviewerIds } })
+    .select({ _id: 1, name: 1 })
+    .lean()
+  const reviewerMap = Object.fromEntries(reviewers.map((r) => [r._id, r]))
 
   return (
     <div className="bg-[#F8F9FA] py-10">
@@ -92,15 +106,75 @@ export default async function ExpertProfilePage({ params }) {
         </div>
 
         <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_360px]">
-          <div className="rounded-2xl border border-gray-200 bg-white p-6">
-            <h2 className="mb-3 text-lg font-bold text-[#1B3A6B]">نبذة عن الخبير</h2>
-            {expert.bio ? (
-              <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
-                {expert.bio}
-              </p>
-            ) : (
-              <p className="text-sm text-gray-400">لم يُضف وصف بعد</p>
-            )}
+          <div className="space-y-6">
+            <div className="rounded-2xl border border-gray-200 bg-white p-6">
+              <h2 className="mb-3 text-lg font-bold text-[#1B3A6B]">نبذة عن الخبير</h2>
+              {expert.bio ? (
+                <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
+                  {expert.bio}
+                </p>
+              ) : (
+                <p className="text-sm text-gray-400">لم يُضف وصف بعد</p>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-gray-200 bg-white p-6">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="inline-flex items-center gap-2 text-lg font-bold text-[#1B3A6B]">
+                  <MessageSquare className="h-5 w-5" />
+                  آراء العملاء
+                </h2>
+                {reviews.length > 0 && (
+                  <span className="text-xs text-gray-500">
+                    {reviews.length} من أحدث التقييمات
+                  </span>
+                )}
+              </div>
+              {reviews.length === 0 ? (
+                <p className="text-sm text-gray-400">لا توجد تقييمات بعد</p>
+              ) : (
+                <div className="space-y-4">
+                  {reviews.map((r) => (
+                    <div
+                      key={r._id}
+                      className="rounded-xl border border-gray-100 bg-gray-50/60 p-4"
+                    >
+                      <div className="mb-1 flex items-center justify-between">
+                        <div className="font-semibold text-sm text-[#1B3A6B]">
+                          {reviewerMap[r.clientId]?.name || 'عميل'}
+                        </div>
+                        <div className="flex items-center gap-0.5">
+                          {Array.from({ length: 5 }).map((_, i) => (
+                            <Star
+                              key={i}
+                              className={`h-3.5 w-3.5 ${
+                                i < (r.rating || 0)
+                                  ? 'fill-[#C9A84C] text-[#C9A84C]'
+                                  : 'text-gray-300'
+                              }`}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                      {r.reviewComment && (
+                        <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
+                          {r.reviewComment}
+                        </p>
+                      )}
+                      {r.reviewedAt && (
+                        <div className="mt-2 text-[11px] text-gray-400">
+                          {new Intl.DateTimeFormat('ar', {
+                            day: 'numeric',
+                            month: 'long',
+                            year: 'numeric',
+                          }).format(new Date(r.reviewedAt))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           <aside className="rounded-2xl border border-gray-200 bg-white p-6">

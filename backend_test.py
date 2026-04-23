@@ -1,396 +1,495 @@
 #!/usr/bin/env python3
 """
-Backend Test Suite for مجلس رواد الأعمال العماني (Omani Entrepreneur Majles)
-Testing the NEW 24-hour reminder cron endpoint: POST /api/cron/send-reminders
+Backend testing for Expert Review System endpoints
+Tests POST /api/appointments/:id/review and GET /api/experts/:id/reviews
 """
 
-import os
-import sys
 import requests
-import json
-from datetime import datetime, timedelta
 import pymongo
-from pymongo import MongoClient
-import uuid
 import bcrypt
-from dotenv import load_dotenv
+import uuid
+from datetime import datetime, timedelta
+import json
+import os
+from urllib.parse import urljoin
 
-# Load environment variables
-load_dotenv('/app/.env')
+# Configuration from .env
+BASE_URL = "https://omani-startup-hub.preview.emergentagent.com"
+API_BASE = f"{BASE_URL}/api"
+MONGO_URL = "mongodb://localhost:27017"
+DB_NAME = "majles"
 
-# Configuration
-MONGO_URL = os.getenv('MONGO_URL', 'mongodb://localhost:27017')
-DB_NAME = os.getenv('DB_NAME', 'majles')
-BASE_URL = os.getenv('NEXT_PUBLIC_BASE_URL', 'http://localhost:3000')
-CRON_SECRET = os.getenv('CRON_SECRET')
+def get_db():
+    """Get MongoDB database connection"""
+    client = pymongo.MongoClient(MONGO_URL)
+    return client[DB_NAME]
 
-print(f"🔧 Configuration:")
-print(f"   MONGO_URL: {MONGO_URL}")
-print(f"   DB_NAME: {DB_NAME}")
-print(f"   BASE_URL: {BASE_URL}")
-print(f"   CRON_SECRET: {'✅ Set' if CRON_SECRET else '❌ Missing'}")
-print()
-
-# MongoDB connection
-try:
-    client = MongoClient(MONGO_URL)
-    db = client[DB_NAME]
-    print("✅ MongoDB connection established")
-except Exception as e:
-    print(f"❌ MongoDB connection failed: {e}")
-    sys.exit(1)
-
-def generate_uuid():
-    """Generate UUID string like the Node.js app"""
-    return str(uuid.uuid4())
-
-def hash_password(password):
-    """Hash password using bcrypt like the Node.js app"""
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-
-def create_test_user(email, name="Test User", role="MEMBER", membership_tier="FREE"):
-    """Create a test user in the database"""
-    user_id = generate_uuid()
-    user_doc = {
-        "_id": user_id,
-        "name": name,
-        "email": email.lower().strip(),
-        "password": hash_password("password123"),
-        "role": role,
-        "membershipTier": membership_tier,
-        "membershipExpiry": None,
-        "createdAt": datetime.utcnow()
+def create_test_user(email_suffix=""):
+    """Create a test user via API and return user data + session cookies"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    email = f"testclient_{timestamp}{email_suffix}@example.com"
+    password = "testpass123"
+    
+    # Create user via signup API
+    signup_data = {
+        "name": f"Test Client {timestamp}",
+        "email": email,
+        "password": password
     }
     
-    # Insert or update user
-    db.users.replace_one({"email": email.lower().strip()}, user_doc, upsert=True)
-    return user_id
+    response = requests.post(f"{API_BASE}/signup", json=signup_data)
+    if response.status_code != 200:
+        raise Exception(f"Signup failed: {response.status_code} {response.text}")
+    
+    user_data = response.json()["user"]
+    
+    # Login via NextAuth to get session cookies
+    # First get CSRF token
+    csrf_response = requests.get(f"{API_BASE}/auth/csrf")
+    if csrf_response.status_code != 200:
+        raise Exception(f"CSRF failed: {csrf_response.status_code}")
+    
+    csrf_token = csrf_response.json()["csrfToken"]
+    
+    # Login with credentials
+    login_data = {
+        "email": email,
+        "password": password,
+        "csrfToken": csrf_token,
+        "callbackUrl": f"{BASE_URL}/dashboard",
+        "json": "true"
+    }
+    
+    login_response = requests.post(
+        f"{API_BASE}/auth/callback/credentials",
+        data=login_data,
+        cookies=csrf_response.cookies,
+        allow_redirects=False
+    )
+    
+    if login_response.status_code not in [200, 302]:
+        raise Exception(f"Login failed: {login_response.status_code} {login_response.text}")
+    
+    # Combine cookies from both requests
+    session_cookies = {}
+    session_cookies.update(csrf_response.cookies.get_dict())
+    session_cookies.update(login_response.cookies.get_dict())
+    
+    return user_data, session_cookies
 
-def create_test_expert(user_id, specialty="BUSINESS", hourly_rate=25):
-    """Create a test expert in the database"""
-    expert_id = generate_uuid()
-    expert_doc = {
+def seed_expert_and_user():
+    """Seed an expert and its user directly in MongoDB"""
+    db = get_db()
+    
+    # Create expert user
+    expert_user_id = str(uuid.uuid4())
+    expert_user = {
+        "_id": expert_user_id,
+        "name": "Dr. Ahmed Al-Rashid",
+        "email": f"expert_{datetime.now().strftime('%Y%m%d_%H%M%S')}@example.com",
+        "password": bcrypt.hashpw("expertpass123".encode(), bcrypt.gensalt()).decode(),
+        "role": "EXPERT",
+        "membershipTier": "GOLD",
+        "membershipExpiry": datetime.now() + timedelta(days=365),
+        "createdAt": datetime.now()
+    }
+    
+    # Create expert profile
+    expert_id = str(uuid.uuid4())
+    expert = {
         "_id": expert_id,
-        "userId": user_id,
-        "specialtyAr": "استشارات تجارية",
-        "specialty": specialty,
-        "hourlyRate": hourly_rate,
-        "bio": "خبير في الاستشارات التجارية",
+        "userId": expert_user_id,
+        "specialty": "LEGAL",
+        "specialtyAr": "استشارات قانونية",
+        "bio": "خبير قانوني متخصص في قانون الشركات",
+        "experienceYears": 10,
+        "hourlyRate": 25,
+        "photo": "",
+        "cv": "",
         "status": "APPROVED",
         "isApproved": True,
-        "createdAt": datetime.utcnow()
+        "rating": 0,
+        "totalSessions": 0,
+        "createdAt": datetime.now(),
+        "updatedAt": datetime.now()
     }
     
-    db.experts.replace_one({"userId": user_id}, expert_doc, upsert=True)
-    return expert_id
+    # Insert into database
+    db.users.insert_one(expert_user)
+    db.experts.insert_one(expert)
+    
+    return expert_id, expert_user_id
 
-def create_test_appointment(client_id, expert_id, target_datetime, status="CONFIRMED", reminder_sent=False):
-    """Create a test appointment in the database"""
-    appointment_id = generate_uuid()
+def seed_appointment(client_id, expert_id, days_ago=1, status="CONFIRMED", rating=None):
+    """Seed an appointment directly in MongoDB"""
+    db = get_db()
     
-    # Split target_datetime into date (UTC midnight) and time
-    date_utc = target_datetime.replace(hour=0, minute=0, second=0, microsecond=0)
-    start_time = f"{target_datetime.hour:02d}:{target_datetime.minute:02d}"
-    end_datetime = target_datetime + timedelta(hours=1)
-    end_time = f"{end_datetime.hour:02d}:{end_datetime.minute:02d}"
+    appointment_id = str(uuid.uuid4())
+    appointment_date = datetime.now() - timedelta(days=days_ago)
+    appointment_date = appointment_date.replace(hour=0, minute=0, second=0, microsecond=0)
     
-    appointment_doc = {
+    appointment = {
         "_id": appointment_id,
         "clientId": client_id,
         "expertId": expert_id,
-        "date": date_utc,
-        "startTime": start_time,
-        "endTime": end_time,
+        "date": appointment_date,
+        "startTime": "09:00",
+        "endTime": "10:00",
         "status": status,
         "totalPaid": 25,
         "originalPrice": 25,
         "discountPercent": 0,
-        "notes": "Test appointment for cron reminder",
+        "notes": "",
         "cancelledAt": None,
         "cancelledBy": None,
-        "reminderSentAt": datetime.utcnow() if reminder_sent else None,
-        "createdAt": datetime.utcnow()
+        "reminderSentAt": None,
+        "rating": rating,
+        "reviewComment": "",
+        "reviewedAt": None,
+        "createdAt": datetime.now()
     }
     
-    result = db.appointments.insert_one(appointment_doc)
-    print(f"   📅 Created appointment {appointment_id} for {target_datetime} (status: {status})")
+    db.appointments.insert_one(appointment)
     return appointment_id
 
-def cleanup_test_data():
-    """Clean up test data"""
-    print("🧹 Cleaning up test data...")
+def test_review_endpoint():
+    """Test the POST /api/appointments/:id/review endpoint"""
+    print("🧪 Testing POST /api/appointments/:id/review endpoint...")
     
-    # Remove test users (emails containing 'crontest')
-    result = db.users.delete_many({"email": {"$regex": "crontest"}})
-    print(f"   Deleted {result.deleted_count} test users")
-    
-    # Remove test experts for deleted users
-    result = db.experts.delete_many({"userId": {"$in": []}})  # Will be empty after user deletion
-    
-    # Remove test appointments (notes containing 'Test appointment for cron')
-    result = db.appointments.delete_many({"notes": {"$regex": "Test appointment for cron"}})
-    print(f"   Deleted {result.deleted_count} test appointments")
-
-def test_cron_endpoint():
-    """Test the 24-hour reminder cron endpoint"""
-    print("🚀 Testing 24-hour reminder cron endpoint: POST /api/cron/send-reminders")
-    print("=" * 80)
-    
-    # Clean up any existing test data
-    cleanup_test_data()
-    
-    # Test 1: Auth checks
-    print("\n📋 TEST 1: Authentication Checks")
-    print("-" * 40)
-    
-    # 1a: No Authorization header
     try:
-        response = requests.post(f"{BASE_URL}/api/cron/send-reminders", 
-                               headers={"Content-Type": "application/json"})
-        if response.status_code == 401:
-            response_data = response.json()
-            if "غير مصرح" in response_data.get("error", ""):
-                print("✅ 1a: No auth header → 401 with Arabic error 'غير مصرح'")
-            else:
-                print(f"❌ 1a: Expected Arabic error 'غير مصرح', got: {response_data}")
-        else:
-            print(f"❌ 1a: Expected 401, got {response.status_code}: {response.text}")
-    except Exception as e:
-        print(f"❌ 1a: Request failed: {e}")
-    
-    # 1b: Wrong Authorization token
-    try:
-        response = requests.post(f"{BASE_URL}/api/cron/send-reminders",
-                               headers={
-                                   "Content-Type": "application/json",
-                                   "Authorization": "Bearer WRONG_TOKEN"
-                               })
-        if response.status_code == 401:
-            response_data = response.json()
-            if "غير مصرح" in response_data.get("error", ""):
-                print("✅ 1b: Wrong token → 401 with Arabic error 'غير مصرح'")
-            else:
-                print(f"❌ 1b: Expected Arabic error 'غير مصرح', got: {response_data}")
-        else:
-            print(f"❌ 1b: Expected 401, got {response.status_code}: {response.text}")
-    except Exception as e:
-        print(f"❌ 1b: Request failed: {e}")
-    
-    # 1c: Correct Authorization token
-    try:
-        response = requests.post(f"{BASE_URL}/api/cron/send-reminders",
-                               headers={
-                                   "Content-Type": "application/json",
-                                   "Authorization": f"Bearer {CRON_SECRET}"
-                               })
+        # Setup: Create client user and get session
+        print("📝 Creating test client user...")
+        client_user, client_cookies = create_test_user()
+        client_id = client_user["id"]
+        print(f"✅ Created client: {client_user['email']}")
+        
+        # Setup: Create expert
+        print("📝 Creating test expert...")
+        expert_id, expert_user_id = seed_expert_and_user()
+        print(f"✅ Created expert: {expert_id}")
+        
+        # Setup: Create past appointment
+        print("📝 Creating past appointment...")
+        appointment_id = seed_appointment(client_id, expert_id, days_ago=1, status="CONFIRMED")
+        print(f"✅ Created appointment: {appointment_id}")
+        
+        # Test A: Happy path - valid review
+        print("\n🔍 Test A: Happy path - valid review")
+        review_data = {
+            "rating": 5,
+            "comment": "ممتاز، خدمة رائعة"
+        }
+        
+        response = requests.post(
+            f"{API_BASE}/appointments/{appointment_id}/review",
+            json=review_data,
+            cookies=client_cookies
+        )
+        
         if response.status_code == 200:
-            response_data = response.json()
-            if (response_data.get("success") == True and 
-                "considered" in response_data and 
-                "sent" in response_data and 
-                "failed" in response_data):
-                print(f"✅ 1c: Correct token → 200 with JSON {response_data}")
-            else:
-                print(f"❌ 1c: Expected success response format, got: {response_data}")
-        else:
-            print(f"❌ 1c: Expected 200, got {response.status_code}: {response.text}")
-    except Exception as e:
-        print(f"❌ 1c: Request failed: {e}")
-    
-    # Test 2: Empty case (no appointments in window)
-    print("\n📋 TEST 2: Empty Case (No Appointments in 23h-25h Window)")
-    print("-" * 60)
-    
-    try:
-        response = requests.post(f"{BASE_URL}/api/cron/send-reminders",
-                               headers={
-                                   "Content-Type": "application/json",
-                                   "Authorization": f"Bearer {CRON_SECRET}"
-                               })
-        if response.status_code == 200:
-            response_data = response.json()
-            if (response_data.get("success") == True and 
-                response_data.get("considered") == 0 and
-                response_data.get("sent") == 0 and
-                response_data.get("failed") == 0):
-                print(f"✅ 2: Empty case → considered=0, sent=0, failed=0: {response_data}")
-            else:
-                print(f"❌ 2: Expected empty response, got: {response_data}")
-        else:
-            print(f"❌ 2: Expected 200, got {response.status_code}: {response.text}")
-    except Exception as e:
-        print(f"❌ 2: Request failed: {e}")
-    
-    # Test 3: Reminder fires (create appointment in 24h window)
-    print("\n📋 TEST 3: Reminder Fires (Appointment in 24h Window)")
-    print("-" * 55)
-    
-    # Create test users
-    client_email = f"client.crontest.{int(datetime.utcnow().timestamp())}@example.com"
-    expert_email = f"expert.crontest.{int(datetime.utcnow().timestamp())}@example.com"
-    
-    client_id = create_test_user(client_email, "Test Client", "MEMBER", "FREE")
-    expert_user_id = create_test_user(expert_email, "Test Expert", "EXPERT", "GOLD")
-    expert_id = create_test_expert(expert_user_id)
-    
-    print(f"   👤 Created test client: {client_id} ({client_email})")
-    print(f"   👨‍💼 Created test expert: {expert_id} ({expert_email})")
-    
-    # Create appointment in 24h window (now + 24h)
-    now = datetime.utcnow()
-    target_datetime = now + timedelta(hours=24)
-    appointment_id = create_test_appointment(client_id, expert_id, target_datetime)
-    
-    try:
-        response = requests.post(f"{BASE_URL}/api/cron/send-reminders",
-                               headers={
-                                   "Content-Type": "application/json",
-                                   "Authorization": f"Bearer {CRON_SECRET}"
-                               })
-        if response.status_code == 200:
-            response_data = response.json()
-            if (response_data.get("success") == True and 
-                response_data.get("considered") >= 1 and
-                response_data.get("sent") >= 1):
-                print(f"✅ 3a: Reminder sent → {response_data}")
+            result = response.json()
+            if result.get("success") and result.get("appointment", {}).get("rating") == 5:
+                print("✅ Happy path test passed")
                 
-                # Verify in DB that reminderSentAt is set
-                appointment = db.appointments.find_one({"_id": appointment_id})
-                if appointment and appointment.get("reminderSentAt"):
-                    print(f"✅ 3b: DB verification → reminderSentAt set: {appointment['reminderSentAt']}")
+                # Verify in database
+                db = get_db()
+                appt = db.appointments.find_one({"_id": appointment_id})
+                expert = db.experts.find_one({"_id": expert_id})
+                
+                if (appt and appt.get("rating") == 5 and 
+                    appt.get("reviewComment") == "ممتاز، خدمة رائعة" and
+                    appt.get("reviewedAt") and
+                    appt.get("status") == "COMPLETED" and
+                    expert and expert.get("rating") == 5.0 and
+                    expert.get("totalSessions") >= 1):
+                    print("✅ Database verification passed")
                 else:
-                    print(f"❌ 3b: DB verification failed → reminderSentAt not set")
+                    print("❌ Database verification failed")
+                    print(f"Appointment: rating={appt.get('rating')}, status={appt.get('status')}, reviewedAt={appt.get('reviewedAt')}")
+                    print(f"Expert: rating={expert.get('rating')}, totalSessions={expert.get('totalSessions')}")
             else:
-                print(f"❌ 3a: Expected reminder to be sent, got: {response_data}")
+                print(f"❌ Happy path test failed: {result}")
         else:
-            print(f"❌ 3a: Expected 200, got {response.status_code}: {response.text}")
+            print(f"❌ Happy path test failed: {response.status_code} {response.text}")
+        
+        # Test B: Re-review same appointment (should fail with 409)
+        print("\n🔍 Test B: Re-review same appointment")
+        response = requests.post(
+            f"{API_BASE}/appointments/{appointment_id}/review",
+            json={"rating": 4, "comment": "تقييم ثاني"},
+            cookies=client_cookies
+        )
+        
+        if response.status_code == 409:
+            result = response.json()
+            if "لقد قمت بتقييم هذه الجلسة مسبقاً" in result.get("error", ""):
+                print("✅ Re-review prevention test passed")
+            else:
+                print(f"❌ Wrong error message: {result}")
+        else:
+            print(f"❌ Re-review test failed: {response.status_code} {response.text}")
+        
+        # Test C: Create second appointment and review to test rating average
+        print("\n🔍 Test C: Second review for rating average")
+        appointment_id_2 = seed_appointment(client_id, expert_id, days_ago=2, status="CONFIRMED")
+        
+        response = requests.post(
+            f"{API_BASE}/appointments/{appointment_id_2}/review",
+            json={"rating": 3, "comment": "جيد"},
+            cookies=client_cookies
+        )
+        
+        if response.status_code == 200:
+            # Check expert rating average (should be (5+3)/2 = 4.0)
+            db = get_db()
+            expert = db.experts.find_one({"_id": expert_id})
+            expected_rating = 4.0  # (5+3)/2
+            
+            if expert and abs(expert.get("rating", 0) - expected_rating) < 0.01:
+                print(f"✅ Rating average test passed: {expert.get('rating')}")
+            else:
+                print(f"❌ Rating average test failed: expected {expected_rating}, got {expert.get('rating', 0)}")
+        else:
+            print(f"❌ Second review failed: {response.status_code} {response.text}")
+        
+        # Test D: Validation errors
+        print("\n🔍 Test D: Validation errors")
+        
+        # Create new appointment for validation tests
+        appointment_id_3 = seed_appointment(client_id, expert_id, days_ago=3, status="CONFIRMED")
+        
+        validation_tests = [
+            ({"rating": 0}, "التقييم يجب أن يكون بين 1 و 5 نجوم"),
+            ({"rating": 6}, "التقييم يجب أن يكون بين 1 و 5 نجوم"),
+            ({"rating": 3.5}, "التقييم يجب أن يكون بين 1 و 5 نجوم"),
+            ({"rating": "abc"}, "التقييم يجب أن يكون بين 1 و 5 نجوم"),
+        ]
+        
+        for test_data, expected_error in validation_tests:
+            response = requests.post(
+                f"{API_BASE}/appointments/{appointment_id_3}/review",
+                json=test_data,
+                cookies=client_cookies
+            )
+            
+            if response.status_code == 400:
+                result = response.json()
+                if expected_error in result.get("error", ""):
+                    print(f"✅ Validation test passed for {test_data}")
+                else:
+                    print(f"❌ Wrong error message for {test_data}: {result}")
+            else:
+                print(f"❌ Validation test failed for {test_data}: {response.status_code}")
+        
+        # Test E: Unauthorized access
+        print("\n🔍 Test E: Unauthorized access")
+        response = requests.post(
+            f"{API_BASE}/appointments/{appointment_id_3}/review",
+            json={"rating": 5}
+        )
+        
+        if response.status_code == 401:
+            result = response.json()
+            if "غير مصرح" in result.get("error", ""):
+                print("✅ Unauthorized test passed")
+            else:
+                print(f"❌ Wrong error message: {result}")
+        else:
+            print(f"❌ Unauthorized test failed: {response.status_code}")
+        
+        # Test F: Wrong user (create second client)
+        print("\n🔍 Test F: Wrong user access")
+        client_user_2, client_cookies_2 = create_test_user("_2")
+        
+        response = requests.post(
+            f"{API_BASE}/appointments/{appointment_id_3}/review",
+            json={"rating": 5},
+            cookies=client_cookies_2
+        )
+        
+        if response.status_code == 403:
+            result = response.json()
+            if "لا يمكنك تقييم جلسة ليست لك" in result.get("error", ""):
+                print("✅ Wrong user test passed")
+            else:
+                print(f"❌ Wrong error message: {result}")
+        else:
+            print(f"❌ Wrong user test failed: {response.status_code}")
+        
+        # Test G: Future appointment
+        print("\n🔍 Test G: Future appointment")
+        future_appointment_id = seed_appointment(client_id, expert_id, days_ago=-1, status="CONFIRMED")  # Tomorrow
+        
+        response = requests.post(
+            f"{API_BASE}/appointments/{future_appointment_id}/review",
+            json={"rating": 5},
+            cookies=client_cookies
+        )
+        
+        if response.status_code == 400:
+            result = response.json()
+            if "لا يمكن التقييم قبل انتهاء الجلسة" in result.get("error", ""):
+                print("✅ Future appointment test passed")
+            else:
+                print(f"❌ Wrong error message: {result}")
+        else:
+            print(f"❌ Future appointment test failed: {response.status_code}")
+        
+        # Test H: Cancelled appointment
+        print("\n🔍 Test H: Cancelled appointment")
+        cancelled_appointment_id = seed_appointment(client_id, expert_id, days_ago=4, status="CANCELLED")
+        
+        response = requests.post(
+            f"{API_BASE}/appointments/{cancelled_appointment_id}/review",
+            json={"rating": 5},
+            cookies=client_cookies
+        )
+        
+        if response.status_code == 400:
+            result = response.json()
+            if "لا يمكن تقييم جلسة ملغاة" in result.get("error", ""):
+                print("✅ Cancelled appointment test passed")
+            else:
+                print(f"❌ Wrong error message: {result}")
+        else:
+            print(f"❌ Cancelled appointment test failed: {response.status_code}")
+        
+        # Test I: Not found appointment
+        print("\n🔍 Test I: Not found appointment")
+        random_uuid = str(uuid.uuid4())
+        
+        response = requests.post(
+            f"{API_BASE}/appointments/{random_uuid}/review",
+            json={"rating": 5},
+            cookies=client_cookies
+        )
+        
+        if response.status_code == 404:
+            result = response.json()
+            if "الحجز غير موجود" in result.get("error", ""):
+                print("✅ Not found test passed")
+            else:
+                print(f"❌ Wrong error message: {result}")
+        else:
+            print(f"❌ Not found test failed: {response.status_code}")
+        
+        return expert_id
+        
     except Exception as e:
-        print(f"❌ 3a: Request failed: {e}")
-    
-    # Test 4: Idempotency (same appointment not reminded twice)
-    print("\n📋 TEST 4: Idempotency (No Duplicate Reminders)")
-    print("-" * 45)
+        print(f"❌ Review endpoint test failed with exception: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+def test_reviews_list_endpoint(expert_id):
+    """Test the GET /api/experts/:id/reviews endpoint"""
+    print("\n🧪 Testing GET /api/experts/:id/reviews endpoint...")
     
     try:
-        response = requests.post(f"{BASE_URL}/api/cron/send-reminders",
-                               headers={
-                                   "Content-Type": "application/json",
-                                   "Authorization": f"Bearer {CRON_SECRET}"
-                               })
+        # Test J: Get reviews list (public endpoint)
+        print("\n🔍 Test J: Get reviews list")
+        response = requests.get(f"{API_BASE}/experts/{expert_id}/reviews")
+        
         if response.status_code == 200:
-            response_data = response.json()
-            # The same appointment should not be considered again since reminderSentAt is set
-            if (response_data.get("success") == True and 
-                response_data.get("considered") == 0 and
-                response_data.get("sent") == 0):
-                print(f"✅ 4: Idempotency → considered=0, sent=0 (already reminded): {response_data}")
+            result = response.json()
+            reviews = result.get("reviews", [])
+            
+            if len(reviews) >= 2:  # Should have at least 2 reviews from previous tests
+                # Check structure and sorting
+                first_review = reviews[0]
+                required_fields = ["id", "rating", "comment", "reviewedAt", "clientName"]
+                
+                if all(field in first_review for field in required_fields):
+                    # Check if sorted by reviewedAt desc
+                    if len(reviews) > 1:
+                        first_date = datetime.fromisoformat(first_review["reviewedAt"].replace('Z', '+00:00'))
+                        second_date = datetime.fromisoformat(reviews[1]["reviewedAt"].replace('Z', '+00:00'))
+                        
+                        if first_date >= second_date:
+                            print(f"✅ Reviews list test passed: {len(reviews)} reviews found, properly sorted")
+                            print(f"   First review: rating={first_review['rating']}, comment='{first_review['comment']}'")
+                        else:
+                            print("❌ Reviews not sorted by reviewedAt desc")
+                    else:
+                        print(f"✅ Reviews list test passed: {len(reviews)} review found")
+                else:
+                    print(f"❌ Missing required fields in review: {first_review}")
             else:
-                print(f"❌ 4: Expected no reminders for already reminded appointment, got: {response_data}")
+                print(f"❌ Expected at least 2 reviews, got {len(reviews)}")
         else:
-            print(f"❌ 4: Expected 200, got {response.status_code}: {response.text}")
+            print(f"❌ Reviews list test failed: {response.status_code} {response.text}")
+        
     except Exception as e:
-        print(f"❌ 4: Request failed: {e}")
-    
-    # Test 5: Out of window appointments
-    print("\n📋 TEST 5: Out of Window Appointments (Too Soon/Too Far)")
-    print("-" * 55)
-    
-    # Create appointment too soon (10 hours from now)
-    too_soon_datetime = now + timedelta(hours=10)
-    too_soon_id = create_test_appointment(client_id, expert_id, too_soon_datetime)
-    
-    # Create appointment too far (40 hours from now)
-    too_far_datetime = now + timedelta(hours=40)
-    too_far_id = create_test_appointment(client_id, expert_id, too_far_datetime)
+        print(f"❌ Reviews list endpoint test failed with exception: {e}")
+        import traceback
+        traceback.print_exc()
+
+def test_regression():
+    """Test regression endpoints to ensure they still work"""
+    print("\n🧪 Testing regression endpoints...")
     
     try:
-        response = requests.post(f"{BASE_URL}/api/cron/send-reminders",
-                               headers={
-                                   "Content-Type": "application/json",
-                                   "Authorization": f"Bearer {CRON_SECRET}"
-                               })
+        # Test K: GET /api/
+        print("\n🔍 Test K: GET /api/")
+        response = requests.get(f"{API_BASE}/")
+        
         if response.status_code == 200:
-            response_data = response.json()
-            # Should not consider appointments outside 23h-25h window
-            if (response_data.get("success") == True and 
-                response_data.get("considered") == 0 and
-                response_data.get("sent") == 0):
-                print(f"✅ 5: Out of window → considered=0, sent=0: {response_data}")
+            result = response.json()
+            if result.get("message") == "Majles API is running":
+                print("✅ API health check passed")
             else:
-                print(f"❌ 5: Expected no reminders for out-of-window appointments, got: {response_data}")
+                print(f"❌ Wrong message: {result}")
         else:
-            print(f"❌ 5: Expected 200, got {response.status_code}: {response.text}")
-    except Exception as e:
-        print(f"❌ 5: Request failed: {e}")
-    
-    # Test 6: Cancelled appointments
-    print("\n📋 TEST 6: Cancelled Appointments (Status != CONFIRMED)")
-    print("-" * 50)
-    
-    # Create cancelled appointment in 24h window
-    cancelled_datetime = now + timedelta(hours=24, minutes=30)
-    cancelled_id = create_test_appointment(client_id, expert_id, cancelled_datetime, status="CANCELLED")
-    
-    try:
-        response = requests.post(f"{BASE_URL}/api/cron/send-reminders",
-                               headers={
-                                   "Content-Type": "application/json",
-                                   "Authorization": f"Bearer {CRON_SECRET}"
-                               })
+            print(f"❌ API health check failed: {response.status_code}")
+        
+        # Test L: POST /api/signup
+        print("\n🔍 Test L: POST /api/signup")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        signup_data = {
+            "name": f"Regression Test {timestamp}",
+            "email": f"regression_{timestamp}@example.com",
+            "password": "testpass123"
+        }
+        
+        response = requests.post(f"{API_BASE}/signup", json=signup_data)
+        
         if response.status_code == 200:
-            response_data = response.json()
-            # Should not consider cancelled appointments
-            if (response_data.get("success") == True and 
-                response_data.get("considered") == 0 and
-                response_data.get("sent") == 0):
-                print(f"✅ 6: Cancelled appointment → considered=0, sent=0: {response_data}")
+            result = response.json()
+            if result.get("success") and result.get("user"):
+                print("✅ Signup regression test passed")
             else:
-                print(f"❌ 6: Expected no reminders for cancelled appointments, got: {response_data}")
+                print(f"❌ Signup response invalid: {result}")
         else:
-            print(f"❌ 6: Expected 200, got {response.status_code}: {response.text}")
+            print(f"❌ Signup regression test failed: {response.status_code}")
+        
     except Exception as e:
-        print(f"❌ 6: Request failed: {e}")
-    
-    # Test 7: Regression tests
-    print("\n📋 TEST 7: Regression Tests (Other Endpoints Still Work)")
-    print("-" * 55)
-    
-    # 7a: GET /api/ should return 200
-    try:
-        response = requests.get(f"{BASE_URL}/api/")
-        if response.status_code == 200:
-            response_data = response.json()
-            if "Majles API is running" in response_data.get("message", ""):
-                print("✅ 7a: GET /api/ → 200 with correct message")
-            else:
-                print(f"❌ 7a: Expected 'Majles API is running', got: {response_data}")
-        else:
-            print(f"❌ 7a: Expected 200, got {response.status_code}: {response.text}")
-    except Exception as e:
-        print(f"❌ 7a: Request failed: {e}")
-    
-    # 7b: POST /api/forgot-password with unknown email should return 200
-    try:
-        response = requests.post(f"{BASE_URL}/api/forgot-password",
-                               headers={"Content-Type": "application/json"},
-                               json={"email": "unknown.crontest@example.com"})
-        if response.status_code == 200:
-            response_data = response.json()
-            if "إذا كان" in response_data.get("message", ""):
-                print("✅ 7b: POST /api/forgot-password unknown email → 200 with anti-enumeration message")
-            else:
-                print(f"❌ 7b: Expected anti-enumeration message, got: {response_data}")
-        else:
-            print(f"❌ 7b: Expected 200, got {response.status_code}: {response.text}")
-    except Exception as e:
-        print(f"❌ 7b: Request failed: {e}")
-    
-    # Clean up test data
-    cleanup_test_data()
-    
-    print("\n" + "=" * 80)
-    print("🎉 24-hour reminder cron endpoint testing completed!")
+        print(f"❌ Regression test failed with exception: {e}")
+
+def main():
+    """Main test function"""
+    print("🚀 Starting Expert Review System Backend Tests")
+    print(f"📍 Base URL: {API_BASE}")
+    print(f"🗄️  Database: {MONGO_URL}/{DB_NAME}")
     print("=" * 80)
+    
+    try:
+        # Test the review endpoint
+        expert_id = test_review_endpoint()
+        
+        if expert_id:
+            # Test the reviews list endpoint
+            test_reviews_list_endpoint(expert_id)
+        
+        # Test regression endpoints
+        test_regression()
+        
+        print("\n" + "=" * 80)
+        print("🎉 Expert Review System Backend Tests Completed!")
+        
+    except Exception as e:
+        print(f"\n❌ Test suite failed with exception: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
-    test_cron_endpoint()
+    main()

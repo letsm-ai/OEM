@@ -42,6 +42,7 @@ export default async function MyBookingsPage() {
     id: a._id,
     expert: expertMap[a.expertId] || null,
     date: a.date ? new Date(a.date).toISOString() : null,
+    reviewedAt: a.reviewedAt ? new Date(a.reviewedAt).toISOString() : null,
   }))
 
   return (
