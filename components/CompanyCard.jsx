@@ -1,103 +1,123 @@
 import Link from 'next/link'
-import { MapPin, ChevronLeft, Building2 } from 'lucide-react'
+import { MapPin, ChevronLeft, Building2, Star } from 'lucide-react'
 import {
   sectorLabel,
   governorateLabel,
   STATUS_LABELS,
   STATUS_BADGE,
 } from '@/lib/directory'
-import { TIER_META } from '@/lib/membership'
 
 /**
- * Reusable company card.
- * Props: company (plain object), showStatus (for owner/admin views)
+ * Compact company card: horizontal layout, logo on one side and content on
+ * the other. Designed to pack more cards per viewport while remaining
+ * scannable. Used both in the public directory grid and in the owner/admin
+ * views (toggle via `showStatus`).
  */
-export default function CompanyCard({ company, showStatus = false, featured = false }) {
+export default function CompanyCard({
+  company,
+  showStatus = false,
+  featured = false,
+}) {
   const sector = sectorLabel(company.sector)
   const gov = governorateLabel(company.governorate)
 
   return (
     <Link
       href={`/directory/${company.id || company._id}`}
-      className={`group relative flex h-full flex-col overflow-hidden rounded-2xl border bg-white transition-all hover:-translate-y-1 hover:shadow-lg ${
+      className={`group relative flex overflow-hidden rounded-xl border bg-white transition-all hover:-translate-y-0.5 hover:shadow-md ${
         featured
-          ? 'border-[#C9A84C] shadow-[0_4px_20px_rgba(201,168,76,0.15)] ring-1 ring-[#C9A84C]/30'
-          : 'border-gray-200 shadow-sm hover:border-gray-300'
+          ? 'border-[#C9A84C]/60 ring-1 ring-[#C9A84C]/30'
+          : 'border-gray-200 hover:border-gray-300'
       }`}
     >
+      {/* Gold strip for featured */}
       {featured && (
-        <div className="absolute top-3 left-3 z-10 rounded-full bg-[#C9A84C] px-3 py-1 text-xs font-bold text-[#1B3A6B]">
-          ★ عضو ذهبي
-        </div>
+        <span
+          className="absolute inset-y-0 right-0 w-1 bg-gradient-to-b from-[#C9A84C] to-[#a78a38]"
+          aria-hidden
+        />
       )}
 
-      {/* Top band */}
+      {/* Logo / initial */}
       <div
-        className={`relative flex h-28 items-center justify-center bg-gradient-to-bl ${
-          featured ? 'from-[#1B3A6B] to-[#152c52]' : 'from-[#F8F9FA] to-white'
+        className={`flex h-full w-20 flex-shrink-0 items-center justify-center ${
+          featured ? 'bg-[#1B3A6B]/5' : 'bg-[#F8F9FA]'
         }`}
       >
         {company.logo ? (
           <img
             src={company.logo}
             alt={company.nameAr}
-            className="h-20 w-20 rounded-xl border-4 border-white bg-white object-cover shadow-md"
+            className="h-14 w-14 rounded-lg border border-gray-200 object-cover"
           />
         ) : (
           <div
-            className={`flex h-20 w-20 items-center justify-center rounded-xl border-4 border-white bg-white text-2xl font-bold shadow-md ${
-              featured ? 'text-[#C9A84C]' : 'text-[#1B3A6B]'
+            className={`flex h-14 w-14 items-center justify-center rounded-lg text-xl font-extrabold ${
+              featured
+                ? 'bg-[#C9A84C]/15 text-[#8a6f2d]'
+                : 'bg-[#1B3A6B]/10 text-[#1B3A6B]'
             }`}
           >
-            {company.nameAr?.charAt(0) || <Building2 className="h-8 w-8" />}
+            {company.nameAr?.charAt(0) || <Building2 className="h-6 w-6" />}
           </div>
         )}
       </div>
 
-      <div className="flex flex-1 flex-col p-4">
-        {/* Status badge (owner view) */}
-        {showStatus && company.status && (
-          <div className="mb-2">
-            <span
-              className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                STATUS_BADGE[company.status]
-              }`}
+      {/* Content */}
+      <div className="flex min-w-0 flex-1 flex-col justify-between p-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <h3 className="truncate text-sm font-bold text-[#1B3A6B] group-hover:text-[#152c52]">
+              {company.nameAr}
+            </h3>
+            {featured && (
+              <span
+                title="عضو ذهبي"
+                className="inline-flex h-4 items-center rounded-full bg-[#C9A84C] px-1.5 text-[9px] font-bold text-[#1B3A6B]"
+              >
+                <Star className="ml-0.5 h-2.5 w-2.5 fill-[#1B3A6B]" />
+                ذهبي
+              </span>
+            )}
+            {showStatus && company.status && (
+              <span
+                className={`ms-auto inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                  STATUS_BADGE[company.status]
+                }`}
+              >
+                {STATUS_LABELS[company.status]}
+              </span>
+            )}
+          </div>
+          {company.nameEn && (
+            <div
+              dir="ltr"
+              className="truncate text-right text-[11px] text-gray-400"
             >
-              {STATUS_LABELS[company.status]}
-            </span>
-          </div>
-        )}
+              {company.nameEn}
+            </div>
+          )}
 
-        <h3 className="mb-1 line-clamp-1 text-lg font-bold text-[#1B3A6B] group-hover:text-[#152c52]">
-          {company.nameAr}
-        </h3>
-        {company.nameEn && (
-          <div dir="ltr" className="mb-2 line-clamp-1 text-right text-xs text-gray-500">
-            {company.nameEn}
-          </div>
-        )}
-
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <span className="inline-flex rounded-full bg-[#1B3A6B]/5 px-2.5 py-0.5 text-xs font-semibold text-[#1B3A6B]">
-            {sector}
-          </span>
-          {gov && (
-            <span className="inline-flex items-center gap-0.5 text-xs text-gray-500">
-              <MapPin className="h-3 w-3" />
-              {gov}
-            </span>
+          {company.description && (
+            <p className="mt-1 line-clamp-1 text-[12px] leading-snug text-gray-600">
+              {company.description}
+            </p>
           )}
         </div>
 
-        {company.description && (
-          <p className="mb-4 line-clamp-2 flex-1 text-sm text-gray-600 leading-relaxed">
-            {company.description}
-          </p>
-        )}
-
-        <div className="mt-auto flex items-center justify-between pt-2 text-sm">
-          <span className="text-xs text-gray-400">عرض التفاصيل</span>
-          <ChevronLeft className="h-4 w-4 text-gray-400 transition group-hover:-translate-x-1 group-hover:text-[#C9A84C]" />
+        <div className="mt-2 flex items-center justify-between gap-2 text-[11px]">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <span className="inline-flex shrink-0 rounded-full bg-[#1B3A6B]/8 px-2 py-0.5 font-semibold text-[#1B3A6B]">
+              {sector}
+            </span>
+            {gov && (
+              <span className="inline-flex shrink-0 items-center gap-0.5 text-gray-500">
+                <MapPin className="h-3 w-3" />
+                {gov}
+              </span>
+            )}
+          </div>
+          <ChevronLeft className="h-4 w-4 flex-shrink-0 text-gray-300 transition group-hover:-translate-x-0.5 group-hover:text-[#C9A84C]" />
         </div>
       </div>
     </Link>
