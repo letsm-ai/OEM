@@ -736,6 +736,88 @@ frontend:
           
           📋 INTEGRATION: Reviews endpoint properly integrates with review submission endpoint - reviews submitted via POST /api/appointments/:id/review immediately appear in GET /api/experts/:id/reviews with correct sorting and structure.
 
+  - task: "Expert review UI (my-bookings + expert profile reviews section)"
+    implemented: true
+    working: true
+    file: "/app/app/consultations/my-bookings/_MyBookingsClient.jsx, /app/app/consultations/[id]/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ EXPERT REVIEW UI TESTING COMPLETE - All functionality working perfectly:
+          
+          🎯 COMPREHENSIVE UI TEST RESULTS (7/7 SCENARIOS PASSED - 100% SUCCESS RATE):
+          
+          📋 SCENARIO 1: My-bookings page ✅
+             • Page loads correctly with title "الاستشارات"
+             • Past appointment displayed with expert name "د. سالم التجريبي"
+             • Specialty "استشارات قانونية" shown correctly
+             • Status badge "مؤكد" (CONFIRMED) displayed with correct styling
+             • Price "25 ر.ع" shown correctly
+             • Gold review button "قيّم الجلسة" visible and functional
+             • Cancel button correctly NOT present for past appointments
+          
+          📋 SCENARIO 2: Review modal functionality ✅
+             • Modal opens with correct header "تقييم الجلسة مع د. سالم التجريبي"
+             • 5 star rating buttons rendered and functional
+             • Star hover and click interactions working
+             • Comment textarea accepts Arabic text input
+             • Submit button "إرسال التقييم" functional
+          
+          📋 SCENARIO 3: Review submission ✅
+             • Review submission successful (rating=4, comment="جلسة ممتازة ومفيدة جداً، شكراً!")
+             • Success screen appears with "تم إرسال تقييمك بنجاح"
+             • Modal auto-closes after success
+             • Database correctly updated: status=COMPLETED, rating=4, reviewedAt set
+          
+          📋 SCENARIO 4: Post-review state ✅
+             • Review button correctly removed after submission
+             • Status badge changes to "مكتمل" (COMPLETED) with blue styling
+             • Rating stars display correctly in appointment list
+          
+          📋 SCENARIO 5: Expert profile reviews display ✅
+             • Expert name "د. سالم التجريبي" displayed correctly
+             • Rating updated to 4.0 with proper star display
+             • Session count shows "1 جلسة مكتملة"
+             • Reviews section "آراء العملاء" visible and functional
+             • Review card shows client name "عميل تجريبي"
+             • Review comment displayed correctly
+             • Review date formatted in Arabic
+          
+          📋 SCENARIO 6: Expert aggregation ✅
+             • Expert rating calculated correctly (4.0)
+             • Total sessions incremented (1)
+             • Reviews sorted by reviewedAt desc
+          
+          📋 SCENARIO 7: Public access ✅
+             • Reviews section accessible to anonymous users
+             • Review content visible without authentication
+          
+          🔧 TECHNICAL IMPLEMENTATION VERIFIED:
+          ✅ Arabic RTL layout working perfectly throughout
+          ✅ Review modal with proper Arabic text and styling
+          ✅ Star rating component with hover and click interactions
+          ✅ Form validation and submission handling
+          ✅ Database integration: appointment and expert updates
+          ✅ Status transitions: CONFIRMED → COMPLETED
+          ✅ Review display with proper sorting and formatting
+          ✅ Public endpoint integration for reviews display
+          ✅ Responsive design and proper Arabic typography
+          ✅ Error handling and success feedback
+          ✅ Session-based authentication working
+          
+          📊 DATABASE VERIFICATION:
+          ✅ Appointment status changed from CONFIRMED to COMPLETED
+          ✅ Rating (4) and comment stored correctly
+          ✅ reviewedAt timestamp set
+          ✅ Expert rating updated to 4.0
+          ✅ Expert totalSessions incremented to 1
+          
+          🎉 CONCLUSION: The expert review UI is fully functional and production-ready. All user flows work correctly, from review submission to display on expert profiles. The system properly handles Arabic text, RTL layout, and integrates seamlessly with the backend APIs.
+
 metadata:
   created_by: "main_agent"
   version: "1.0"
@@ -744,8 +826,7 @@ metadata:
 
 test_plan:
   current_focus:
-    - "POST /api/appointments/:id/review (client rates expert after session)"
-    - "GET /api/experts/:id/reviews (public reviews list for an expert)"
+    - "Expert review UI (my-bookings + expert profile reviews section)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -1214,3 +1295,79 @@ agent_communication:
       📋 PYMONGO DIRECT DB TESTING: Used pymongo for realistic test data setup as requested in review specification, creating proper UUID format documents with bcrypt password hashing matching the Node.js application structure.
       
       🎉 CONCLUSION: Both expert review system endpoints are production-ready and fully functional. All authentication, validation, business logic, database operations, and Arabic localization working correctly. The review system integrates seamlessly with the existing appointment and expert management system.
+  - agent: "testing"
+    message: |
+      🎉 EXPERT REVIEW UI TESTING COMPLETE - All functionality working perfectly:
+      
+      🎯 COMPREHENSIVE UI TEST RESULTS (7/7 SCENARIOS PASSED - 100% SUCCESS RATE):
+      
+      📋 SCENARIO 1: My-bookings page ✅
+         • Page loads correctly with title "الاستشارات"
+         • Past appointment displayed with expert name "د. سالم التجريبي"
+         • Specialty "استشارات قانونية" shown correctly
+         • Status badge "مؤكد" (CONFIRMED) displayed with correct styling
+         • Price "25 ر.ع" shown correctly
+         • Gold review button "قيّم الجلسة" visible and functional
+         • Cancel button correctly NOT present for past appointments
+      
+      📋 SCENARIO 2: Review modal functionality ✅
+         • Modal opens with correct header "تقييم الجلسة مع د. سالم التجريبي"
+         • 5 star rating buttons rendered and functional
+         • Star hover and click interactions working
+         • Comment textarea accepts Arabic text input
+         • Submit button "إرسال التقييم" functional
+      
+      📋 SCENARIO 3: Review submission ✅
+         • Review submission successful (rating=4, comment="جلسة ممتازة ومفيدة جداً، شكراً!")
+         • Success screen appears with "تم إرسال تقييمك بنجاح"
+         • Modal auto-closes after success
+         • Database correctly updated: status=COMPLETED, rating=4, reviewedAt set
+      
+      📋 SCENARIO 4: Post-review state ✅
+         • Review button correctly removed after submission
+         • Status badge changes to "مكتمل" (COMPLETED) with blue styling
+         • Rating stars display correctly in appointment list
+      
+      📋 SCENARIO 5: Expert profile reviews display ✅
+         • Expert name "د. سالم التجريبي" displayed correctly
+         • Rating updated to 4.0 with proper star display
+         • Session count shows "1 جلسة مكتملة"
+         • Reviews section "آراء العملاء" visible and functional
+         • Review card shows client name "عميل تجريبي"
+         • Review comment displayed correctly
+         • Review date formatted in Arabic
+      
+      📋 SCENARIO 6: Expert aggregation ✅
+         • Expert rating calculated correctly (4.0)
+         • Total sessions incremented (1)
+         • Reviews sorted by reviewedAt desc
+      
+      📋 SCENARIO 7: Public access ✅
+         • Reviews section accessible to anonymous users
+         • Review content visible without authentication
+      
+      🔧 TECHNICAL IMPLEMENTATION VERIFIED:
+      ✅ Arabic RTL layout working perfectly throughout
+      ✅ Review modal with proper Arabic text and styling
+      ✅ Star rating component with hover and click interactions
+      ✅ Form validation and submission handling
+      ✅ Database integration: appointment and expert updates
+      ✅ Status transitions: CONFIRMED → COMPLETED
+      ✅ Review display with proper sorting and formatting
+      ✅ Public endpoint integration for reviews display
+      ✅ Responsive design and proper Arabic typography
+      ✅ Error handling and success feedback
+      ✅ Session-based authentication working
+      
+      📊 DATABASE VERIFICATION:
+      ✅ Appointment status changed from CONFIRMED to COMPLETED
+      ✅ Rating (4) and comment stored correctly
+      ✅ reviewedAt timestamp set
+      ✅ Expert rating updated to 4.0
+      ✅ Expert totalSessions incremented to 1
+      
+      🎉 CONCLUSION: The expert review UI is fully functional and production-ready. All user flows work correctly, from review submission to display on expert profiles. The system properly handles Arabic text, RTL layout, and integrates seamlessly with the backend APIs.
+      
+      📋 TEST DATA SETUP: Used pymongo to create realistic test data (client user, expert user, expert document, past appointment) with proper UUID format and bcrypt password hashing matching the application structure.
+      
+      🚀 NEXT STEPS: The expert review system is complete and ready for production. All scenarios from the review request have been successfully tested and verified.
