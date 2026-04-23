@@ -7,7 +7,7 @@ import { Menu, X, LogOut, User as UserIcon } from 'lucide-react'
 
 const navLinks = [
   { href: '/', label: 'الرئيسية' },
-  { href: '/shop', label: 'المتجر' },
+  { href: '/store', label: 'المتجر' },
   { href: '/consultations', label: 'الاستشارات' },
   { href: '/directory', label: 'دليل الشركات' },
   { href: '/membership', label: 'العضوية' },
@@ -80,6 +80,12 @@ export default function Navbar() {
                 className="inline-flex items-center gap-1 rounded-md bg-[#C9A84C]/20 px-3 py-2 text-sm font-semibold text-[#8a6f2d] hover:bg-[#C9A84C]/30"
               >
                 الخبراء
+              </Link>
+              <Link
+                href="/admin/vendor-applications"
+                className="inline-flex items-center gap-1 rounded-md bg-[#C9A84C]/20 px-3 py-2 text-sm font-semibold text-[#8a6f2d] hover:bg-[#C9A84C]/30"
+              >
+                البائعون
               </Link>
             </>
           )}

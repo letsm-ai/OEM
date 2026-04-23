@@ -4,7 +4,7 @@ import crypto from 'crypto'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { connectDB } from '@/lib/db'
-import { User, Membership, PasswordResetToken, Company, Expert, Availability, Appointment } from '@/lib/models'
+import { User, Membership, PasswordResetToken, Company, Expert, Availability, Appointment, VendorApplication, Product, Order } from '@/lib/models'
 import {
   TIER_META,
   TIERS,
@@ -16,6 +16,7 @@ import {
   TIER_DISCOUNT,
 } from '@/lib/membership'
 import { SECTOR_KEYS, GOVERNORATE_KEYS } from '@/lib/directory'
+import { CATEGORY_KEYS, COMMISSION_PERCENT, TIER_DISCOUNT_PERCENT } from '@/lib/store'
 import {
   SPECIALTY_KEYS,
   specialtyLabel,
@@ -1258,6 +1259,16 @@ async function handleRoute(request, { params }) {
       /^\/admin\/experts\/([A-Za-z0-9-]+)\/reject$/
     )
 
+    // Marketplace matchers
+    const productDetailMatch = route.match(/^\/products\/([A-Za-z0-9-]+)$/)
+    const orderDetailMatch = route.match(/^\/orders\/([A-Za-z0-9-]+)$/)
+    const orderStatusMatch = route.match(
+      /^\/vendor\/orders\/([A-Za-z0-9-]+)\/status$/
+    )
+    const adminVendorAppActionMatch = route.match(
+      /^\/admin\/vendor-applications\/([A-Za-z0-9-]+)\/(approve|reject)$/
+    )
+
     // ---- GET /experts (public, APPROVED only) ----
     if (route === '/experts' && method === 'GET') {
       const url = new URL(request.url)
@@ -2172,6 +2183,824 @@ async function handleRoute(request, { params }) {
         NextResponse.json({
           success: true,
           message: 'تم تحديث كلمة المرور بنجاح',
+        })
+      )
+    }
+
+    /* ============================================================
+       MARKETPLACE — VENDOR APPLICATIONS
+       ============================================================ */
+    // ---- GET /vendor/application (my application status, if any) ----
+    if (route === '/vendor/application' && method === 'GET') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const app = await VendorApplication.findOne({
+        userId: session.user.id,
+      }).lean()
+      const user = await User.findById(session.user.id).lean()
+      return handleCORS(
+        NextResponse.json({
+          application: app
+            ? { id: app._id, ...app, _id: undefined }
+            : null,
+          isVendor: user?.role === 'VENDOR' || user?.role === 'ADMIN',
+          tier: user?.membershipTier || 'FREE',
+        })
+      )
+    }
+
+    // ---- POST /vendor/apply (GOLD/PLATINUM only) ----
+    if (route === '/vendor/apply' && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const dbUser = await User.findById(session.user.id).lean()
+      if (!dbUser) {
+        return handleCORS(
+          NextResponse.json({ error: 'المستخدم غير موجود' }, { status: 404 })
+        )
+      }
+      if (dbUser.role === 'VENDOR' || dbUser.role === 'ADMIN') {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'أنت بائع بالفعل' },
+            { status: 400 }
+          )
+        )
+      }
+      if (!['GOLD', 'PLATINUM'].includes(dbUser.membershipTier)) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'تحتاج إلى عضوية ذهبية أو بلاتينية للتقديم كبائع' },
+            { status: 403 }
+          )
+        )
+      }
+      const body = await request.json().catch(() => ({}))
+      const businessName = String(body?.businessName || '').trim()
+      if (!businessName || businessName.length < 2) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'اسم المتجر/النشاط مطلوب' },
+            { status: 400 }
+          )
+        )
+      }
+      const existing = await VendorApplication.findOne({
+        userId: session.user.id,
+      })
+      if (existing && existing.status === 'PENDING') {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'لديك طلب قيد المراجعة بالفعل' },
+            { status: 409 }
+          )
+        )
+      }
+      const doc = {
+        userId: session.user.id,
+        businessName,
+        businessDescription: String(body?.businessDescription || '').slice(0, 2000),
+        phone: String(body?.phone || '').slice(0, 30),
+        status: 'PENDING',
+        adminNote: '',
+        reviewedBy: null,
+        reviewedAt: null,
+        updatedAt: new Date(),
+      }
+      let saved
+      if (existing) {
+        saved = await VendorApplication.findByIdAndUpdate(
+          existing._id,
+          { $set: doc },
+          { new: true }
+        ).lean()
+      } else {
+        saved = (
+          await VendorApplication.create({ ...doc, createdAt: new Date() })
+        ).toObject()
+      }
+      return handleCORS(
+        NextResponse.json({
+          success: true,
+          application: { id: saved._id, ...saved, _id: undefined },
+        })
+      )
+    }
+
+    // ---- GET /admin/vendor-applications?status= (admin) ----
+    if (route === '/admin/vendor-applications' && method === 'GET') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      if (session.user.role !== 'ADMIN') {
+        return handleCORS(
+          NextResponse.json({ error: 'صلاحيات مسؤول مطلوبة' }, { status: 403 })
+        )
+      }
+      await connectDB()
+      const url = new URL(request.url)
+      const statusFilter = (url.searchParams.get('status') || '').toUpperCase()
+      const q = {}
+      if (['PENDING', 'APPROVED', 'REJECTED'].includes(statusFilter)) {
+        q.status = statusFilter
+      }
+      const apps = await VendorApplication.find(q)
+        .sort({ createdAt: -1 })
+        .limit(500)
+        .lean()
+      const userIds = apps.map((a) => a.userId)
+      const users = await User.find({ _id: { $in: userIds } })
+        .select({ _id: 1, name: 1, email: 1, membershipTier: 1, role: 1 })
+        .lean()
+      const userMap = Object.fromEntries(users.map((u) => [u._id, u]))
+      return handleCORS(
+        NextResponse.json({
+          applications: apps.map((a) => ({
+            id: a._id,
+            ...a,
+            _id: undefined,
+            user: userMap[a.userId]
+              ? {
+                  id: userMap[a.userId]._id,
+                  name: userMap[a.userId].name,
+                  email: userMap[a.userId].email,
+                  membershipTier: userMap[a.userId].membershipTier,
+                  role: userMap[a.userId].role,
+                }
+              : null,
+          })),
+        })
+      )
+    }
+
+    // ---- POST /admin/vendor-applications/:id/(approve|reject) (admin) ----
+    if (adminVendorAppActionMatch && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      if (session.user.role !== 'ADMIN') {
+        return handleCORS(
+          NextResponse.json({ error: 'صلاحيات مسؤول مطلوبة' }, { status: 403 })
+        )
+      }
+      const id = adminVendorAppActionMatch[1]
+      const action = adminVendorAppActionMatch[2] // approve | reject
+      const body = await request.json().catch(() => ({}))
+      await connectDB()
+      const app = await VendorApplication.findById(id)
+      if (!app) {
+        return handleCORS(
+          NextResponse.json({ error: 'الطلب غير موجود' }, { status: 404 })
+        )
+      }
+      app.status = action === 'approve' ? 'APPROVED' : 'REJECTED'
+      app.adminNote = String(body?.note || '').slice(0, 500)
+      app.reviewedBy = session.user.id
+      app.reviewedAt = new Date()
+      app.updatedAt = new Date()
+      await app.save()
+      if (action === 'approve') {
+        await User.findByIdAndUpdate(app.userId, {
+          $set: { role: 'VENDOR', updatedAt: new Date() },
+        })
+      }
+      return handleCORS(
+        NextResponse.json({
+          success: true,
+          application: { id: app._id, ...app.toObject(), _id: undefined },
+        })
+      )
+    }
+
+    /* ============================================================
+       MARKETPLACE — PRODUCTS
+       ============================================================ */
+    // ---- GET /products (public list of active products) ----
+    if (route === '/products' && method === 'GET') {
+      const url = new URL(request.url)
+      const q = (url.searchParams.get('search') || '').trim()
+      const category = url.searchParams.get('category') || ''
+      const sort = (url.searchParams.get('sort') || 'newest').toLowerCase()
+      const limit = Math.min(
+        Math.max(parseInt(url.searchParams.get('limit') || '100', 10) || 100, 1),
+        500
+      )
+      await connectDB()
+      const query = { isActive: true }
+      if (category && CATEGORY_KEYS.includes(category)) {
+        query.category = category
+      }
+      if (q) {
+        const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+        query.$or = [{ nameAr: rx }, { nameEn: rx }, { description: rx }]
+      }
+      const sortMap = {
+        newest: { createdAt: -1 },
+        oldest: { createdAt: 1 },
+        price_asc: { price: 1 },
+        price_desc: { price: -1 },
+        popular: { salesCount: -1 },
+      }
+      const sortObj = sortMap[sort] || sortMap.newest
+      const products = await Product.find(query)
+        .sort(sortObj)
+        .limit(limit)
+        .lean()
+      const vendorIds = Array.from(new Set(products.map((p) => p.vendorId)))
+      const vendors = await User.find({
+        _id: { $in: vendorIds },
+        role: { $in: ['VENDOR', 'ADMIN'] },
+      })
+        .select({ _id: 1, name: 1 })
+        .lean()
+      const vendorMap = Object.fromEntries(vendors.map((v) => [v._id, v.name]))
+      return handleCORS(
+        NextResponse.json({
+          products: products
+            .filter((p) => vendorMap[p.vendorId]) // hide orphaned products
+            .map((p) => ({
+              id: p._id,
+              ...p,
+              _id: undefined,
+              vendorName: vendorMap[p.vendorId] || 'تاجر',
+            })),
+        })
+      )
+    }
+
+    // ---- GET /products/:id (public detail) ----
+    if (productDetailMatch && method === 'GET') {
+      await connectDB()
+      const id = productDetailMatch[1]
+      const p = await Product.findById(id).lean()
+      if (!p) {
+        return handleCORS(
+          NextResponse.json({ error: 'المنتج غير موجود' }, { status: 404 })
+        )
+      }
+      const vendor = await User.findById(p.vendorId)
+        .select({ _id: 1, name: 1, email: 1, role: 1 })
+        .lean()
+      return handleCORS(
+        NextResponse.json({
+          product: {
+            id: p._id,
+            ...p,
+            _id: undefined,
+            vendor: vendor
+              ? { id: vendor._id, name: vendor.name, role: vendor.role }
+              : null,
+          },
+        })
+      )
+    }
+
+    // ---- POST /products (vendor only) ----
+    if (route === '/products' && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const dbUser = await User.findById(session.user.id).lean()
+      if (!dbUser) {
+        return handleCORS(
+          NextResponse.json({ error: 'المستخدم غير موجود' }, { status: 404 })
+        )
+      }
+      if (dbUser.role !== 'VENDOR' && dbUser.role !== 'ADMIN') {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'صلاحيات بائع مطلوبة' },
+            { status: 403 }
+          )
+        )
+      }
+      const body = await request.json().catch(() => ({}))
+      const nameAr = String(body?.nameAr || '').trim()
+      const price = Number(body?.price)
+      const category = String(body?.category || '').trim()
+      if (!nameAr || nameAr.length < 2) {
+        return handleCORS(
+          NextResponse.json({ error: 'اسم المنتج مطلوب' }, { status: 400 })
+        )
+      }
+      if (!Number.isFinite(price) || price < 0) {
+        return handleCORS(
+          NextResponse.json({ error: 'السعر غير صحيح' }, { status: 400 })
+        )
+      }
+      if (!CATEGORY_KEYS.includes(category)) {
+        return handleCORS(
+          NextResponse.json({ error: 'الفئة غير صحيحة' }, { status: 400 })
+        )
+      }
+      const images = Array.isArray(body?.images)
+        ? body.images
+            .filter(
+              (s) =>
+                typeof s === 'string' &&
+                /^data:image\/(png|jpe?g|webp|gif);base64,/.test(s) &&
+                s.length <= 2_000_000
+            )
+            .slice(0, 5)
+        : []
+      const stock = Math.max(0, parseInt(body?.stock || 0, 10) || 0)
+      const product = await Product.create({
+        vendorId: session.user.id,
+        nameAr,
+        nameEn: String(body?.nameEn || '').trim(),
+        description: String(body?.description || '').slice(0, 3000),
+        price: +price.toFixed(3),
+        category,
+        images,
+        stock,
+        isActive: true,
+        salesCount: 0,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      const po = product.toObject()
+      return handleCORS(
+        NextResponse.json({
+          success: true,
+          product: { id: product._id, ...po, _id: undefined },
+        })
+      )
+    }
+
+    // ---- PUT /products/:id (owner or admin) ----
+    if (productDetailMatch && method === 'PUT') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const id = productDetailMatch[1]
+      const product = await Product.findById(id)
+      if (!product) {
+        return handleCORS(
+          NextResponse.json({ error: 'المنتج غير موجود' }, { status: 404 })
+        )
+      }
+      const isOwner = product.vendorId === session.user.id
+      const isAdmin = session.user.role === 'ADMIN'
+      if (!isOwner && !isAdmin) {
+        return handleCORS(
+          NextResponse.json({ error: 'لا يمكنك تعديل هذا المنتج' }, { status: 403 })
+        )
+      }
+      const body = await request.json().catch(() => ({}))
+      if (body.nameAr !== undefined) {
+        const v = String(body.nameAr).trim()
+        if (v.length < 2) {
+          return handleCORS(
+            NextResponse.json({ error: 'اسم المنتج مطلوب' }, { status: 400 })
+          )
+        }
+        product.nameAr = v
+      }
+      if (body.nameEn !== undefined) product.nameEn = String(body.nameEn).trim()
+      if (body.description !== undefined)
+        product.description = String(body.description).slice(0, 3000)
+      if (body.price !== undefined) {
+        const p = Number(body.price)
+        if (!Number.isFinite(p) || p < 0) {
+          return handleCORS(
+            NextResponse.json({ error: 'السعر غير صحيح' }, { status: 400 })
+          )
+        }
+        product.price = +p.toFixed(3)
+      }
+      if (body.category !== undefined) {
+        if (!CATEGORY_KEYS.includes(body.category)) {
+          return handleCORS(
+            NextResponse.json({ error: 'الفئة غير صحيحة' }, { status: 400 })
+          )
+        }
+        product.category = body.category
+      }
+      if (body.stock !== undefined) {
+        product.stock = Math.max(0, parseInt(body.stock, 10) || 0)
+      }
+      if (body.isActive !== undefined) product.isActive = !!body.isActive
+      if (Array.isArray(body.images)) {
+        product.images = body.images
+          .filter(
+            (s) =>
+              typeof s === 'string' &&
+              /^data:image\/(png|jpe?g|webp|gif);base64,/.test(s) &&
+              s.length <= 2_000_000
+          )
+          .slice(0, 5)
+      }
+      product.updatedAt = new Date()
+      await product.save()
+      const po = product.toObject()
+      return handleCORS(
+        NextResponse.json({
+          success: true,
+          product: { id: product._id, ...po, _id: undefined },
+        })
+      )
+    }
+
+    // ---- DELETE /products/:id (owner or admin; hard delete if no orders, else soft) ----
+    if (productDetailMatch && method === 'DELETE') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const id = productDetailMatch[1]
+      const product = await Product.findById(id)
+      if (!product) {
+        return handleCORS(
+          NextResponse.json({ error: 'المنتج غير موجود' }, { status: 404 })
+        )
+      }
+      const isOwner = product.vendorId === session.user.id
+      const isAdmin = session.user.role === 'ADMIN'
+      if (!isOwner && !isAdmin) {
+        return handleCORS(
+          NextResponse.json({ error: 'لا يمكنك حذف هذا المنتج' }, { status: 403 })
+        )
+      }
+      // If the product was ever ordered, soft delete (deactivate)
+      const orderedBefore = await Order.exists({
+        'items.productId': product._id,
+      })
+      if (orderedBefore) {
+        product.isActive = false
+        product.updatedAt = new Date()
+        await product.save()
+        return handleCORS(
+          NextResponse.json({ success: true, softDelete: true })
+        )
+      }
+      await Product.deleteOne({ _id: product._id })
+      return handleCORS(NextResponse.json({ success: true }))
+    }
+
+    // ---- GET /vendor/products (my products) ----
+    if (route === '/vendor/products' && method === 'GET') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const user = await User.findById(session.user.id).lean()
+      if (user.role !== 'VENDOR' && user.role !== 'ADMIN') {
+        return handleCORS(
+          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
+        )
+      }
+      const products = await Product.find({ vendorId: session.user.id })
+        .sort({ createdAt: -1 })
+        .lean()
+      return handleCORS(
+        NextResponse.json({
+          products: products.map((p) => ({
+            id: p._id,
+            ...p,
+            _id: undefined,
+          })),
+        })
+      )
+    }
+
+    /* ============================================================
+       MARKETPLACE — ORDERS
+       ============================================================ */
+    // ---- POST /orders (create order from cart items) ----
+    if (route === '/orders' && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'يجب تسجيل الدخول لإتمام الطلب' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const body = await request.json().catch(() => ({}))
+      const cartItems = Array.isArray(body?.items) ? body.items : []
+      if (cartItems.length === 0) {
+        return handleCORS(
+          NextResponse.json({ error: 'السلة فارغة' }, { status: 400 })
+        )
+      }
+      const shipping = body?.shippingAddress || {}
+      if (!shipping?.name || !shipping?.phone || !shipping?.addressLine) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'عنوان الشحن (الاسم، الهاتف، العنوان) مطلوب' },
+            { status: 400 }
+          )
+        )
+      }
+
+      // Fetch authoritative product prices + stocks server-side
+      const ids = cartItems.map((it) => String(it.productId))
+      const products = await Product.find({
+        _id: { $in: ids },
+        isActive: true,
+      })
+      if (products.length !== ids.length) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'بعض المنتجات لم تعد متاحة' },
+            { status: 409 }
+          )
+        )
+      }
+      const byId = Object.fromEntries(products.map((p) => [p._id, p]))
+
+      const resolvedItems = []
+      for (const it of cartItems) {
+        const qty = Math.max(1, parseInt(it.quantity, 10) || 1)
+        const p = byId[String(it.productId)]
+        if (!p) {
+          return handleCORS(
+            NextResponse.json(
+              { error: 'منتج غير موجود' },
+              { status: 400 }
+            )
+          )
+        }
+        if (p.stock < qty) {
+          return handleCORS(
+            NextResponse.json(
+              { error: `الكمية المتاحة من "${p.nameAr}" غير كافية` },
+              { status: 409 }
+            )
+          )
+        }
+        resolvedItems.push({
+          productId: p._id,
+          vendorId: p.vendorId,
+          nameAr: p.nameAr,
+          image: (p.images && p.images[0]) || '',
+          unitPrice: p.price,
+          quantity: qty,
+          lineSubtotal: +(p.price * qty).toFixed(3),
+        })
+      }
+
+      const buyer = await User.findById(session.user.id).lean()
+      const tier = buyer?.membershipTier || 'FREE'
+      const discountPercent = TIER_DISCOUNT_PERCENT[tier] || 0
+      const subtotal = resolvedItems.reduce((s, it) => s + it.lineSubtotal, 0)
+      const discountAmount = +(subtotal * (discountPercent / 100)).toFixed(3)
+      const commissionAmount = +(subtotal * (COMMISSION_PERCENT / 100)).toFixed(3)
+      const totalPaid = +(subtotal - discountAmount).toFixed(3)
+
+      // Decrement stock + salesCount atomically per product
+      for (const it of resolvedItems) {
+        await Product.findByIdAndUpdate(it.productId, {
+          $inc: { stock: -it.quantity, salesCount: it.quantity },
+          $set: { updatedAt: new Date() },
+        })
+      }
+
+      const order = await Order.create({
+        buyerId: session.user.id,
+        items: resolvedItems,
+        subtotal: +subtotal.toFixed(3),
+        discountPercent,
+        discountAmount,
+        tierAtPurchase: tier,
+        commissionPercent: COMMISSION_PERCENT,
+        commissionAmount,
+        totalPaid,
+        shippingAddress: {
+          name: String(shipping.name || '').slice(0, 80),
+          phone: String(shipping.phone || '').slice(0, 30),
+          governorate: String(shipping.governorate || '').slice(0, 40),
+          city: String(shipping.city || '').slice(0, 60),
+          addressLine: String(shipping.addressLine || '').slice(0, 300),
+          notes: String(shipping.notes || '').slice(0, 300),
+        },
+        status: 'PAID', // MOCK payment: immediately mark as PAID
+        paymentProvider: 'MOCK',
+        paymentStatus: 'PAID',
+        paymentId: 'mock_' + Date.now(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+
+      return handleCORS(
+        NextResponse.json({
+          success: true,
+          order: { id: order._id, ...order.toObject(), _id: undefined },
+        })
+      )
+    }
+
+    // ---- GET /orders (my orders as buyer) ----
+    if (route === '/orders' && method === 'GET') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const orders = await Order.find({ buyerId: session.user.id })
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .lean()
+      return handleCORS(
+        NextResponse.json({
+          orders: orders.map((o) => ({ id: o._id, ...o, _id: undefined })),
+        })
+      )
+    }
+
+    // ---- GET /orders/:id (buyer or vendor of any item or admin) ----
+    if (orderDetailMatch && method === 'GET') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const order = await Order.findById(orderDetailMatch[1]).lean()
+      if (!order) {
+        return handleCORS(
+          NextResponse.json({ error: 'الطلب غير موجود' }, { status: 404 })
+        )
+      }
+      const uid = session.user.id
+      const isBuyer = order.buyerId === uid
+      const isVendor = (order.items || []).some((it) => it.vendorId === uid)
+      const isAdmin = session.user.role === 'ADMIN'
+      if (!isBuyer && !isVendor && !isAdmin) {
+        return handleCORS(
+          NextResponse.json({ error: 'لا يمكنك عرض هذا الطلب' }, { status: 403 })
+        )
+      }
+      // If vendor, only expose their own items for privacy
+      let items = order.items
+      if (isVendor && !isAdmin && !isBuyer) {
+        items = items.filter((it) => it.vendorId === uid)
+      }
+      return handleCORS(
+        NextResponse.json({
+          order: { id: order._id, ...order, _id: undefined, items },
+        })
+      )
+    }
+
+    // ---- GET /vendor/orders (orders containing items from this vendor) ----
+    if (route === '/vendor/orders' && method === 'GET') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const user = await User.findById(session.user.id).lean()
+      if (user.role !== 'VENDOR' && user.role !== 'ADMIN') {
+        return handleCORS(
+          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
+        )
+      }
+      const orders = await Order.find({
+        'items.vendorId': session.user.id,
+      })
+        .sort({ createdAt: -1 })
+        .limit(200)
+        .lean()
+      const buyerIds = Array.from(new Set(orders.map((o) => o.buyerId)))
+      const buyers = await User.find({ _id: { $in: buyerIds } })
+        .select({ _id: 1, name: 1, email: 1 })
+        .lean()
+      const buyerMap = Object.fromEntries(
+        buyers.map((b) => [b._id, { id: b._id, name: b.name, email: b.email }])
+      )
+      // For each order, only return vendor's own items
+      const enriched = orders.map((o) => {
+        const vItems = (o.items || []).filter(
+          (it) => it.vendorId === session.user.id
+        )
+        const vSubtotal = vItems.reduce((s, it) => s + it.lineSubtotal, 0)
+        const vCommission = +(vSubtotal * (COMMISSION_PERCENT / 100)).toFixed(3)
+        const vNet = +(vSubtotal - vCommission).toFixed(3)
+        return {
+          id: o._id,
+          createdAt: o.createdAt,
+          status: o.status,
+          paymentStatus: o.paymentStatus,
+          shippingAddress: o.shippingAddress,
+          buyer: buyerMap[o.buyerId] || null,
+          items: vItems,
+          vendorSubtotal: +vSubtotal.toFixed(3),
+          vendorCommission: vCommission,
+          vendorNet: vNet,
+        }
+      })
+      // Aggregate earnings
+      const totalSales = enriched.reduce(
+        (s, o) => s + (o.paymentStatus === 'PAID' ? o.vendorSubtotal : 0),
+        0
+      )
+      const totalCommission = enriched.reduce(
+        (s, o) => s + (o.paymentStatus === 'PAID' ? o.vendorCommission : 0),
+        0
+      )
+      const totalNet = enriched.reduce(
+        (s, o) => s + (o.paymentStatus === 'PAID' ? o.vendorNet : 0),
+        0
+      )
+      return handleCORS(
+        NextResponse.json({
+          orders: enriched,
+          earnings: {
+            totalSales: +totalSales.toFixed(3),
+            totalCommission: +totalCommission.toFixed(3),
+            totalNet: +totalNet.toFixed(3),
+            commissionPercent: COMMISSION_PERCENT,
+            orderCount: enriched.length,
+          },
+        })
+      )
+    }
+
+    // ---- PATCH /vendor/orders/:id/status (vendor updates their shipment status) ----
+    if (orderStatusMatch && method === 'PATCH') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const user = await User.findById(session.user.id).lean()
+      if (user.role !== 'VENDOR' && user.role !== 'ADMIN') {
+        return handleCORS(
+          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
+        )
+      }
+      const order = await Order.findById(orderStatusMatch[1])
+      if (!order) {
+        return handleCORS(
+          NextResponse.json({ error: 'الطلب غير موجود' }, { status: 404 })
+        )
+      }
+      const hasItems = (order.items || []).some(
+        (it) => it.vendorId === session.user.id
+      )
+      if (!hasItems && user.role !== 'ADMIN') {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'لا يمكنك تعديل حالة هذا الطلب' },
+            { status: 403 }
+          )
+        )
+      }
+      const body = await request.json().catch(() => ({}))
+      const newStatus = String(body?.status || '').toUpperCase()
+      const allowed = ['SHIPPED', 'DELIVERED']
+      if (!allowed.includes(newStatus)) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'الحالة غير صحيحة' },
+            { status: 400 }
+          )
+        )
+      }
+      order.status = newStatus
+      order.updatedAt = new Date()
+      await order.save()
+      return handleCORS(
+        NextResponse.json({
+          success: true,
+          order: { id: order._id, ...order.toObject(), _id: undefined },
         })
       )
     }
