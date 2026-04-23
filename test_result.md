@@ -1078,14 +1078,111 @@ frontend:
           
           🎉 CONCLUSION: The Profile Settings UI is fully functional and production-ready. All user flows work correctly, from profile updates to photo management. The system properly handles Arabic text, RTL layout, and integrates seamlessly with the backend APIs. Authentication, validation, and user feedback all working as expected.
 
+  - task: "GET /api/admin/analytics (KPI + monthly time series + top experts for admin dashboard)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW admin-only endpoint. Auth: 401 'غير مصرح' if no session; 403 'صلاحيات مسؤول مطلوبة' if role !== 'ADMIN'.
+          Returns aggregated metrics:
+          - users: {total, last30Days, byRole, byTier}
+          - memberships: {totalSold, totalRevenue, byTier:[{tier,count,revenue}]} (PAID only)
+          - consultations: {completedCount, completedRevenue, confirmedCount, confirmedRevenue, totalRevenue}
+          - pending: {companies, experts}
+          - monthly: array of 12 buckets with {key, year, month, signups, memberships, membershipRevenue, consultationRevenue, consultationBookings}
+          - topExperts: top 5 APPROVED experts by rating+totalSessions with {id, name, specialty, specialtyAr, rating, totalSessions, hourlyRate}
+          Implementation uses Promise.all with ~13 parallel queries (countDocuments + aggregate by $year/$month for signups/memberships/consultations).
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ ADMIN ANALYTICS ENDPOINT TESTING COMPLETE - All functionality working perfectly:
+          
+          🎯 COMPREHENSIVE TEST RESULTS (5/5 SCENARIOS PASSED - 100% SUCCESS RATE):
+          
+          📋 AUTHENTICATION TESTS:
+          • No session → 401 with Arabic error 'غير مصرح' ✅
+          • MEMBER user → 403 with Arabic error 'صلاحيات مسؤول مطلوبة' ✅
+          • ADMIN user → 200 with complete analytics payload ✅
+          
+          📋 PAYLOAD STRUCTURE VALIDATION:
+          • generatedAt: ISO8601 string present ✅
+          • users: {total: 117 (≥1), last30Days, byRole: {ADMIN: 15 (≥1)}, byTier} ✅
+          • memberships: {totalSold: 40, totalRevenue: 3000, byTier array} ✅
+          • consultations: {completedRevenue: 150, confirmedRevenue: 192.5, totalRevenue: 342.5 = 150+192.5} ✅
+          • pending: {companies: 4, experts: 1} ✅
+          • monthly: Array with exactly 12 entries, last entry = current month (2026-04) ✅
+          • topExperts: Array with 5 entries (≤5), all required fields present ✅
+          
+          📋 DATA SENSITIVITY TEST:
+          • Seeded: 1 BASIC membership (50 OMR), 1 COMPLETED appointment (25 OMR), 1 CONFIRMED appointment (22.5 OMR), 1 PENDING company
+          • Verified increases: memberships.totalSold: 40→41, totalRevenue: 3000→3050 ✅
+          • Verified increases: consultations.completedRevenue: 150→175, confirmedRevenue: 192.5→215, totalRevenue: 342.5→390 ✅
+          • Verified increases: pending.companies: 4→5 ✅
+          • Verified monthly data: membershipRevenue and consultationRevenue increased correctly ✅
+          
+          📋 REGRESSION TESTS:
+          • GET /api/ → 200 'Majles API is running' ✅
+          • GET /api/me with admin session → 200 with role=ADMIN ✅
+          • POST /api/signup → 200 with new user ✅
+          
+          🔧 TECHNICAL IMPLEMENTATION VERIFIED:
+          ✅ NextAuth session authentication working correctly
+          ✅ Role-based authorization (ADMIN only) enforced properly
+          ✅ Arabic error messages for authentication failures
+          ✅ Complete payload structure with all required fields
+          ✅ Numeric validation for all counters and revenue fields
+          ✅ Monthly time series with exactly 12 months, current month validation
+          ✅ Revenue calculation accuracy (totalRevenue = completedRevenue + confirmedRevenue)
+          ✅ Data aggregation working correctly with real-time updates
+          ✅ Top experts ranking and field structure correct
+          ✅ Pending counters reflecting current database state
+          ✅ Database integration with proper MongoDB aggregation queries
+          
+          📊 PERFORMANCE: Endpoint responds in ~200-500ms with complex aggregations across multiple collections using Promise.all for parallel execution.
+          
+          🎉 CONCLUSION: The Admin Analytics endpoint is fully functional and production-ready. All authentication, authorization, data aggregation, and response structure requirements are met. The endpoint provides comprehensive KPIs, monthly time series data, and top experts ranking as specified.
+
+frontend:
+  - task: "Admin analytics dashboard /admin/analytics (KPI cards + recharts AreaChart/LineChart/BarChart/PieChart)"
+    implemented: true
+    working: "NA"
+    file: "/app/app/admin/analytics/page.js, /app/app/admin/analytics/_AnalyticsClient.jsx, /app/components/Navbar.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW Arabic RTL admin analytics page. Server page guards session + role==='ADMIN' (shows 'غير مصرح' notice otherwise).
+          Sections on /admin/analytics:
+          1) Pending banner (amber) with quick links to /admin/companies?status=PENDING and /admin/experts?status=PENDING when count>0.
+          2) 4 KPI cards (gradient backgrounds): total users, memberships sold, consultations revenue, total revenue.
+          3) AreaChart: 12-month membership & consultation revenue (gold + navy gradients).
+          4) LineChart: monthly signups.
+          5) BarChart: monthly memberships sold.
+          6) PieChart: users by tier (FREE/BASIC/GOLD/PLATINUM).
+          7) Horizontal BarChart: users by role.
+          8) BarChart: membership revenue + count per tier.
+          9) Top experts list card.
+          10) generatedAt timestamp footer.
+          Navbar: new "الإحصائيات" link (navy filled) visible when role === 'ADMIN'.
+
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 7
+  test_sequence: 8
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Admin analytics dashboard /admin/analytics (KPI cards + recharts AreaChart/LineChart/BarChart/PieChart)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -1724,3 +1821,37 @@ agent_communication:
       • Cascade deletion logic working perfectly
       
       🎉 CONCLUSION: All Profile Settings endpoints are fully functional and production-ready. The system properly handles Arabic text, validation, authentication, and complex cascade operations while maintaining data integrity.
+  - agent: "testing"
+    message: |
+      ✅ ADMIN ANALYTICS ENDPOINT TESTING COMPLETE - All functionality working perfectly:
+      
+      🎯 COMPREHENSIVE TEST RESULTS (5/5 SCENARIOS PASSED - 100% SUCCESS RATE):
+      
+      📋 AUTHENTICATION TESTS:
+      • No session → 401 with Arabic error 'غير مصرح' ✅
+      • MEMBER user → 403 with Arabic error 'صلاحيات مسؤول مطلوبة' ✅
+      • ADMIN user → 200 with complete analytics payload ✅
+      
+      📋 PAYLOAD STRUCTURE VALIDATION:
+      • generatedAt: ISO8601 string present ✅
+      • users: {total: 117 (≥1), byRole: {ADMIN: 15 (≥1)}, byTier} ✅
+      • memberships: {totalSold: 40, totalRevenue: 3000, byTier array} ✅
+      • consultations: {completedRevenue: 150, confirmedRevenue: 192.5, totalRevenue: 342.5 = 150+192.5} ✅
+      • pending: {companies: 4, experts: 1} ✅
+      • monthly: Array with exactly 12 entries, last entry = current month (2026-04) ✅
+      • topExperts: Array with 5 entries (≤5), all required fields present ✅
+      
+      📋 DATA SENSITIVITY TEST:
+      • Seeded test data and verified all counters increased correctly
+      • Revenue calculations accurate, monthly data updated properly
+      
+      📋 REGRESSION TESTS:
+      • GET /api/ → 200 'Majles API is running' ✅
+      • GET /api/me with admin session → 200 with role=ADMIN ✅
+      • POST /api/signup → 200 with new user ✅
+      
+      🔧 TECHNICAL IMPLEMENTATION: NextAuth authentication, role-based authorization, Arabic error messages, complete payload structure, numeric validation, monthly time series, revenue calculation accuracy, data aggregation, and database integration all working correctly.
+      
+      📊 PERFORMANCE: Endpoint responds in ~200-500ms with complex aggregations using Promise.all for parallel execution.
+      
+      🎉 CONCLUSION: The Admin Analytics endpoint is fully functional and production-ready. All authentication, authorization, data aggregation, and response structure requirements are met.
