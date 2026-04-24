@@ -3,10 +3,11 @@
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Suspense, useMemo } from 'react'
 import Link from 'next/link'
-import { Search, ShoppingBag, ShoppingCart, Store as StoreIcon } from 'lucide-react'
+import { Search, ShoppingBag, ShoppingCart, Store as StoreIcon, Heart } from 'lucide-react'
 import { PRODUCT_CATEGORIES, categoryLabel, categoryEmoji } from '@/lib/store'
 import ProductCard from '@/components/ProductCard'
 import { useCart } from '@/components/CartContext'
+import { useWishlist } from '@/components/WishlistContext'
 
 export default function StoreClient({ initialProducts }) {
   return (
@@ -20,6 +21,7 @@ function StoreInner({ initialProducts }) {
   const router = useRouter()
   const sp = useSearchParams()
   const { totals } = useCart()
+  const { count: favCount } = useWishlist()
   const category = sp.get('category') || ''
   const search = sp.get('search') || ''
   const sort = sp.get('sort') || 'newest'
@@ -64,6 +66,28 @@ function StoreInner({ initialProducts }) {
                 {totals.unitCount}
               </span>
             )}
+          </Link>
+        </div>
+
+        {/* Quick links strip */}
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <Link
+            href="/store/wishlist"
+            className="relative inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:border-red-200 hover:text-red-600"
+          >
+            <Heart className={`h-3.5 w-3.5 ${favCount > 0 ? 'fill-red-500 text-red-500' : ''}`} />
+            المفضلة
+            {favCount > 0 && (
+              <span className="ms-1 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
+                {favCount}
+              </span>
+            )}
+          </Link>
+          <Link
+            href="/store/vendor"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:border-[#1B3A6B] hover:text-[#1B3A6B]"
+          >
+            <StoreIcon className="h-3.5 w-3.5" /> البائعون
           </Link>
         </div>
 

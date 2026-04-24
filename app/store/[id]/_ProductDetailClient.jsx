@@ -4,9 +4,10 @@ import Link from 'next/link'
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
-import { ShoppingCart, Minus, Plus, ChevronRight, CheckCircle2, Package, Tag, Store as StoreIcon, ArrowLeft, Star, MessageSquare, Lock } from 'lucide-react'
+import { ShoppingCart, Minus, Plus, ChevronRight, CheckCircle2, Package, Tag, Store as StoreIcon, ArrowLeft, Star, MessageSquare, Lock, Heart } from 'lucide-react'
 import { formatOMR, categoryEmoji, categoryLabel } from '@/lib/store'
 import { useCart } from '@/components/CartContext'
+import { useWishlist } from '@/components/WishlistContext'
 
 function StarRow({ value = 0, size = 'h-4 w-4', interactive = false, onChange }) {
   return (
@@ -37,10 +38,19 @@ export default function ProductDetailClient({ product }) {
   const router = useRouter()
   const { data: session } = useSession()
   const { addItem } = useCart()
+  const { has: hasFav, toggle: toggleFav } = useWishlist()
   const [qty, setQty] = useState(1)
   const [selImg, setSelImg] = useState(0)
   const [added, setAdded] = useState(false)
   const outOfStock = (product.stock || 0) <= 0
+  const isFav = hasFav(product.id)
+
+  const onToggleFav = async () => {
+    const r = await toggleFav(product.id)
+    if (!r.ok && r.needLogin) {
+      router.push(`/login?callbackUrl=/store/${product.id}`)
+    }
+  }
 
   // Reviews state
   const [reviews, setReviews] = useState([])
@@ -263,6 +273,18 @@ export default function ProductDetailClient({ product }) {
                 <ArrowLeft className="h-4 w-4" />
               </button>
             </div>
+
+            <button
+              onClick={onToggleFav}
+              className={`mt-3 inline-flex items-center justify-center gap-2 rounded-xl border py-2.5 text-sm font-semibold transition ${
+                isFav
+                  ? 'border-red-200 bg-red-50 text-red-600 hover:bg-red-100'
+                  : 'border-gray-300 bg-white text-gray-700 hover:border-red-300 hover:text-red-600'
+              }`}
+            >
+              <Heart className={`h-4 w-4 ${isFav ? 'fill-red-500' : ''}`} />
+              {isFav ? 'في المفضلة — اضغط للإزالة' : 'أضف إلى المفضلة'}
+            </button>
           </div>
         </div>
 

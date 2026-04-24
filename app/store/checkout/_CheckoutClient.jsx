@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { CheckCircle2, CreditCard, Loader2, AlertTriangle, MapPin, Truck, Lock } from 'lucide-react'
+import { CheckCircle2, CreditCard, Loader2, AlertTriangle, MapPin, Truck, Lock, Tag, X } from 'lucide-react'
 import { useCart } from '@/components/CartContext'
 import { computeCartTotals, formatOMR } from '@/lib/store'
 
@@ -34,6 +34,43 @@ export default function CheckoutClient({ tier, user }) {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(null)
 
+  // Coupon state
+  const [couponInput, setCouponInput] = useState('')
+  const [applying, setApplying] = useState(false)
+  const [coupon, setCoupon] = useState(null) // {code, couponDiscountAmount, finalTotal, ...}
+  const [couponError, setCouponError] = useState('')
+
+  const applyCoupon = async () => {
+    const code = couponInput.trim()
+    if (!code) { setCouponError('أدخل رمز الكوبون'); return }
+    setApplying(true); setCouponError('')
+    try {
+      const r = await fetch('/api/coupons/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, subtotal: totals.subtotal }),
+      })
+      const d = await r.json()
+      if (!r.ok || !d.valid) {
+        setCouponError(d.error || 'الكوبون غير صحيح')
+        setCoupon(null)
+      } else {
+        setCoupon(d)
+        setCouponError('')
+      }
+    } catch (e) {
+      setCouponError('تعذّر الاتصال، حاول مرة أخرى')
+    } finally {
+      setApplying(false)
+    }
+  }
+  const removeCoupon = () => {
+    setCoupon(null); setCouponInput(''); setCouponError('')
+  }
+
+  const finalTotal = coupon ? coupon.finalTotal : totals.totalPaid
+  const couponDiscount = coupon ? coupon.couponDiscountAmount : 0
+
   const submit = async (e) => {
     e.preventDefault()
     setError('')
@@ -48,6 +85,7 @@ export default function CheckoutClient({ tier, user }) {
       body: JSON.stringify({
         items: items.map((it) => ({ productId: it.productId, quantity: it.quantity })),
         shippingAddress: addr,
+        couponCode: coupon ? coupon.code : undefined,
       }),
     })
     const data = await res.json().catch(() => ({}))
@@ -160,16 +198,70 @@ export default function CheckoutClient({ tier, user }) {
               <SumRow label="المجموع الفرعي" value={`${formatOMR(totals.subtotal)} ر.ع`} />
               {totals.discountPercent > 0 && (
                 <SumRow
-                  label={`خصم ${totals.discountPercent}%`}
+                  label={`خصم العضوية ${totals.discountPercent}%`}
                   value={`− ${formatOMR(totals.discountAmount)} ر.ع`}
                   color="text-green-600"
                 />
               )}
+              {coupon && (
+                <SumRow
+                  label={`كوبون ${coupon.code}`}
+                  value={`− ${formatOMR(couponDiscount)} ر.ع`}
+                  color="text-amber-600"
+                />
+              )}
               <SumRow
                 label="الإجمالي"
-                value={`${formatOMR(totals.totalPaid)} ر.ع`}
+                value={`${formatOMR(finalTotal)} ر.ع`}
                 bold
               />
+            </div>
+
+            {/* Coupon input */}
+            <div className="mt-4 rounded-xl border border-dashed border-gray-300 bg-gray-50 p-3">
+              <div className="mb-2 flex items-center gap-1.5 text-xs font-bold text-[#1B3A6B]">
+                <Tag className="h-3.5 w-3.5" /> رمز الكوبون
+              </div>
+              {coupon ? (
+                <div className="flex items-center justify-between rounded-lg border border-green-200 bg-green-50 p-2 text-xs">
+                  <div className="flex items-center gap-1.5 text-green-800">
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    <span className="font-bold">{coupon.code}</span>
+                    <span className="text-gray-600">— وفّرت {formatOMR(couponDiscount)} ر.ع</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={removeCoupon}
+                    aria-label="إزالة الكوبون"
+                    className="text-red-500 hover:text-red-700"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="flex gap-1.5">
+                    <input
+                      value={couponInput}
+                      onChange={(e) => setCouponInput(e.target.value.toUpperCase().slice(0, 32))}
+                      placeholder="WELCOME10"
+                      dir="ltr"
+                      className="flex-1 rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs outline-none focus:border-[#1B3A6B]"
+                    />
+                    <button
+                      type="button"
+                      onClick={applyCoupon}
+                      disabled={applying || !couponInput.trim()}
+                      className="rounded-lg bg-[#1B3A6B] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#152c52] disabled:opacity-50"
+                    >
+                      {applying ? '...' : 'تطبيق'}
+                    </button>
+                  </div>
+                  {couponError && (
+                    <div className="mt-1.5 text-[11px] font-semibold text-red-600">{couponError}</div>
+                  )}
+                </>
+              )}
             </div>
 
             {error && (
@@ -187,7 +279,7 @@ export default function CheckoutClient({ tier, user }) {
               {loading ? (
                 <><Loader2 className="h-4 w-4 animate-spin" /> جارٍ المعالجة...</>
               ) : (
-                <>تأكيد الطلب - {formatOMR(totals.totalPaid)} ر.ع</>
+                <>تأكيد الطلب - {formatOMR(finalTotal)} ر.ع</>
               )}
             </button>
           </div>

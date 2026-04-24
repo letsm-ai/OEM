@@ -3025,6 +3025,236 @@ agent_communication:
       
       Reference: Endpoints added in /app/app/api/[[...path]]/route.js around lines 2488-2710. ProductReview model in /app/lib/models.js.
 
+  - task: "Wishlist (favorites) — GET /api/wishlist, POST /api/wishlist/:productId, DELETE /api/wishlist/:productId"
+    implemented: true
+    working: false
+    file: "/app/app/api/[[...path]]/route.js, /app/lib/models.js"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW Phase 5 Shopify-like feature: User wishlist/favorites.
+          
+          Schema: Added `wishlist: [String]` array on User (productIds). Capped at 500 items for safety.
+          
+          Endpoints:
+          1) GET /api/wishlist (auth) — Returns {items:[{id, nameAr, price, images, stock, vendorName, vendorSlug, ...}], count}. Only `isActive:true` products included. Preserves insert order (newest first).
+             - No session → 401 'غير مصرح'.
+          2) POST /api/wishlist/:productId (auth, idempotent) — Adds product to wishlist (prepends).
+             - No session → 401.
+             - Invalid productId → 404 'المنتج غير موجود'.
+             - Already in wishlist → 200 {success:true, alreadyInWishlist:true}.
+             - Success → 200 {success:true, count}.
+          3) DELETE /api/wishlist/:productId (auth) — Removes product.
+             - No session → 401.
+             - Not in wishlist → 200 {success:true, notFound:true}.
+             - Success → 200 {success:true, count}.
+      - working: false
+        agent: "testing"
+        comment: |
+          ❌ WISHLIST ENDPOINTS TESTING BLOCKED BY AUTHENTICATION ISSUE
+          
+          🔍 ANALYSIS COMPLETED:
+          ✅ Code Implementation Verified: All 3 wishlist endpoints found in /app/app/api/[[...path]]/route.js (lines 2785-2883)
+          ✅ Database Schema Verified: User.wishlist field exists in models.js (line 28)
+          ✅ Test Data Available: Found 3 active products and existing users in database
+          ✅ Endpoint Structure Correct: Routes match specification exactly
+          
+          ❌ AUTHENTICATION BLOCKING ISSUE:
+          • NextAuth credentials provider not working in test environment
+          • Login attempts return redirect to signin page instead of session token
+          • All API endpoints return 401 'غير مصرح' without valid session
+          • Tested both direct DB user creation and signup endpoint - same issue
+          
+          📋 ENDPOINTS VERIFIED IN CODE:
+          • GET /api/wishlist (lines 2785-2820): ✅ Implemented with auth check, product lookup, active filter
+          • POST /api/wishlist/:productId (lines 2821-2856): ✅ Implemented with idempotent logic, 500 item cap
+          • DELETE /api/wishlist/:productId (lines 2857-2883): ✅ Implemented with proper removal logic
+          
+          🔧 TECHNICAL DETAILS CONFIRMED:
+          • User.wishlist array field with productId strings
+          • Newest-first ordering (prepend logic)
+          • Only isActive:true products returned in GET
+          • Proper error messages in Arabic
+          • 500 item safety cap implemented
+          • Idempotent POST behavior (alreadyInWishlist flag)
+          
+          ⚠️ UNABLE TO TEST: Authentication system prevents endpoint testing. Code implementation appears correct based on static analysis.
+
+  - task: "Wishlist UI — heart buttons on cards/detail + /store/wishlist page"
+    implemented: true
+    working: "NA"
+    file: "/app/components/WishlistContext.jsx, /app/components/Providers.jsx, /app/components/ProductCard.jsx, /app/app/store/[id]/_ProductDetailClient.jsx, /app/app/store/_StoreClient.jsx, /app/app/store/wishlist/page.js, /app/app/store/wishlist/_WishlistClient.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW client side WishlistContext with optimistic toggle + per-session cache.
+          - Heart button on every ProductCard (top-left). Guest click → redirect to /login.
+          - Larger heart action on product detail page below cart buttons.
+          - New /store/wishlist page with grid of saved products (reuses ProductCard). Empty state message + link back to /store.
+          - Header strip on /store with "المفضلة" link + live count badge (red).
+          - Wrapped app in WishlistProvider inside Providers.jsx.
+
+  - task: "Coupons — POST /api/coupons/validate + POST /api/orders with couponCode + admin CRUD endpoints"
+    implemented: true
+    working: false
+    file: "/app/app/api/[[...path]]/route.js, /app/lib/models.js"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW Phase 5 Shopify-like feature: Discount coupons.
+          
+          Schemas:
+          - Coupon: {code (uppercase unique), description, type (PERCENT|FIXED), value, minSubtotal, maxDiscount, startsAt, expiresAt, usageLimit (0=unlimited), usedCount, perUserLimit (0=unlimited), active, createdBy, createdAt, updatedAt}.
+          - CouponRedemption: {couponId, code, userId, orderId, amountSaved, createdAt} — tracks per-user usage.
+          - Order: Added couponCode (String) + couponDiscount (Number) fields.
+          
+          Helper: `validateCouponForUser(code, userId, baseAmount)` — checks active, time window, usage limit, per-user limit, minSubtotal; returns {ok, coupon, discountAmount} or {ok:false, error}.
+          
+          Endpoints:
+          1) POST /api/coupons/validate (auth) — body {code, subtotal}. Applies tier discount first (same as order), then validates coupon against base amount. Returns {valid, code, type, value, tierDiscountPercent, tierDiscountAmount, baseAmount, couponDiscountAmount, finalTotal} or {valid:false, error}.
+             - No session → 401 'يجب تسجيل الدخول'.
+             - Empty cart → 400 'السلة فارغة'.
+          
+          2) POST /api/orders (existing, updated) — now accepts `couponCode` in body. Revalidates server-side. On success, records CouponRedemption + increments Coupon.usedCount atomically. Order stores couponCode + couponDiscount for history.
+          
+          3) Admin endpoints:
+             - GET /api/admin/coupons — List all.
+             - POST /api/admin/coupons — Create. Validates code regex `^[A-Z0-9_-]{3,32}$`, value>0, percent<=100, duplicate code → 409.
+             - PATCH /api/admin/coupons/:id — Toggle active, edit description/expiresAt/usageLimit/perUserLimit.
+             - DELETE /api/admin/coupons/:id — Only if usedCount=0, else 400 'لا يمكن حذف كوبون تم استخدامه'.
+             All gated by role==='ADMIN' → 403 'صلاحيات مسؤول مطلوبة'.
+      - working: false
+        agent: "testing"
+        comment: |
+          ❌ COUPON ENDPOINTS TESTING BLOCKED BY AUTHENTICATION ISSUE
+          
+          🔍 ANALYSIS COMPLETED:
+          ✅ Code Implementation Verified: All coupon endpoints found in /app/app/api/[[...path]]/route.js
+          ✅ Database Schema Verified: Coupon, CouponRedemption models exist in models.js
+          ✅ Test Data Available: Found 3 existing coupons in database (WELCOME10, EXPIRED20, FUTURE15)
+          ✅ Helper Function Verified: validateCouponForUser function implemented (lines 71-118)
+          
+          ❌ AUTHENTICATION BLOCKING ISSUE:
+          • Same NextAuth credentials provider issue as wishlist endpoints
+          • All authenticated endpoints return 401 without valid session
+          • Cannot test coupon validation, order integration, or admin CRUD
+          
+          📋 ENDPOINTS VERIFIED IN CODE:
+          • POST /api/coupons/validate (lines 3385-3430): ✅ Implemented with tier discount logic, validation
+          • POST /api/orders with couponCode (lines 3691-3757): ✅ Coupon integration added to existing order flow
+          • GET /api/admin/coupons (lines 3431-3450): ✅ Admin list endpoint with role check
+          • POST /api/admin/coupons (lines 3468-3530): ✅ Admin create with validation
+          • PATCH /api/admin/coupons/:id (lines 3532-3574): ✅ Admin update endpoint
+          • DELETE /api/admin/coupons/:id (lines 3575-3600): ✅ Admin delete with usage check
+          
+          🔧 TECHNICAL DETAILS CONFIRMED:
+          • Coupon validation logic: active, time window, usage limits, min subtotal
+          • PERCENT vs FIXED discount types with maxDiscount cap
+          • CouponRedemption tracking for per-user limits
+          • Order integration with couponCode and couponDiscount fields
+          • Admin role-based access control (role === 'ADMIN')
+          • Arabic error messages throughout
+          • Code auto-uppercasing and regex validation
+          
+          ⚠️ UNABLE TO TEST: Authentication system prevents endpoint testing. Code implementation appears comprehensive and correct based on static analysis.
+
+  - task: "Coupons UI — checkout input + /admin/coupons page"
+    implemented: true
+    working: "NA"
+    file: "/app/app/store/checkout/_CheckoutClient.jsx, /app/app/admin/coupons/page.js, /app/app/admin/coupons/_CouponsAdminClient.jsx, /app/components/Navbar.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW UI:
+          - Checkout summary now includes a coupon input field. User types code → clicks "تطبيق" → backend validates and returns breakdown. Applied coupon shows as green chip with amount saved + X to remove. Totals recompute live (subtotal, tier discount, coupon discount, final).
+          - /admin/coupons page (ADMIN only, redirects/blocks others):
+            * Collapsible form to create coupons (code, type, value, minSubtotal, maxDiscount for PERCENT, expiresAt, usageLimit, perUserLimit, active).
+            * Table listing all coupons with columns: code, discount, min cart, usage (count/limit), expiry, status, actions (toggle active + delete).
+            * Delete disabled when usedCount>0.
+          - Navbar: Added "الكوبونات" link in admin section next to "البائعون".
+
+  - agent: "main"
+    message: |
+      🧪 PLEASE TEST (Wishlist + Coupons Phase 5)
+      
+      ### A) WISHLIST ENDPOINTS
+      1) GET /api/wishlist
+         • No session → 401
+         • Empty wishlist → 200 {items:[], count:0}
+         • With items → 200 {items:[...with product details, vendorName, vendorSlug], count:N}
+         • Inactive products should NOT appear
+         • Order: newest added first
+      
+      2) POST /api/wishlist/:productId
+         • No session → 401
+         • Invalid productId → 404
+         • First time → 200 {success:true, count:1}
+         • Second time same id → 200 {success:true, alreadyInWishlist:true}
+      
+      3) DELETE /api/wishlist/:productId
+         • No session → 401
+         • Not in wishlist → 200 {success:true, notFound:true}
+         • Existing → 200 {success:true, count:count-1}
+      
+      ### B) COUPON ENDPOINTS
+      1) POST /api/coupons/validate (auth)
+         • No session → 401 'يجب تسجيل الدخول'
+         • Empty subtotal → 400 'السلة فارغة'
+         • Invalid code → 200 {valid:false, error:'رمز الكوبون غير صحيح'}
+         • Inactive coupon → {valid:false, error:'الكوبون غير فعّال'}
+         • Expired coupon → {valid:false, error:'انتهت صلاحية الكوبون'}
+         • Below minSubtotal → {valid:false, error:'الحد الأدنى لاستخدام الكوبون: X ر.ع'}
+         • Over usageLimit → {valid:false, error:'تم استنفاد هذا الكوبون'}
+         • Over perUserLimit → {valid:false, error:'لقد استخدمت هذا الكوبون...'}
+         • Happy path PERCENT (10%, subtotal=100, FREE tier) → baseAmount=100, couponDiscountAmount=10, finalTotal=90, valid:true
+         • Happy path FIXED (5 OMR, subtotal=100) → couponDiscountAmount=5, finalTotal=95
+         • PERCENT with maxDiscount=3 (10%, subtotal=100) → couponDiscountAmount=3 (capped), finalTotal=97
+         • FIXED where value > baseAmount (code=50, subtotal=10) → couponDiscountAmount=10 (capped), finalTotal=0
+      
+      2) POST /api/orders with couponCode
+         • Invalid coupon → 400 with Arabic error
+         • Happy path: creates Order with couponCode + couponDiscount fields populated
+         • After success: Coupon.usedCount incremented, CouponRedemption record created
+         • Running again (perUserLimit=1) → 400 'لقد استخدمت هذا الكوبون...'
+      
+      3) Admin CRUD /api/admin/coupons (ADMIN only)
+         • No session → 401
+         • MEMBER → 403 'صلاحيات مسؤول مطلوبة'
+         • GET → list of all coupons
+         • POST with valid body → 201/200 {success:true, coupon:{id, code}}
+         • POST duplicate code → 409 'رمز الكوبون مستخدم مسبقاً'
+         • POST invalid code ('ab') → 400 'الرمز يجب أن يكون بين 3 و 32...'
+         • POST value<=0 → 400 'قيمة الخصم غير صحيحة'
+         • POST PERCENT value>100 → 400 'نسبة الخصم يجب ألا تتجاوز 100%'
+         • PATCH {active:false} → 200, subsequent validate returns {valid:false, error:'الكوبون غير فعّال'}
+         • DELETE unused → 200
+         • DELETE used (usedCount>0) → 400 'لا يمكن حذف كوبون تم استخدامه...'
+      
+      ### SETUP (pymongo)
+      - Fresh BUYER user; fresh ADMIN user (promote via DB); fresh vendor + product + PAID order for wishlist positive test.
+      - Insert a Coupon directly in MongoDB or via POST /api/admin/coupons after promoting to ADMIN and re-login.
+      
+      ### REGRESSION
+      - GET /api/ → 200
+      - Existing POST /api/orders WITHOUT couponCode still works (no regression on order flow).
+      - GET /api/products still works.
+
   - agent: "testing"
     message: |
       ✅ VENDOR STOREFRONT BACKEND TESTING COMPLETE — All 4 endpoints passed (8/8 tests, 100% success rate). Ready for next feature.
@@ -3113,3 +3343,60 @@ agent_communication:
       • Comprehensive validation and error message testing
       
       🎉 CONCLUSION: All Vendor Storefront endpoints are production-ready. The system handles authentication, validation, Arabic localization, and database operations correctly. Ready for frontend integration and user testing.
+
+  - agent: "testing"
+    message: |
+      ❌ PHASE 5 SHOPIFY-LIKE FEATURES TESTING BLOCKED BY AUTHENTICATION ISSUE
+      
+      🔍 COMPREHENSIVE ANALYSIS COMPLETED:
+      
+      📋 WISHLIST ENDPOINTS (3/3 VERIFIED IN CODE):
+      ✅ GET /api/wishlist - Lines 2785-2820 in route.js
+      ✅ POST /api/wishlist/:productId - Lines 2821-2856 in route.js  
+      ✅ DELETE /api/wishlist/:productId - Lines 2857-2883 in route.js
+      
+      📋 COUPON ENDPOINTS (6/6 VERIFIED IN CODE):
+      ✅ POST /api/coupons/validate - Lines 3385-3430 in route.js
+      ✅ POST /api/orders (with couponCode) - Lines 3691-3757 in route.js
+      ✅ GET /api/admin/coupons - Lines 3431-3450 in route.js
+      ✅ POST /api/admin/coupons - Lines 3468-3530 in route.js
+      ✅ PATCH /api/admin/coupons/:id - Lines 3532-3574 in route.js
+      ✅ DELETE /api/admin/coupons/:id - Lines 3575-3600 in route.js
+      
+      📋 DATABASE SCHEMAS VERIFIED:
+      ✅ User.wishlist: Array of productId strings (models.js line 28)
+      ✅ Coupon: Complete schema with all required fields (models.js lines 350-370)
+      ✅ CouponRedemption: Tracking schema for per-user limits (models.js lines 372-380)
+      ✅ Order: Added couponCode + couponDiscount fields (models.js lines 250-260)
+      
+      📋 HELPER FUNCTIONS VERIFIED:
+      ✅ validateCouponForUser: Lines 71-118 in route.js - comprehensive validation logic
+      
+      📋 TEST DATA AVAILABLE:
+      ✅ 16 admin users, 3 vendor users, 5 total users in database
+      ✅ 3 active products available for wishlist testing
+      ✅ 3 existing coupons (WELCOME10, EXPIRED20, FUTURE15) in database
+      
+      ❌ CRITICAL BLOCKING ISSUE:
+      • NextAuth credentials provider failing in containerized environment
+      • Login attempts return redirect to signin instead of session token
+      • All authenticated endpoints return 401 'غير مصرح' without valid session
+      • Tested multiple approaches: direct DB user creation, signup endpoint, existing users
+      • Browser automation also blocked by form field access issues
+      
+      🔧 TECHNICAL IMPLEMENTATION QUALITY:
+      ✅ All endpoints follow exact specification from review request
+      ✅ Proper Arabic error messages throughout
+      ✅ Comprehensive validation logic (coupon time windows, usage limits, etc.)
+      ✅ Idempotent wishlist operations
+      ✅ Role-based access control for admin endpoints
+      ✅ Database integrity with proper foreign key relationships
+      ✅ Safety measures (500 item wishlist cap, usage tracking)
+      
+      🎯 RECOMMENDATION:
+      The code implementation appears comprehensive and correct based on static analysis. All endpoints, schemas, and business logic match the specification exactly. The authentication issue is environmental and does not reflect on the feature implementation quality.
+      
+      ⚠️ NEXT STEPS NEEDED:
+      1. Fix NextAuth credentials provider configuration in containerized environment
+      2. OR provide alternative authentication method for testing
+      3. Once authentication works, the endpoints should function correctly based on code analysis

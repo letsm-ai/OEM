@@ -1,139 +1,154 @@
 #!/usr/bin/env python3
 """
-Product Reviews Backend Testing
-Testing the NEW Product Reviews feature (Phase 5 Shopify-like enhancement)
+Backend Testing for Phase 5 Shopify-like Features: Wishlist and Discount Coupons
+Omani Entrepreneur Majles (مجلس رواد الأعمال العماني)
+
+This script tests the new Phase 5 features:
+1. Wishlist (Favorites) - GET/POST/DELETE /api/wishlist endpoints
+2. Discount Coupons - POST /api/coupons/validate, POST /api/orders with couponCode, Admin CRUD
+
+Base URL: Read from /app/.env NEXT_PUBLIC_BASE_URL + '/api'
+Database: MongoDB via MONGO_URL from /app/.env
 """
 
-import requests
-import json
-import time
-import uuid
-import bcrypt
-from pymongo import MongoClient
-from datetime import datetime, timedelta
 import os
+import sys
+import json
+import requests
+import pymongo
+import bcrypt
+import uuid
+from datetime import datetime, timedelta
+from urllib.parse import quote
 
-# Configuration
-BASE_URL = "https://omani-startup-hub.preview.emergentagent.com/api"
-MONGO_URL = "mongodb://localhost:27017"
-DB_NAME = "majles"
+# Read environment variables
+def load_env():
+    env_vars = {}
+    try:
+        with open('/app/.env', 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    env_vars[key] = value
+    except FileNotFoundError:
+        print("❌ /app/.env file not found")
+        sys.exit(1)
+    return env_vars
 
-def get_db():
-    """Get MongoDB database connection"""
-    client = MongoClient(MONGO_URL)
-    return client[DB_NAME]
+ENV = load_env()
+BASE_URL = ENV.get('NEXT_PUBLIC_BASE_URL', 'http://localhost:3000') + '/api'
+MONGO_URL = ENV.get('MONGO_URL', 'mongodb://localhost:27017')
+DB_NAME = ENV.get('DB_NAME', 'majles')
 
-def create_test_user(email, password="Password123", name="Test User", role="MEMBER"):
-    """Create a test user directly in MongoDB"""
-    db = get_db()
-    user_id = str(uuid.uuid4())
+print(f"🌐 Base URL: {BASE_URL}")
+print(f"🗄️ MongoDB: {MONGO_URL}/{DB_NAME}")
+
+# MongoDB connection
+try:
+    mongo_client = pymongo.MongoClient(MONGO_URL)
+    db = mongo_client[DB_NAME]
+    print("✅ MongoDB connection established")
+except Exception as e:
+    print(f"❌ MongoDB connection failed: {e}")
+    sys.exit(1)
+
+# Test counters
+tests_passed = 0
+tests_failed = 0
+
+def test_result(name, success, details=""):
+    global tests_passed, tests_failed
+    if success:
+        tests_passed += 1
+        print(f"✅ {name}")
+        if details:
+            print(f"   {details}")
+    else:
+        tests_failed += 1
+        print(f"❌ {name}")
+        if details:
+            print(f"   {details}")
+
+def make_request(method, endpoint, data=None, headers=None, cookies=None):
+    """Make HTTP request with error handling"""
+    url = f"{BASE_URL}{endpoint}"
+    try:
+        if method == 'GET':
+            response = requests.get(url, headers=headers, cookies=cookies, timeout=30)
+        elif method == 'POST':
+            response = requests.post(url, json=data, headers=headers, cookies=cookies, timeout=30)
+        elif method == 'PUT':
+            response = requests.put(url, json=data, headers=headers, cookies=cookies, timeout=30)
+        elif method == 'PATCH':
+            response = requests.patch(url, json=data, headers=headers, cookies=cookies, timeout=30)
+        elif method == 'DELETE':
+            response = requests.delete(url, headers=headers, cookies=cookies, timeout=30)
+        else:
+            raise ValueError(f"Unsupported method: {method}")
+        
+        return response
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Request failed: {e}")
+        return None
+
+def create_test_user(email_suffix, role='MEMBER', tier='FREE'):
+    """Create a test user directly in MongoDB with bcrypt password"""
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    email = f"test_{email_suffix}_{timestamp}@test.com"
+    password = "testpass123"
+    
+    # Hash password with bcrypt
     hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     
     user_doc = {
-        "_id": user_id,
-        "name": name,
-        "email": email.lower(),
-        "password": hashed_password,
-        "role": role,
-        "membershipTier": "FREE",
-        "phone": "",
-        "photo": "",
-        "vendorProfile": {
-            "slug": "",
-            "businessName": "",
-            "tagline": "",
-            "bio": "",
-            "banner": "",
-            "logo": "",
-            "phone": "",
-            "whatsapp": "",
-            "instagram": "",
-            "website": "",
-            "governorate": "",
-            "city": "",
-            "address": ""
+        '_id': str(uuid.uuid4()),
+        'name': f'Test User {email_suffix.title()}',
+        'email': email,
+        'password': hashed_password,
+        'role': role,
+        'membershipTier': tier,
+        'phone': '',
+        'photo': '',
+        'wishlist': [],
+        'vendorProfile': {
+            'slug': '',
+            'businessName': '',
+            'tagline': '',
+            'bio': '',
+            'banner': '',
+            'logo': '',
+            'phone': '',
+            'whatsapp': '',
+            'instagram': '',
+            'website': '',
+            'governorate': '',
+            'city': '',
+            'address': ''
         },
-        "createdAt": datetime.utcnow()
+        'createdAt': datetime.utcnow()
     }
     
-    db.users.insert_one(user_doc)
-    return user_id
+    try:
+        db.users.insert_one(user_doc)
+        return {
+            'id': user_doc['_id'],
+            'email': email,
+            'password': password,
+            'name': user_doc['name'],
+            'role': role,
+            'tier': tier
+        }
+    except Exception as e:
+        print(f"❌ Failed to create user: {e}")
+        return None
 
-def create_test_product(vendor_id, name="منتج تجريبي", price=10):
-    """Create a test product directly in MongoDB"""
-    db = get_db()
-    product_id = str(uuid.uuid4())
-    
-    product_doc = {
-        "_id": product_id,
-        "vendorId": vendor_id,
-        "nameAr": name,
-        "nameEn": "",
-        "price": price,
-        "description": "وصف المنتج التجريبي",
-        "images": [],
-        "category": "OTHER",
-        "stock": 100,
-        "isActive": True,
-        "salesCount": 0,
-        "rating": 0,
-        "reviewCount": 0,
-        "createdAt": datetime.utcnow(),
-        "updatedAt": datetime.utcnow()
-    }
-    
-    db.products.insert_one(product_doc)
-    return product_id
-
-def create_test_order(buyer_id, product_id, vendor_id, status="PAID"):
-    """Create a test order directly in MongoDB"""
-    db = get_db()
-    order_id = str(uuid.uuid4())
-    
-    order_doc = {
-        "_id": order_id,
-        "buyerId": buyer_id,
-        "items": [{
-            "productId": product_id,
-            "vendorId": vendor_id,
-            "nameAr": "منتج تجريبي",
-            "image": "",
-            "unitPrice": 10,
-            "quantity": 1,
-            "lineSubtotal": 10
-        }],
-        "subtotal": 10,
-        "discountPercent": 0,
-        "discountAmount": 0,
-        "tierAtPurchase": "FREE",
-        "commissionPercent": 5,
-        "commissionAmount": 0.5,
-        "totalPaid": 10,
-        "shippingAddress": {
-            "name": "عميل تجريبي",
-            "phone": "+968 9123 4567",
-            "governorate": "MUSCAT",
-            "city": "مسقط",
-            "addressLine": "شارع السلطان قابوس",
-            "notes": ""
-        },
-        "status": status,
-        "paymentProvider": "MOCK",
-        "paymentStatus": "PAID",
-        "paymentId": "",
-        "createdAt": datetime.utcnow(),
-        "updatedAt": datetime.utcnow()
-    }
-    
-    db.orders.insert_one(order_doc)
-    return order_id
-
-def login_user(email, password="Password123"):
+def login_user(email, password):
     """Login user via NextAuth and get session cookie"""
     # First get CSRF token
-    csrf_response = requests.get(f"{BASE_URL}/auth/csrf")
-    if csrf_response.status_code != 200:
-        print(f"❌ Failed to get CSRF token: {csrf_response.status_code}")
+    csrf_response = make_request('GET', '/auth/csrf')
+    if not csrf_response or csrf_response.status_code != 200:
+        print(f"❌ Failed to get CSRF token: {csrf_response.status_code if csrf_response else 'No response'}")
         return None
     
     csrf_token = csrf_response.json().get('csrfToken')
@@ -146,683 +161,974 @@ def login_user(email, password="Password123"):
         'email': email,
         'password': password,
         'csrfToken': csrf_token,
-        'callbackUrl': '/',
+        'callbackUrl': f"{BASE_URL.replace('/api', '')}/dashboard",
         'json': 'true'
     }
     
-    login_response = requests.post(
-        f"{BASE_URL}/auth/callback/credentials",
-        data=login_data,
-        cookies=csrf_response.cookies,
-        allow_redirects=False
-    )
-    
-    if login_response.status_code not in [200, 302]:
-        print(f"❌ Login failed: {login_response.status_code}")
+    login_response = make_request('POST', '/auth/callback/credentials', data=login_data)
+    if not login_response or login_response.status_code != 200:
+        print(f"❌ Login failed: {login_response.status_code if login_response else 'No response'}")
+        if login_response:
+            print(f"   Response: {login_response.text}")
         return None
     
     # Extract session cookie
-    session_cookies = {}
+    cookies = {}
     for cookie in login_response.cookies:
         if 'session-token' in cookie.name or 'next-auth' in cookie.name:
-            session_cookies[cookie.name] = cookie.value
+            cookies[cookie.name] = cookie.value
     
-    if not session_cookies:
-        print("❌ No session cookies found after login")
+    if not cookies:
+        print("❌ No session cookies found in login response")
+        print(f"   Available cookies: {[cookie.name for cookie in login_response.cookies]}")
         return None
     
-    return session_cookies
+    print(f"✅ Login successful, cookies: {list(cookies.keys())}")
+    return cookies
 
-def test_get_product_reviews():
-    """Test GET /api/products/:id/reviews (public, no auth)"""
-    print("\n🧪 Testing GET /api/products/:id/reviews")
-    
-    # Create test data
-    timestamp = int(time.time())
-    vendor_email = f"vendor-{timestamp}@test.com"
-    vendor_id = create_test_user(vendor_email, role="VENDOR", name="بائع تجريبي")
-    product_id = create_test_product(vendor_id)
+def create_test_product(vendor_id, name_suffix="Product", price=10.0, stock=5, is_active=True):
+    """Create a test product directly in MongoDB"""
+    product_doc = {
+        '_id': str(uuid.uuid4()),
+        'vendorId': vendor_id,
+        'nameAr': f'منتج تجريبي {name_suffix}',
+        'nameEn': f'Test {name_suffix}',
+        'price': price,
+        'description': f'وصف المنتج التجريبي {name_suffix}',
+        'images': ['data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='],
+        'category': 'OTHER',
+        'stock': stock,
+        'isActive': is_active,
+        'salesCount': 0,
+        'rating': 0,
+        'reviewCount': 0,
+        'createdAt': datetime.utcnow(),
+        'updatedAt': datetime.utcnow()
+    }
     
     try:
-        # Test 1: Valid product id → 200 with empty reviews initially
-        print("  📋 Test 1: Valid product with no reviews")
-        response = requests.get(f"{BASE_URL}/products/{product_id}/reviews")
-        
-        if response.status_code == 200:
-            data = response.json()
-            if 'reviews' in data and isinstance(data['reviews'], list):
-                print(f"  ✅ Valid product → 200 with reviews array (length: {len(data['reviews'])})")
-            else:
-                print(f"  ❌ Invalid response structure: {data}")
-                return False
-        else:
-            print(f"  ❌ Expected 200, got {response.status_code}: {response.text}")
-            return False
-        
-        # Test 2: Invalid product id → 404
-        print("  📋 Test 2: Invalid product id")
-        invalid_id = str(uuid.uuid4())
-        response = requests.get(f"{BASE_URL}/products/{invalid_id}/reviews")
-        
-        if response.status_code == 404:
-            data = response.json()
-            if data.get('error') == 'المنتج غير موجود':
-                print("  ✅ Invalid product id → 404 with Arabic error")
-            else:
-                print(f"  ❌ Wrong error message: {data}")
-                return False
-        else:
-            print(f"  ❌ Expected 404, got {response.status_code}: {response.text}")
-            return False
-        
-        print("  🎉 GET /api/products/:id/reviews tests passed!")
-        return True
-        
+        db.products.insert_one(product_doc)
+        return product_doc
     except Exception as e:
-        print(f"  ❌ Test failed with exception: {e}")
-        return False
+        print(f"❌ Failed to create product: {e}")
+        return None
 
-def test_post_product_reviews():
-    """Test POST /api/products/:id/reviews (auth required)"""
-    print("\n🧪 Testing POST /api/products/:id/reviews")
-    
-    # Create test data
-    timestamp = int(time.time())
-    vendor_email = f"vendor-{timestamp}@test.com"
-    buyer_email = f"buyer-{timestamp}@test.com"
-    buyer2_email = f"buyer2-{timestamp}@test.com"
-    
-    vendor_id = create_test_user(vendor_email, role="VENDOR", name="بائع تجريبي")
-    buyer_id = create_test_user(buyer_email, name="عميل تجريبي")
-    buyer2_id = create_test_user(buyer2_email, name="عميل تجريبي 2")
-    
-    product_id = create_test_product(vendor_id)
-    order_id = create_test_order(buyer_id, product_id, vendor_id, "PAID")
-    
-    # Login buyer
-    buyer_cookies = login_user(buyer_email)
-    if not buyer_cookies:
-        print("  ❌ Failed to login buyer")
-        return False
-    
-    # Login vendor
-    vendor_cookies = login_user(vendor_email)
-    if not vendor_cookies:
-        print("  ❌ Failed to login vendor")
-        return False
+def create_test_order(buyer_id, product_id, vendor_id, status='PAID'):
+    """Create a test order directly in MongoDB"""
+    order_doc = {
+        '_id': str(uuid.uuid4()),
+        'buyerId': buyer_id,
+        'items': [{
+            'productId': product_id,
+            'vendorId': vendor_id,
+            'nameAr': 'منتج تجريبي',
+            'image': 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+            'unitPrice': 10.0,
+            'quantity': 1,
+            'lineSubtotal': 10.0
+        }],
+        'subtotal': 10.0,
+        'discountPercent': 0,
+        'discountAmount': 0,
+        'tierAtPurchase': 'FREE',
+        'couponCode': '',
+        'couponDiscount': 0,
+        'commissionPercent': 5,
+        'commissionAmount': 0.5,
+        'totalPaid': 10.0,
+        'shippingAddress': {
+            'name': 'Test Buyer',
+            'phone': '+968 9123 4567',
+            'governorate': 'MUSCAT',
+            'city': 'مسقط',
+            'addressLine': 'شارع التجارة',
+            'notes': ''
+        },
+        'status': status,
+        'paymentProvider': 'MOCK',
+        'paymentStatus': 'PAID',
+        'paymentId': 'mock_payment_123',
+        'createdAt': datetime.utcnow(),
+        'updatedAt': datetime.utcnow()
+    }
     
     try:
-        # Test 1: No session → 401
-        print("  📋 Test 1: No session")
-        response = requests.post(f"{BASE_URL}/products/{product_id}/reviews", 
-                               json={"rating": 5, "comment": "ممتاز"})
-        
-        if response.status_code == 401:
-            data = response.json()
-            if data.get('error') == 'غير مصرح':
-                print("  ✅ No session → 401 with Arabic error")
-            else:
-                print(f"  ❌ Wrong error message: {data}")
-                return False
-        else:
-            print(f"  ❌ Expected 401, got {response.status_code}: {response.text}")
-            return False
-        
-        # Test 2: Invalid product id → 404
-        print("  📋 Test 2: Invalid product id")
-        invalid_id = str(uuid.uuid4())
-        response = requests.post(f"{BASE_URL}/products/{invalid_id}/reviews",
-                               json={"rating": 5, "comment": "ممتاز"},
-                               cookies=buyer_cookies)
-        
-        if response.status_code == 404:
-            data = response.json()
-            if data.get('error') == 'المنتج غير موجود':
-                print("  ✅ Invalid product id → 404 with Arabic error")
-            else:
-                print(f"  ❌ Wrong error message: {data}")
-                return False
-        else:
-            print(f"  ❌ Expected 404, got {response.status_code}: {response.text}")
-            return False
-        
-        # Test 3: Rating validation tests
-        print("  📋 Test 3: Rating validation")
-        
-        # rating=0
-        response = requests.post(f"{BASE_URL}/products/{product_id}/reviews",
-                               json={"rating": 0, "comment": "test"},
-                               cookies=buyer_cookies)
-        if response.status_code == 400 and response.json().get('error') == 'التقييم يجب أن يكون بين 1 و 5 نجوم':
-            print("    ✅ rating=0 → 400 with Arabic error")
-        else:
-            print(f"    ❌ rating=0 test failed: {response.status_code} {response.text}")
-            return False
-        
-        # rating=6
-        response = requests.post(f"{BASE_URL}/products/{product_id}/reviews",
-                               json={"rating": 6, "comment": "test"},
-                               cookies=buyer_cookies)
-        if response.status_code == 400 and response.json().get('error') == 'التقييم يجب أن يكون بين 1 و 5 نجوم':
-            print("    ✅ rating=6 → 400 with Arabic error")
-        else:
-            print(f"    ❌ rating=6 test failed: {response.status_code} {response.text}")
-            return False
-        
-        # rating=3.5
-        response = requests.post(f"{BASE_URL}/products/{product_id}/reviews",
-                               json={"rating": 3.5, "comment": "test"},
-                               cookies=buyer_cookies)
-        if response.status_code == 400 and response.json().get('error') == 'التقييم يجب أن يكون بين 1 و 5 نجوم':
-            print("    ✅ rating=3.5 → 400 with Arabic error")
-        else:
-            print(f"    ❌ rating=3.5 test failed: {response.status_code} {response.text}")
-            return False
-        
-        # rating='abc'
-        response = requests.post(f"{BASE_URL}/products/{product_id}/reviews",
-                               json={"rating": "abc", "comment": "test"},
-                               cookies=buyer_cookies)
-        if response.status_code == 400 and response.json().get('error') == 'التقييم يجب أن يكون بين 1 و 5 نجوم':
-            print("    ✅ rating='abc' → 400 with Arabic error")
-        else:
-            print(f"    ❌ rating='abc' test failed: {response.status_code} {response.text}")
-            return False
-        
-        # Test 4: Vendor reviewing own product → 400
-        print("  📋 Test 4: Vendor reviewing own product")
-        response = requests.post(f"{BASE_URL}/products/{product_id}/reviews",
-                               json={"rating": 5, "comment": "منتج رائع"},
-                               cookies=vendor_cookies)
-        
-        if response.status_code == 400:
-            data = response.json()
-            if data.get('error') == 'لا يمكنك تقييم منتجك الخاص':
-                print("  ✅ Vendor reviewing own product → 400 with Arabic error")
-            else:
-                print(f"  ❌ Wrong error message: {data}")
-                return False
-        else:
-            print(f"  ❌ Expected 400, got {response.status_code}: {response.text}")
-            return False
-        
-        # Test 5: User who hasn't purchased → 403
-        print("  📋 Test 5: User who hasn't purchased")
-        buyer2_cookies = login_user(buyer2_email)
-        if not buyer2_cookies:
-            print("  ❌ Failed to login buyer2")
-            return False
-        
-        response = requests.post(f"{BASE_URL}/products/{product_id}/reviews",
-                               json={"rating": 5, "comment": "منتج رائع"},
-                               cookies=buyer2_cookies)
-        
-        if response.status_code == 403:
-            data = response.json()
-            if data.get('error') == 'يجب شراء المنتج أولاً لتتمكن من تقييمه':
-                print("  ✅ Non-purchaser → 403 with Arabic error")
-            else:
-                print(f"  ❌ Wrong error message: {data}")
-                return False
-        else:
-            print(f"  ❌ Expected 403, got {response.status_code}: {response.text}")
-            return False
-        
-        # Test 6: Happy path - Valid review submission
-        print("  📋 Test 6: Valid review submission")
-        response = requests.post(f"{BASE_URL}/products/{product_id}/reviews",
-                               json={"rating": 5, "comment": "منتج ممتاز جداً!"},
-                               cookies=buyer_cookies)
-        
-        if response.status_code == 200:
-            data = response.json()
-            if (data.get('success') and 'review' in data and 'product' in data and
-                data['review']['rating'] == 5 and data['product']['rating'] == 5.0 and
-                data['product']['reviewCount'] == 1):
-                print("  ✅ Valid review submission → 200 with correct data")
-                print(f"    📊 Product rating: {data['product']['rating']}, reviewCount: {data['product']['reviewCount']}")
-            else:
-                print(f"  ❌ Invalid response structure: {data}")
-                return False
-        else:
-            print(f"  ❌ Expected 200, got {response.status_code}: {response.text}")
-            return False
-        
-        # Test 7: Duplicate review → 409
-        print("  📋 Test 7: Duplicate review")
-        response = requests.post(f"{BASE_URL}/products/{product_id}/reviews",
-                               json={"rating": 4, "comment": "تقييم آخر"},
-                               cookies=buyer_cookies)
-        
-        if response.status_code == 409:
-            data = response.json()
-            if data.get('error') == 'لقد قمت بتقييم هذا المنتج مسبقاً':
-                print("  ✅ Duplicate review → 409 with Arabic error")
-            else:
-                print(f"  ❌ Wrong error message: {data}")
-                return False
-        else:
-            print(f"  ❌ Expected 409, got {response.status_code}: {response.text}")
-            return False
-        
-        # Test 8: Aggregation test - Second buyer with another order
-        print("  📋 Test 8: Rating aggregation test")
-        buyer3_email = f"buyer3-{timestamp}@test.com"
-        buyer3_id = create_test_user(buyer3_email, name="عميل تجريبي 3")
-        order2_id = create_test_order(buyer3_id, product_id, vendor_id, "PAID")
-        buyer3_cookies = login_user(buyer3_email)
-        
-        if buyer3_cookies:
-            response = requests.post(f"{BASE_URL}/products/{product_id}/reviews",
-                                   json={"rating": 3, "comment": "منتج جيد"},
-                                   cookies=buyer3_cookies)
-            
-            if response.status_code == 200:
-                data = response.json()
-                expected_rating = (5 + 3) / 2  # 4.0
-                if (data.get('success') and data['product']['rating'] == expected_rating and
-                    data['product']['reviewCount'] == 2):
-                    print(f"  ✅ Rating aggregation → Product rating: {data['product']['rating']}, reviewCount: {data['product']['reviewCount']}")
-                else:
-                    print(f"  ❌ Aggregation failed: {data}")
-                    return False
-            else:
-                print(f"  ❌ Second review failed: {response.status_code} {response.text}")
-                return False
-        
-        # Test 9: Status validation - Test different order statuses
-        print("  📋 Test 9: Order status validation")
-        
-        # Create buyer with SHIPPED order
-        buyer4_email = f"buyer4-{timestamp}@test.com"
-        buyer4_id = create_test_user(buyer4_email, name="عميل تجريبي 4")
-        order3_id = create_test_order(buyer4_id, product_id, vendor_id, "SHIPPED")
-        buyer4_cookies = login_user(buyer4_email)
-        
-        if buyer4_cookies:
-            response = requests.post(f"{BASE_URL}/products/{product_id}/reviews",
-                                   json={"rating": 4, "comment": "منتج جيد - شحن سريع"},
-                                   cookies=buyer4_cookies)
-            
-            if response.status_code == 200:
-                print("  ✅ SHIPPED order status accepted for review")
-            else:
-                print(f"  ❌ SHIPPED order should be accepted: {response.status_code} {response.text}")
-                return False
-        
-        # Create buyer with PENDING order (should be rejected)
-        buyer5_email = f"buyer5-{timestamp}@test.com"
-        buyer5_id = create_test_user(buyer5_email, name="عميل تجريبي 5")
-        order4_id = create_test_order(buyer5_id, product_id, vendor_id, "PENDING")
-        buyer5_cookies = login_user(buyer5_email)
-        
-        if buyer5_cookies:
-            response = requests.post(f"{BASE_URL}/products/{product_id}/reviews",
-                                   json={"rating": 4, "comment": "منتج جيد"},
-                                   cookies=buyer5_cookies)
-            
-            if response.status_code == 403:
-                data = response.json()
-                if data.get('error') == 'يجب شراء المنتج أولاً لتتمكن من تقييمه':
-                    print("  ✅ PENDING order status rejected for review")
-                else:
-                    print(f"  ❌ Wrong error message for PENDING order: {data}")
-                    return False
-            else:
-                print(f"  ❌ PENDING order should be rejected: {response.status_code} {response.text}")
-                return False
-        
-        # Test 10: Comment length validation (1500 chars should be truncated to 1000)
-        print("  📋 Test 10: Comment length validation")
-        long_comment = "تعليق طويل جداً " * 100  # Create a very long comment
-        
-        buyer6_email = f"buyer6-{timestamp}@test.com"
-        buyer6_id = create_test_user(buyer6_email, name="عميل تجريبي 6")
-        order5_id = create_test_order(buyer6_id, product_id, vendor_id, "DELIVERED")
-        buyer6_cookies = login_user(buyer6_email)
-        
-        if buyer6_cookies:
-            response = requests.post(f"{BASE_URL}/products/{product_id}/reviews",
-                                   json={"rating": 5, "comment": long_comment},
-                                   cookies=buyer6_cookies)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if len(data['review']['comment']) <= 1000:
-                    print(f"  ✅ Long comment truncated to {len(data['review']['comment'])} chars")
-                else:
-                    print(f"  ❌ Comment not truncated: {len(data['review']['comment'])} chars")
-                    return False
-            else:
-                print(f"  ❌ Long comment test failed: {response.status_code} {response.text}")
-                return False
-        
-        print("  🎉 POST /api/products/:id/reviews tests passed!")
-        return True
-        
+        db.orders.insert_one(order_doc)
+        return order_doc
     except Exception as e:
-        print(f"  ❌ Test failed with exception: {e}")
-        return False
+        print(f"❌ Failed to create order: {e}")
+        return None
 
-def test_get_my_review_status():
-    """Test GET /api/products/:id/my-review-status (auth optional)"""
-    print("\n🧪 Testing GET /api/products/:id/my-review-status")
-    
-    # Create test data
-    timestamp = int(time.time())
-    vendor_email = f"vendor-{timestamp}@test.com"
-    buyer_email = f"buyer-{timestamp}@test.com"
-    buyer2_email = f"buyer2-{timestamp}@test.com"
-    
-    vendor_id = create_test_user(vendor_email, role="VENDOR", name="بائع تجريبي")
-    buyer_id = create_test_user(buyer_email, name="عميل تجريبي")
-    buyer2_id = create_test_user(buyer2_email, name="عميل تجريبي 2")
-    
-    product_id = create_test_product(vendor_id)
-    order_id = create_test_order(buyer_id, product_id, vendor_id, "PAID")
+def create_test_coupon(code, type_='PERCENT', value=10, active=True, expires_at=None, starts_at=None, 
+                      min_subtotal=0, max_discount=0, usage_limit=0, per_user_limit=1):
+    """Create a test coupon directly in MongoDB"""
+    coupon_doc = {
+        '_id': str(uuid.uuid4()),
+        'code': code.upper(),
+        'description': f'Test coupon {code}',
+        'type': type_,
+        'value': value,
+        'minSubtotal': min_subtotal,
+        'maxDiscount': max_discount,
+        'startsAt': starts_at or datetime.utcnow(),
+        'expiresAt': expires_at,
+        'usageLimit': usage_limit,
+        'usedCount': 0,
+        'perUserLimit': per_user_limit,
+        'active': active,
+        'createdBy': None,
+        'createdAt': datetime.utcnow(),
+        'updatedAt': datetime.utcnow()
+    }
     
     try:
-        # Test 1: No session → 200 with loggedIn: false
-        print("  📋 Test 1: No session")
-        response = requests.get(f"{BASE_URL}/products/{product_id}/my-review-status")
-        
-        if response.status_code == 200:
-            data = response.json()
-            expected_keys = ['loggedIn', 'hasPurchased', 'alreadyReviewed', 'canReview']
-            if (all(key in data for key in expected_keys) and 
-                data['loggedIn'] == False and data['canReview'] == False):
-                print("  ✅ No session → 200 with correct structure")
-            else:
-                print(f"  ❌ Invalid response structure: {data}")
-                return False
-        else:
-            print(f"  ❌ Expected 200, got {response.status_code}: {response.text}")
-            return False
-        
-        # Test 2: Invalid product id → 404
-        print("  📋 Test 2: Invalid product id")
-        invalid_id = str(uuid.uuid4())
-        response = requests.get(f"{BASE_URL}/products/{invalid_id}/my-review-status")
-        
-        if response.status_code == 404:
-            data = response.json()
-            if data.get('error') == 'المنتج غير موجود':
-                print("  ✅ Invalid product id → 404 with Arabic error")
-            else:
-                print(f"  ❌ Wrong error message: {data}")
-                return False
-        else:
-            print(f"  ❌ Expected 404, got {response.status_code}: {response.text}")
-            return False
-        
-        # Test 3: User who hasn't purchased
-        print("  📋 Test 3: User who hasn't purchased")
-        buyer2_cookies = login_user(buyer2_email)
-        if not buyer2_cookies:
-            print("  ❌ Failed to login buyer2")
-            return False
-        
-        response = requests.get(f"{BASE_URL}/products/{product_id}/my-review-status",
-                              cookies=buyer2_cookies)
-        
-        if response.status_code == 200:
-            data = response.json()
-            if (data.get('loggedIn') == True and data.get('hasPurchased') == False and
-                data.get('alreadyReviewed') == False and data.get('canReview') == False):
-                print("  ✅ Non-purchaser → canReview=false, hasPurchased=false")
-            else:
-                print(f"  ❌ Invalid response for non-purchaser: {data}")
-                return False
-        else:
-            print(f"  ❌ Expected 200, got {response.status_code}: {response.text}")
-            return False
-        
-        # Test 4: User who purchased but hasn't reviewed
-        print("  📋 Test 4: User who purchased but hasn't reviewed")
-        buyer_cookies = login_user(buyer_email)
-        if not buyer_cookies:
-            print("  ❌ Failed to login buyer")
-            return False
-        
-        response = requests.get(f"{BASE_URL}/products/{product_id}/my-review-status",
-                              cookies=buyer_cookies)
-        
-        if response.status_code == 200:
-            data = response.json()
-            if (data.get('loggedIn') == True and data.get('hasPurchased') == True and
-                data.get('alreadyReviewed') == False and data.get('canReview') == True and
-                data.get('myReview') is None):
-                print("  ✅ Purchaser without review → canReview=true, hasPurchased=true")
-            else:
-                print(f"  ❌ Invalid response for purchaser: {data}")
-                return False
-        else:
-            print(f"  ❌ Expected 200, got {response.status_code}: {response.text}")
-            return False
-        
-        # Test 5: Submit a review and check status again
-        print("  📋 Test 5: User who purchased and already reviewed")
-        
-        # Submit review first
-        review_response = requests.post(f"{BASE_URL}/products/{product_id}/reviews",
-                                      json={"rating": 4, "comment": "منتج جيد جداً"},
-                                      cookies=buyer_cookies)
-        
-        if review_response.status_code != 200:
-            print(f"  ❌ Failed to submit review: {review_response.status_code}")
-            return False
-        
-        # Check status after review
-        response = requests.get(f"{BASE_URL}/products/{product_id}/my-review-status",
-                              cookies=buyer_cookies)
-        
-        if response.status_code == 200:
-            data = response.json()
-            if (data.get('loggedIn') == True and data.get('hasPurchased') == True and
-                data.get('alreadyReviewed') == True and data.get('canReview') == False and
-                data.get('myReview') is not None and data['myReview']['rating'] == 4):
-                print("  ✅ Reviewed purchaser → canReview=false, alreadyReviewed=true, myReview present")
-            else:
-                print(f"  ❌ Invalid response for reviewed purchaser: {data}")
-                return False
-        else:
-            print(f"  ❌ Expected 200, got {response.status_code}: {response.text}")
-            return False
-        
-        # Test 6: Vendor viewing own product
-        print("  📋 Test 6: Vendor viewing own product")
-        vendor_cookies = login_user(vendor_email)
-        if not vendor_cookies:
-            print("  ❌ Failed to login vendor")
-            return False
-        
-        response = requests.get(f"{BASE_URL}/products/{product_id}/my-review-status",
-                              cookies=vendor_cookies)
-        
-        if response.status_code == 200:
-            data = response.json()
-            if (data.get('loggedIn') == True and data.get('isOwnProduct') == True and
-                data.get('canReview') == False):
-                print("  ✅ Vendor viewing own product → isOwnProduct=true, canReview=false")
-            else:
-                print(f"  ❌ Invalid response for vendor: {data}")
-                return False
-        else:
-            print(f"  ❌ Expected 200, got {response.status_code}: {response.text}")
-            return False
-        
-        print("  🎉 GET /api/products/:id/my-review-status tests passed!")
-        return True
-        
+        db.coupons.insert_one(coupon_doc)
+        return coupon_doc
     except Exception as e:
-        print(f"  ❌ Test failed with exception: {e}")
-        return False
+        print(f"❌ Failed to create coupon: {e}")
+        return None
 
 def test_regression_endpoints():
-    """Test regression endpoints to ensure existing functionality still works"""
-    print("\n🧪 Testing Regression Endpoints")
+    """Test basic regression endpoints to ensure system is working"""
+    print("\n🔄 REGRESSION TESTS")
     
-    try:
-        # Test 1: GET /api/ → 200
-        print("  📋 Test 1: GET /api/")
-        response = requests.get(f"{BASE_URL}/")
-        
-        if response.status_code == 200:
-            data = response.json()
-            if 'message' in data:
-                print("  ✅ GET /api/ → 200 with message")
-            else:
-                print(f"  ❌ Invalid response structure: {data}")
-                return False
-        else:
-            print(f"  ❌ Expected 200, got {response.status_code}: {response.text}")
-            return False
-        
-        # Test 2: GET /api/products → 200 (should now include rating and reviewCount fields)
-        print("  📋 Test 2: GET /api/products")
-        response = requests.get(f"{BASE_URL}/products")
-        
-        if response.status_code == 200:
-            data = response.json()
-            if 'products' in data and isinstance(data['products'], list):
-                # Check if products have rating and reviewCount fields
-                if data['products']:
-                    product = data['products'][0]
-                    if 'rating' in product and 'reviewCount' in product:
-                        print("  ✅ GET /api/products → 200 with rating and reviewCount fields")
-                    else:
-                        print(f"  ❌ Products missing rating/reviewCount fields: {list(product.keys())}")
-                        return False
-                else:
-                    print("  ✅ GET /api/products → 200 with empty products array")
-            else:
-                print(f"  ❌ Invalid response structure: {data}")
-                return False
-        else:
-            print(f"  ❌ Expected 200, got {response.status_code}: {response.text}")
-            return False
-        
-        # Test 3: POST /api/signup → 200
-        print("  📋 Test 3: POST /api/signup")
-        timestamp = int(time.time())
-        test_email = f"regression-{timestamp}@test.com"
-        
-        response = requests.post(f"{BASE_URL}/signup", json={
-            "name": "مستخدم تجريبي",
-            "email": test_email,
-            "password": "Password123"
-        })
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('success') and 'user' in data:
-                print("  ✅ POST /api/signup → 200 with user data")
-            else:
-                print(f"  ❌ Invalid response structure: {data}")
-                return False
-        else:
-            print(f"  ❌ Expected 200, got {response.status_code}: {response.text}")
-            return False
-        
-        # Test 4: GET /api/vendors → 200 (vendor storefront regression)
-        print("  📋 Test 4: GET /api/vendors")
-        response = requests.get(f"{BASE_URL}/vendors")
-        
-        if response.status_code == 200:
-            data = response.json()
-            if 'vendors' in data and isinstance(data['vendors'], list):
-                print("  ✅ GET /api/vendors → 200 with vendors array")
-            else:
-                print(f"  ❌ Invalid response structure: {data}")
-                return False
-        else:
-            print(f"  ❌ Expected 200, got {response.status_code}: {response.text}")
-            return False
-        
-        print("  🎉 Regression tests passed!")
-        return True
-        
-    except Exception as e:
-        print(f"  ❌ Regression test failed with exception: {e}")
-        return False
+    # Test health endpoint
+    response = make_request('GET', '/')
+    test_result(
+        "GET /api/ → 200",
+        response and response.status_code == 200 and 'Majles API is running' in response.text,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    # Test products endpoint (public)
+    response = make_request('GET', '/products')
+    test_result(
+        "GET /api/products → 200",
+        response and response.status_code == 200,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    # Test vendors endpoint (public)
+    response = make_request('GET', '/vendors')
+    test_result(
+        "GET /api/vendors → 200",
+        response and response.status_code == 200,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
 
-def cleanup_test_data():
-    """Clean up test data from database"""
-    try:
-        db = get_db()
+def test_wishlist_endpoints():
+    """Test Wishlist (Favorites) endpoints"""
+    print("\n❤️ WISHLIST ENDPOINTS TESTING")
+    
+    # Create test data
+    print("📋 Setting up test data...")
+    buyer = create_test_user('buyer', 'MEMBER', 'FREE')
+    vendor = create_test_user('vendor', 'VENDOR', 'BASIC')
+    
+    if not buyer or not vendor:
+        test_result("Wishlist test setup", False, "Failed to create test users")
+        return
+    
+    # Create test products
+    product1 = create_test_product(vendor['id'], 'Honey', 15.0, 10, True)
+    product2 = create_test_product(vendor['id'], 'Dates', 25.0, 5, True)
+    inactive_product = create_test_product(vendor['id'], 'Inactive', 30.0, 0, False)
+    
+    if not product1 or not product2 or not inactive_product:
+        test_result("Wishlist test setup", False, "Failed to create test products")
+        return
+    
+    # Login buyer
+    buyer_cookies = login_user(buyer['email'], buyer['password'])
+    if not buyer_cookies:
+        test_result("Buyer login for wishlist tests", False, "Failed to login buyer")
+        return
+    
+    print("✅ Test data setup complete")
+    
+    # Test 1: GET /api/wishlist (no session) → 401
+    response = make_request('GET', '/wishlist')
+    test_result(
+        "GET /api/wishlist (no auth) → 401",
+        response and response.status_code == 401 and 'غير مصرح' in response.text,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    # Test 2: GET /api/wishlist (empty wishlist) → 200 with empty items
+    response = make_request('GET', '/wishlist', cookies=buyer_cookies)
+    test_result(
+        "GET /api/wishlist (empty) → 200",
+        response and response.status_code == 200,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    if response and response.status_code == 200:
+        data = response.json()
+        test_result(
+            "Empty wishlist structure",
+            'items' in data and 'count' in data and data['count'] == 0 and len(data['items']) == 0,
+            f"Response: {data}"
+        )
+    
+    # Test 3: POST /api/wishlist/:productId (no auth) → 401
+    response = make_request('POST', f"/wishlist/{product1['_id']}")
+    test_result(
+        "POST /api/wishlist/:productId (no auth) → 401",
+        response and response.status_code == 401,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    # Test 4: POST /api/wishlist/:productId (invalid product) → 404
+    fake_product_id = str(uuid.uuid4())
+    response = make_request('POST', f"/wishlist/{fake_product_id}", cookies=buyer_cookies)
+    test_result(
+        "POST /api/wishlist/:productId (invalid product) → 404",
+        response and response.status_code == 404 and 'المنتج غير موجود' in response.text,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    # Test 5: POST /api/wishlist/:productId (first time) → 200
+    response = make_request('POST', f"/wishlist/{product1['_id']}", cookies=buyer_cookies)
+    test_result(
+        "POST /api/wishlist/:productId (first time) → 200",
+        response and response.status_code == 200,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    if response and response.status_code == 200:
+        data = response.json()
+        test_result(
+            "First wishlist add response",
+            data.get('success') is True and data.get('count') == 1,
+            f"Response: {data}"
+        )
+    
+    # Test 6: POST /api/wishlist/:productId (second time, idempotent) → 200
+    response = make_request('POST', f"/wishlist/{product1['_id']}", cookies=buyer_cookies)
+    test_result(
+        "POST /api/wishlist/:productId (duplicate) → 200",
+        response and response.status_code == 200,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    if response and response.status_code == 200:
+        data = response.json()
+        test_result(
+            "Duplicate wishlist add response",
+            data.get('success') is True and data.get('alreadyInWishlist') is True,
+            f"Response: {data}"
+        )
+    
+    # Test 7: Add second product to wishlist
+    response = make_request('POST', f"/wishlist/{product2['_id']}", cookies=buyer_cookies)
+    test_result(
+        "POST /api/wishlist/:productId (second product) → 200",
+        response and response.status_code == 200,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    # Test 8: GET /api/wishlist (with items) → 200
+    response = make_request('GET', '/wishlist', cookies=buyer_cookies)
+    test_result(
+        "GET /api/wishlist (with items) → 200",
+        response and response.status_code == 200,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    if response and response.status_code == 200:
+        data = response.json()
+        test_result(
+            "Wishlist with items structure",
+            'items' in data and 'count' in data and data['count'] == 2 and len(data['items']) == 2,
+            f"Count: {data.get('count')}, Items: {len(data.get('items', []))}"
+        )
         
-        # Delete test users (those with test emails)
-        result = db.users.delete_many({"email": {"$regex": ".*@test\\.com$"}})
-        print(f"🧹 Cleaned up {result.deleted_count} test users")
+        # Check that items are ordered newest first (product2 should be first)
+        if len(data.get('items', [])) >= 2:
+            first_item = data['items'][0]
+            test_result(
+                "Wishlist order (newest first)",
+                first_item.get('id') == product2['_id'],
+                f"First item ID: {first_item.get('id')}, Expected: {product2['_id']}"
+            )
+            
+            # Check item structure
+            required_fields = ['id', 'nameAr', 'price', 'images', 'stock', 'vendorName', 'vendorSlug']
+            has_all_fields = all(field in first_item for field in required_fields)
+            test_result(
+                "Wishlist item structure",
+                has_all_fields,
+                f"Item fields: {list(first_item.keys())}"
+            )
+    
+    # Test 9: Add inactive product (should work but not appear in GET)
+    response = make_request('POST', f"/wishlist/{inactive_product['_id']}", cookies=buyer_cookies)
+    test_result(
+        "POST /api/wishlist/:productId (inactive product) → 200",
+        response and response.status_code == 200,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    # Test 10: GET /api/wishlist (inactive products should not appear)
+    response = make_request('GET', '/wishlist', cookies=buyer_cookies)
+    if response and response.status_code == 200:
+        data = response.json()
+        # Should still show count=2 (only active products)
+        test_result(
+            "Inactive products filtered from wishlist",
+            data.get('count') == 2 and len(data.get('items', [])) == 2,
+            f"Count: {data.get('count')}, Items: {len(data.get('items', []))}"
+        )
+    
+    # Test 11: DELETE /api/wishlist/:productId (no auth) → 401
+    response = make_request('DELETE', f"/wishlist/{product1['_id']}")
+    test_result(
+        "DELETE /api/wishlist/:productId (no auth) → 401",
+        response and response.status_code == 401,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    # Test 12: DELETE /api/wishlist/:productId (not in wishlist) → 200
+    non_wishlist_product = create_test_product(vendor['id'], 'NotInWishlist', 5.0, 3, True)
+    if non_wishlist_product:
+        response = make_request('DELETE', f"/wishlist/{non_wishlist_product['_id']}", cookies=buyer_cookies)
+        test_result(
+            "DELETE /api/wishlist/:productId (not in wishlist) → 200",
+            response and response.status_code == 200,
+            f"Status: {response.status_code if response else 'No response'}"
+        )
         
-        # Delete test products
-        result = db.products.delete_many({"nameAr": {"$regex": "منتج تجريبي"}})
-        print(f"🧹 Cleaned up {result.deleted_count} test products")
+        if response and response.status_code == 200:
+            data = response.json()
+            test_result(
+                "Delete non-wishlist item response",
+                data.get('success') is True and data.get('notFound') is True,
+                f"Response: {data}"
+            )
+    
+    # Test 13: DELETE /api/wishlist/:productId (existing item) → 200
+    response = make_request('DELETE', f"/wishlist/{product1['_id']}", cookies=buyer_cookies)
+    test_result(
+        "DELETE /api/wishlist/:productId (existing) → 200",
+        response and response.status_code == 200,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    if response and response.status_code == 200:
+        data = response.json()
+        test_result(
+            "Delete existing item response",
+            data.get('success') is True and data.get('count') == 1,
+            f"Response: {data}"
+        )
+    
+    # Test 14: Verify wishlist count after deletion
+    response = make_request('GET', '/wishlist', cookies=buyer_cookies)
+    if response and response.status_code == 200:
+        data = response.json()
+        test_result(
+            "Wishlist count after deletion",
+            data.get('count') == 1 and len(data.get('items', [])) == 1,
+            f"Count: {data.get('count')}, Items: {len(data.get('items', []))}"
+        )
+
+def test_coupon_validation_endpoint():
+    """Test POST /api/coupons/validate endpoint"""
+    print("\n🎫 COUPON VALIDATION ENDPOINT TESTING")
+    
+    # Create test data
+    print("📋 Setting up test data...")
+    buyer = create_test_user('coupon_buyer', 'MEMBER', 'FREE')
+    
+    if not buyer:
+        test_result("Coupon test setup", False, "Failed to create test user")
+        return
+    
+    # Create test coupons
+    valid_coupon = create_test_coupon('WELCOME10', 'PERCENT', 10, True)
+    expired_coupon = create_test_coupon('EXPIRED20', 'PERCENT', 20, True, 
+                                       expires_at=datetime.utcnow() - timedelta(days=1))
+    future_coupon = create_test_coupon('FUTURE15', 'PERCENT', 15, True,
+                                      starts_at=datetime.utcnow() + timedelta(days=1))
+    inactive_coupon = create_test_coupon('INACTIVE25', 'PERCENT', 25, False)
+    min_subtotal_coupon = create_test_coupon('MIN50', 'PERCENT', 10, True, min_subtotal=50)
+    fixed_coupon = create_test_coupon('FIXED5', 'FIXED', 5, True)
+    max_discount_coupon = create_test_coupon('MAXCAP', 'PERCENT', 50, True, max_discount=3)
+    
+    if not all([valid_coupon, expired_coupon, future_coupon, inactive_coupon, 
+               min_subtotal_coupon, fixed_coupon, max_discount_coupon]):
+        test_result("Coupon creation", False, "Failed to create test coupons")
+        return
+    
+    # Login buyer
+    buyer_cookies = login_user(buyer['email'], buyer['password'])
+    if not buyer_cookies:
+        test_result("Buyer login for coupon tests", False, "Failed to login buyer")
+        return
+    
+    print("✅ Test data setup complete")
+    
+    # Test 1: POST /api/coupons/validate (no auth) → 401
+    response = make_request('POST', '/coupons/validate', data={'code': 'WELCOME10', 'subtotal': 100})
+    test_result(
+        "POST /api/coupons/validate (no auth) → 401",
+        response and response.status_code == 401 and 'يجب تسجيل الدخول' in response.text,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    # Test 2: Empty cart → 400
+    response = make_request('POST', '/coupons/validate', 
+                          data={'code': 'WELCOME10', 'subtotal': 0}, cookies=buyer_cookies)
+    test_result(
+        "POST /api/coupons/validate (empty cart) → 400",
+        response and response.status_code == 400 and 'السلة فارغة' in response.text,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    # Test 3: Invalid/unknown code → 200 with valid: false
+    response = make_request('POST', '/coupons/validate', 
+                          data={'code': 'INVALID123', 'subtotal': 100}, cookies=buyer_cookies)
+    test_result(
+        "POST /api/coupons/validate (invalid code) → 200",
+        response and response.status_code == 200,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    if response and response.status_code == 200:
+        data = response.json()
+        test_result(
+            "Invalid code response",
+            data.get('valid') is False and 'رمز الكوبون غير صحيح' in data.get('error', ''),
+            f"Response: {data}"
+        )
+    
+    # Test 4: Inactive coupon → valid: false
+    response = make_request('POST', '/coupons/validate', 
+                          data={'code': 'INACTIVE25', 'subtotal': 100}, cookies=buyer_cookies)
+    if response and response.status_code == 200:
+        data = response.json()
+        test_result(
+            "Inactive coupon response",
+            data.get('valid') is False and 'الكوبون غير فعّال' in data.get('error', ''),
+            f"Response: {data}"
+        )
+    
+    # Test 5: Expired coupon → valid: false
+    response = make_request('POST', '/coupons/validate', 
+                          data={'code': 'EXPIRED20', 'subtotal': 100}, cookies=buyer_cookies)
+    if response and response.status_code == 200:
+        data = response.json()
+        test_result(
+            "Expired coupon response",
+            data.get('valid') is False and 'انتهت صلاحية الكوبون' in data.get('error', ''),
+            f"Response: {data}"
+        )
+    
+    # Test 6: Future coupon → valid: false
+    response = make_request('POST', '/coupons/validate', 
+                          data={'code': 'FUTURE15', 'subtotal': 100}, cookies=buyer_cookies)
+    if response and response.status_code == 200:
+        data = response.json()
+        test_result(
+            "Future coupon response",
+            data.get('valid') is False and 'الكوبون غير فعّال بعد' in data.get('error', ''),
+            f"Response: {data}"
+        )
+    
+    # Test 7: Below minimum subtotal → valid: false
+    response = make_request('POST', '/coupons/validate', 
+                          data={'code': 'MIN50', 'subtotal': 30}, cookies=buyer_cookies)
+    if response and response.status_code == 200:
+        data = response.json()
+        test_result(
+            "Below minimum subtotal response",
+            data.get('valid') is False and 'الحد الأدنى لاستخدام الكوبون: 50 ر.ع' in data.get('error', ''),
+            f"Response: {data}"
+        )
+    
+    # Test 8: Valid PERCENT coupon → valid: true with correct calculation
+    response = make_request('POST', '/coupons/validate', 
+                          data={'code': 'WELCOME10', 'subtotal': 100}, cookies=buyer_cookies)
+    test_result(
+        "Valid PERCENT coupon → 200",
+        response and response.status_code == 200,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    if response and response.status_code == 200:
+        data = response.json()
+        expected_fields = ['valid', 'tierDiscountAmount', 'baseAmount', 'couponDiscountAmount', 'finalTotal']
+        has_fields = all(field in data for field in expected_fields)
         
-        # Delete test orders
-        result = db.orders.delete_many({"shippingAddress.name": {"$regex": "عميل تجريبي"}})
-        print(f"🧹 Cleaned up {result.deleted_count} test orders")
+        # For FREE tier user: tierDiscountAmount=0, baseAmount=100, couponDiscountAmount=10, finalTotal=90
+        test_result(
+            "Valid PERCENT coupon calculation",
+            (data.get('valid') is True and 
+             data.get('tierDiscountAmount') == 0 and 
+             data.get('baseAmount') == 100 and 
+             data.get('couponDiscountAmount') == 10 and 
+             data.get('finalTotal') == 90 and
+             has_fields),
+            f"Response: {data}"
+        )
+    
+    # Test 9: Valid FIXED coupon → valid: true with correct calculation
+    response = make_request('POST', '/coupons/validate', 
+                          data={'code': 'FIXED5', 'subtotal': 100}, cookies=buyer_cookies)
+    if response and response.status_code == 200:
+        data = response.json()
+        test_result(
+            "Valid FIXED coupon calculation",
+            (data.get('valid') is True and 
+             data.get('couponDiscountAmount') == 5 and 
+             data.get('finalTotal') == 95),
+            f"Response: {data}"
+        )
+    
+    # Test 10: PERCENT with maxDiscount cap
+    response = make_request('POST', '/coupons/validate', 
+                          data={'code': 'MAXCAP', 'subtotal': 100}, cookies=buyer_cookies)
+    if response and response.status_code == 200:
+        data = response.json()
+        # 50% of 100 = 50, but capped at 3
+        test_result(
+            "PERCENT coupon with maxDiscount cap",
+            (data.get('valid') is True and 
+             data.get('couponDiscountAmount') == 3 and 
+             data.get('finalTotal') == 97),
+            f"Response: {data}"
+        )
+    
+    # Test 11: FIXED value > baseAmount (should be capped)
+    large_fixed_coupon = create_test_coupon('LARGE50', 'FIXED', 50, True)
+    if large_fixed_coupon:
+        response = make_request('POST', '/coupons/validate', 
+                              data={'code': 'LARGE50', 'subtotal': 10}, cookies=buyer_cookies)
+        if response and response.status_code == 200:
+            data = response.json()
+            test_result(
+                "FIXED coupon > subtotal (capped)",
+                (data.get('valid') is True and 
+                 data.get('couponDiscountAmount') == 10 and 
+                 data.get('finalTotal') == 0),
+                f"Response: {data}"
+            )
+
+def test_coupon_order_integration():
+    """Test POST /api/orders with couponCode"""
+    print("\n🛒 COUPON ORDER INTEGRATION TESTING")
+    
+    # Create test data
+    print("📋 Setting up test data...")
+    buyer = create_test_user('order_buyer', 'MEMBER', 'FREE')
+    vendor = create_test_user('order_vendor', 'VENDOR', 'BASIC')
+    
+    if not buyer or not vendor:
+        test_result("Order coupon test setup", False, "Failed to create test users")
+        return
+    
+    # Create test product
+    product = create_test_product(vendor['id'], 'OrderProduct', 20.0, 10, True)
+    if not product:
+        test_result("Order coupon test setup", False, "Failed to create test product")
+        return
+    
+    # Create test coupons
+    valid_coupon = create_test_coupon('ORDER10', 'PERCENT', 10, True)
+    invalid_coupon_code = 'NONEXISTENT'
+    per_user_limit_coupon = create_test_coupon('ONCE', 'PERCENT', 15, True, per_user_limit=1)
+    
+    if not all([valid_coupon, per_user_limit_coupon]):
+        test_result("Order coupon creation", False, "Failed to create test coupons")
+        return
+    
+    # Login buyer
+    buyer_cookies = login_user(buyer['email'], buyer['password'])
+    if not buyer_cookies:
+        test_result("Buyer login for order coupon tests", False, "Failed to login buyer")
+        return
+    
+    print("✅ Test data setup complete")
+    
+    # Test 1: Valid cart + invalid coupon code → 400
+    order_data = {
+        'items': [{
+            'productId': product['_id'],
+            'quantity': 2
+        }],
+        'shippingAddress': {
+            'name': 'Test Buyer',
+            'phone': '+968 9123 4567',
+            'governorate': 'MUSCAT',
+            'city': 'مسقط',
+            'addressLine': 'شارع التجارة',
+            'notes': ''
+        },
+        'couponCode': invalid_coupon_code
+    }
+    
+    response = make_request('POST', '/orders', data=order_data, cookies=buyer_cookies)
+    test_result(
+        "POST /api/orders (invalid coupon) → 400",
+        response and response.status_code == 400,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    # Test 2: Valid cart + valid coupon → 200
+    order_data['couponCode'] = 'ORDER10'
+    response = make_request('POST', '/orders', data=order_data, cookies=buyer_cookies)
+    test_result(
+        "POST /api/orders (valid coupon) → 200",
+        response and response.status_code == 200,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    order_id = None
+    if response and response.status_code == 200:
+        data = response.json()
+        order_id = data.get('order', {}).get('id')
         
-        # Delete test reviews
-        result = db.productreviews.delete_many({"comment": {"$regex": "منتج"}})
-        print(f"🧹 Cleaned up {result.deleted_count} test reviews")
+        # Check order structure
+        order = data.get('order', {})
+        test_result(
+            "Order with coupon structure",
+            (order.get('couponCode') == 'ORDER10' and 
+             order.get('couponDiscount') > 0 and
+             order.get('totalPaid') < order.get('subtotal', 0)),
+            f"Order: couponCode={order.get('couponCode')}, couponDiscount={order.get('couponDiscount')}, totalPaid={order.get('totalPaid')}"
+        )
+    
+    # Test 3: Verify database updates after successful order
+    if order_id:
+        # Check Coupon.usedCount incremented
+        coupon_doc = db.coupons.find_one({'code': 'ORDER10'})
+        test_result(
+            "Coupon usedCount incremented",
+            coupon_doc and coupon_doc.get('usedCount') == 1,
+            f"usedCount: {coupon_doc.get('usedCount') if coupon_doc else 'Not found'}"
+        )
         
-    except Exception as e:
-        print(f"⚠️ Cleanup failed: {e}")
+        # Check CouponRedemption document created
+        redemption_doc = db.couponredemptions.find_one({'orderId': order_id})
+        test_result(
+            "CouponRedemption document created",
+            redemption_doc is not None,
+            f"Redemption found: {redemption_doc is not None}"
+        )
+        
+        if redemption_doc:
+            test_result(
+                "CouponRedemption structure",
+                (redemption_doc.get('couponId') == valid_coupon['_id'] and
+                 redemption_doc.get('code') == 'ORDER10' and
+                 redemption_doc.get('userId') == buyer['id'] and
+                 redemption_doc.get('amountSaved') > 0),
+                f"Redemption: {redemption_doc}"
+            )
+        
+        # Check Order document has couponCode and couponDiscount
+        order_doc = db.orders.find_one({'_id': order_id})
+        test_result(
+            "Order document coupon fields",
+            (order_doc and 
+             order_doc.get('couponCode') == 'ORDER10' and
+             order_doc.get('couponDiscount') > 0),
+            f"Order couponCode: {order_doc.get('couponCode') if order_doc else 'Not found'}, couponDiscount: {order_doc.get('couponDiscount') if order_doc else 'Not found'}"
+        )
+    
+    # Test 4: Try using per-user limit coupon again → 400
+    order_data_2 = {
+        'items': [{
+            'productId': product['_id'],
+            'quantity': 1
+        }],
+        'shippingAddress': {
+            'name': 'Test Buyer',
+            'phone': '+968 9123 4567',
+            'governorate': 'MUSCAT',
+            'city': 'مسقط',
+            'addressLine': 'شارع التجارة',
+            'notes': ''
+        },
+        'couponCode': 'ONCE'
+    }
+    
+    # First use should work
+    response = make_request('POST', '/orders', data=order_data_2, cookies=buyer_cookies)
+    test_result(
+        "POST /api/orders (per-user limit coupon first use) → 200",
+        response and response.status_code == 200,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    # Second use should fail
+    response = make_request('POST', '/orders', data=order_data_2, cookies=buyer_cookies)
+    test_result(
+        "POST /api/orders (per-user limit exceeded) → 400",
+        response and response.status_code == 400 and 'لقد استخدمت هذا الكوبون' in response.text,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    # Test 5: Order without couponCode should still work (regression)
+    order_data_no_coupon = {
+        'items': [{
+            'productId': product['_id'],
+            'quantity': 1
+        }],
+        'shippingAddress': {
+            'name': 'Test Buyer',
+            'phone': '+968 9123 4567',
+            'governorate': 'MUSCAT',
+            'city': 'مسقط',
+            'addressLine': 'شارع التجارة',
+            'notes': ''
+        }
+    }
+    
+    response = make_request('POST', '/orders', data=order_data_no_coupon, cookies=buyer_cookies)
+    test_result(
+        "POST /api/orders (no coupon) → 200",
+        response and response.status_code == 200,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    if response and response.status_code == 200:
+        data = response.json()
+        order = data.get('order', {})
+        test_result(
+            "Order without coupon structure",
+            (order.get('couponCode') == '' and 
+             order.get('couponDiscount') == 0),
+            f"Order: couponCode='{order.get('couponCode')}', couponDiscount={order.get('couponDiscount')}"
+        )
+
+def test_admin_coupon_crud():
+    """Test Admin Coupon CRUD endpoints"""
+    print("\n👑 ADMIN COUPON CRUD TESTING")
+    
+    # Create test data
+    print("📋 Setting up test data...")
+    admin = create_test_user('admin', 'ADMIN', 'PLATINUM')
+    member = create_test_user('member', 'MEMBER', 'FREE')
+    
+    if not admin or not member:
+        test_result("Admin coupon test setup", False, "Failed to create test users")
+        return
+    
+    # Login users
+    admin_cookies = login_user(admin['email'], admin['password'])
+    member_cookies = login_user(member['email'], member['password'])
+    
+    if not admin_cookies or not member_cookies:
+        test_result("User login for admin coupon tests", False, "Failed to login users")
+        return
+    
+    print("✅ Test data setup complete")
+    
+    # Test 1: GET /api/admin/coupons (no auth) → 401
+    response = make_request('GET', '/admin/coupons')
+    test_result(
+        "GET /api/admin/coupons (no auth) → 401",
+        response and response.status_code == 401,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    # Test 2: GET /api/admin/coupons (MEMBER) → 403
+    response = make_request('GET', '/admin/coupons', cookies=member_cookies)
+    test_result(
+        "GET /api/admin/coupons (MEMBER) → 403",
+        response and response.status_code == 403 and 'صلاحيات مسؤول مطلوبة' in response.text,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    # Test 3: GET /api/admin/coupons (ADMIN) → 200
+    response = make_request('GET', '/admin/coupons', cookies=admin_cookies)
+    test_result(
+        "GET /api/admin/coupons (ADMIN) → 200",
+        response and response.status_code == 200,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    if response and response.status_code == 200:
+        data = response.json()
+        test_result(
+            "Admin coupons list structure",
+            'coupons' in data and isinstance(data['coupons'], list),
+            f"Response keys: {list(data.keys())}"
+        )
+    
+    # Test 4: POST /api/admin/coupons (invalid code) → 400
+    invalid_coupon_data = {
+        'code': 'ab',  # too short
+        'description': 'Test coupon',
+        'type': 'PERCENT',
+        'value': 10
+    }
+    
+    response = make_request('POST', '/admin/coupons', data=invalid_coupon_data, cookies=admin_cookies)
+    test_result(
+        "POST /api/admin/coupons (invalid code) → 400",
+        response and response.status_code == 400 and 'الرمز يجب أن يكون بين 3 و 32' in response.text,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    # Test 5: POST /api/admin/coupons (invalid value) → 400
+    invalid_value_data = {
+        'code': 'TESTCOUPON',
+        'description': 'Test coupon',
+        'type': 'PERCENT',
+        'value': 0  # invalid
+    }
+    
+    response = make_request('POST', '/admin/coupons', data=invalid_value_data, cookies=admin_cookies)
+    test_result(
+        "POST /api/admin/coupons (invalid value) → 400",
+        response and response.status_code == 400 and 'قيمة الخصم غير صحيحة' in response.text,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    # Test 6: POST /api/admin/coupons (PERCENT > 100) → 400
+    invalid_percent_data = {
+        'code': 'TESTCOUPON',
+        'description': 'Test coupon',
+        'type': 'PERCENT',
+        'value': 150  # > 100%
+    }
+    
+    response = make_request('POST', '/admin/coupons', data=invalid_percent_data, cookies=admin_cookies)
+    test_result(
+        "POST /api/admin/coupons (PERCENT > 100) → 400",
+        response and response.status_code == 400 and 'نسبة الخصم يجب ألا تتجاوز 100%' in response.text,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    # Test 7: POST /api/admin/coupons (valid) → 200
+    valid_coupon_data = {
+        'code': 'welcome10',  # should be auto-uppercased
+        'description': 'Welcome discount',
+        'type': 'PERCENT',
+        'value': 10,
+        'minSubtotal': 50,
+        'maxDiscount': 20,
+        'usageLimit': 100,
+        'perUserLimit': 1
+    }
+    
+    response = make_request('POST', '/admin/coupons', data=valid_coupon_data, cookies=admin_cookies)
+    test_result(
+        "POST /api/admin/coupons (valid) → 200",
+        response and response.status_code == 200,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    created_coupon_id = None
+    if response and response.status_code == 200:
+        data = response.json()
+        created_coupon_id = data.get('coupon', {}).get('id')
+        test_result(
+            "Created coupon structure",
+            (data.get('success') is True and 
+             data.get('coupon', {}).get('code') == 'WELCOME10'),  # auto-uppercased
+            f"Response: {data}"
+        )
+    
+    # Test 8: POST /api/admin/coupons (duplicate code) → 409
+    response = make_request('POST', '/admin/coupons', data=valid_coupon_data, cookies=admin_cookies)
+    test_result(
+        "POST /api/admin/coupons (duplicate) → 409",
+        response and response.status_code == 409 and 'رمز الكوبون مستخدم مسبقاً' in response.text,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    # Test 9: PATCH /api/admin/coupons/:id (invalid id) → 404
+    fake_coupon_id = str(uuid.uuid4())
+    response = make_request('PATCH', f'/admin/coupons/{fake_coupon_id}', 
+                          data={'active': False}, cookies=admin_cookies)
+    test_result(
+        "PATCH /api/admin/coupons/:id (invalid id) → 404",
+        response and response.status_code == 404 and 'الكوبون غير موجود' in response.text,
+        f"Status: {response.status_code if response else 'No response'}"
+    )
+    
+    # Test 10: PATCH /api/admin/coupons/:id (valid) → 200
+    if created_coupon_id:
+        response = make_request('PATCH', f'/admin/coupons/{created_coupon_id}', 
+                              data={'active': False}, cookies=admin_cookies)
+        test_result(
+            "PATCH /api/admin/coupons/:id (valid) → 200",
+            response and response.status_code == 200,
+            f"Status: {response.status_code if response else 'No response'}"
+        )
+        
+        # Test 11: Validate endpoint should now return inactive error
+        buyer = create_test_user('validate_buyer', 'MEMBER', 'FREE')
+        if buyer:
+            buyer_cookies = login_user(buyer['email'], buyer['password'])
+            if buyer_cookies:
+                response = make_request('POST', '/coupons/validate', 
+                                      data={'code': 'WELCOME10', 'subtotal': 100}, 
+                                      cookies=buyer_cookies)
+                if response and response.status_code == 200:
+                    data = response.json()
+                    test_result(
+                        "Deactivated coupon validation",
+                        data.get('valid') is False and 'الكوبون غير فعّال' in data.get('error', ''),
+                        f"Response: {data}"
+                    )
+    
+    # Test 12: DELETE /api/admin/coupons/:id (unused coupon) → 200
+    unused_coupon = create_test_coupon('UNUSED', 'PERCENT', 5, True)
+    if unused_coupon:
+        response = make_request('DELETE', f"/admin/coupons/{unused_coupon['_id']}", cookies=admin_cookies)
+        test_result(
+            "DELETE /api/admin/coupons/:id (unused) → 200",
+            response and response.status_code == 200,
+            f"Status: {response.status_code if response else 'No response'}"
+        )
+    
+    # Test 13: DELETE /api/admin/coupons/:id (used coupon) → 400
+    # First create and use a coupon
+    used_coupon = create_test_coupon('USED', 'PERCENT', 5, True)
+    if used_coupon:
+        # Simulate usage by incrementing usedCount
+        db.coupons.update_one({'_id': used_coupon['_id']}, {'$set': {'usedCount': 1}})
+        
+        response = make_request('DELETE', f"/admin/coupons/{used_coupon['_id']}", cookies=admin_cookies)
+        test_result(
+            "DELETE /api/admin/coupons/:id (used) → 400",
+            response and response.status_code == 400 and 'لا يمكن حذف كوبون تم استخدامه' in response.text,
+            f"Status: {response.status_code if response else 'No response'}"
+        )
 
 def main():
-    """Run all Product Reviews backend tests"""
-    print("🚀 Starting Product Reviews Backend Testing")
-    print(f"📍 Base URL: {BASE_URL}")
-    print(f"🗄️ Database: {MONGO_URL}/{DB_NAME}")
+    """Main test execution"""
+    print("🚀 STARTING PHASE 5 SHOPIFY-LIKE FEATURES BACKEND TESTING")
+    print("=" * 80)
     
-    # Clean up any existing test data
-    cleanup_test_data()
+    # Run all test suites
+    test_regression_endpoints()
+    test_wishlist_endpoints()
+    test_coupon_validation_endpoint()
+    test_coupon_order_integration()
+    test_admin_coupon_crud()
     
-    # Run tests
-    tests = [
-        ("GET /api/products/:id/reviews", test_get_product_reviews),
-        ("POST /api/products/:id/reviews", test_post_product_reviews),
-        ("GET /api/products/:id/my-review-status", test_get_my_review_status),
-        ("Regression Endpoints", test_regression_endpoints)
-    ]
+    # Final summary
+    print("\n" + "=" * 80)
+    print("📊 FINAL TEST RESULTS")
+    print(f"✅ Tests Passed: {tests_passed}")
+    print(f"❌ Tests Failed: {tests_failed}")
+    print(f"📈 Success Rate: {(tests_passed / (tests_passed + tests_failed) * 100):.1f}%" if (tests_passed + tests_failed) > 0 else "No tests run")
     
-    passed = 0
-    total = len(tests)
-    
-    for test_name, test_func in tests:
-        print(f"\n{'='*60}")
-        print(f"🧪 Running: {test_name}")
-        print('='*60)
-        
-        try:
-            if test_func():
-                passed += 1
-                print(f"✅ {test_name} PASSED")
-            else:
-                print(f"❌ {test_name} FAILED")
-        except Exception as e:
-            print(f"💥 {test_name} CRASHED: {e}")
-    
-    # Final cleanup
-    cleanup_test_data()
-    
-    # Summary
-    print(f"\n{'='*60}")
-    print("📊 FINAL RESULTS")
-    print('='*60)
-    print(f"✅ Passed: {passed}/{total}")
-    print(f"❌ Failed: {total - passed}/{total}")
-    print(f"📈 Success Rate: {(passed/total)*100:.1f}%")
-    
-    if passed == total:
-        print("\n🎉 ALL PRODUCT REVIEWS TESTS PASSED!")
-        print("🚀 Product Reviews feature is ready for production!")
+    if tests_failed == 0:
+        print("\n🎉 ALL TESTS PASSED! Phase 5 Shopify-like features are working correctly.")
     else:
-        print(f"\n⚠️ {total - passed} test(s) failed. Please review the issues above.")
+        print(f"\n⚠️ {tests_failed} test(s) failed. Please review the issues above.")
     
-    return passed == total
+    # Close MongoDB connection
+    mongo_client.close()
+    
+    return tests_failed == 0
 
 if __name__ == "__main__":
     success = main()
-    exit(0 if success else 1)
+    sys.exit(0 if success else 1)

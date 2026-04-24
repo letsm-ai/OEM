@@ -1,18 +1,32 @@
 'use client'
 
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useState } from 'react'
-import { ShoppingBag, Package, Plus, Check, Star } from 'lucide-react'
+import { ShoppingBag, Package, Plus, Check, Star, Heart } from 'lucide-react'
 import { formatOMR, categoryEmoji, categoryLabel } from '@/lib/store'
 import { useCart } from '@/components/CartContext'
+import { useWishlist } from '@/components/WishlistContext'
 
 export default function ProductCard({ product }) {
+  const router = useRouter()
   const { addItem, hydrated } = useCart()
+  const { has, toggle } = useWishlist()
   const [added, setAdded] = useState(false)
   const outOfStock = (product.stock || 0) <= 0
   const img = (product.images && product.images[0]) || ''
   const rating = Number(product.rating || 0)
   const reviewCount = Number(product.reviewCount || 0)
+  const isFav = has(product.id)
+
+  const onToggleFav = async (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const r = await toggle(product.id)
+    if (!r.ok && r.needLogin) {
+      router.push(`/login?callbackUrl=/store/${product.id}`)
+    }
+  }
 
   const onAdd = (e) => {
     e.preventDefault()
@@ -45,6 +59,15 @@ export default function ProductCard({ product }) {
             نفد المخزون
           </span>
         )}
+        <button
+          onClick={onToggleFav}
+          aria-label={isFav ? 'إزالة من المفضلة' : 'أضف للمفضلة'}
+          className={`absolute top-2 left-2 inline-flex h-8 w-8 items-center justify-center rounded-full bg-white/95 shadow-sm transition hover:scale-110 ${
+            isFav ? 'text-red-500' : 'text-gray-400'
+          }`}
+        >
+          <Heart className={`h-4 w-4 ${isFav ? 'fill-red-500' : ''}`} />
+        </button>
         <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-full bg-white/95 px-2 py-0.5 text-[10px] font-semibold text-gray-700 shadow-sm">
           {categoryEmoji(product.category)} {categoryLabel(product.category)}
         </span>
