@@ -1,9 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { CheckCircle2, CreditCard, Loader2, AlertTriangle, MapPin, Truck, Lock, Tag, X } from 'lucide-react'
+import { CheckCircle2, CreditCard, Loader2, AlertTriangle, MapPin, Truck, Lock, Tag, X, Gift } from 'lucide-react'
 import { useCart } from '@/components/CartContext'
 import { computeCartTotals, formatOMR } from '@/lib/store'
 
@@ -68,8 +68,28 @@ export default function CheckoutClient({ tier, user }) {
     setCoupon(null); setCouponInput(''); setCouponError('')
   }
 
-  const finalTotal = coupon ? coupon.finalTotal : totals.totalPaid
+  // Shipping state — fetched whenever governorate or totals change
+  const [shipping, setShipping] = useState({ fee: 0, isFree: false, freeThreshold: 30, freeThresholdReached: false })
+  const amountForShipping = coupon ? coupon.finalTotal : totals.totalPaid
+
+  useEffect(() => {
+    let ignore = false
+    ;(async () => {
+      try {
+        const r = await fetch('/api/shipping/quote', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ governorate: addr.governorate, amount: amountForShipping }),
+        })
+        const d = await r.json()
+        if (!ignore && r.ok) setShipping(d)
+      } catch (e) { /* noop */ }
+    })()
+    return () => { ignore = true }
+  }, [addr.governorate, amountForShipping])
+
   const couponDiscount = coupon ? coupon.couponDiscountAmount : 0
+  const finalTotal = +(amountForShipping + (shipping.fee || 0)).toFixed(3)
 
   const submit = async (e) => {
     e.preventDefault()
@@ -211,11 +231,36 @@ export default function CheckoutClient({ tier, user }) {
                 />
               )}
               <SumRow
+                label="الشحن"
+                value={
+                  shipping.isFree
+                    ? 'مجاني 🎉'
+                    : `${formatOMR(shipping.fee)} ر.ع`
+                }
+                color={shipping.isFree ? 'text-green-600' : 'text-gray-700'}
+              />
+              <SumRow
                 label="الإجمالي"
                 value={`${formatOMR(finalTotal)} ر.ع`}
                 bold
               />
             </div>
+
+            {/* Free shipping progress hint */}
+            {!shipping.isFree && shipping.freeThreshold > 0 && (
+              <div className="mt-3 rounded-xl bg-amber-50 p-2.5 text-[11px] font-medium text-amber-800">
+                <div className="flex items-center gap-1.5">
+                  <Gift className="h-3.5 w-3.5" />
+                  أضف {formatOMR(shipping.freeThreshold - amountForShipping)} ر.ع للحصول على <b>شحن مجاني</b>!
+                </div>
+                <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-amber-200">
+                  <div
+                    className="h-full rounded-full bg-amber-500 transition-all"
+                    style={{ width: `${Math.min(100, (amountForShipping / shipping.freeThreshold) * 100)}%` }}
+                  />
+                </div>
+              </div>
+            )}
 
             {/* Coupon input */}
             <div className="mt-4 rounded-xl border border-dashed border-gray-300 bg-gray-50 p-3">

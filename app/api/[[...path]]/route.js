@@ -5,6 +5,29 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { connectDB } from '@/lib/db'
 import { User, Membership, PasswordResetToken, Company, Expert, Availability, Appointment, VendorApplication, Product, ProductReview, Order, Coupon, CouponRedemption } from '@/lib/models'
+
+// ---- Extracted modular handlers ----
+import {
+  handleShippingQuote,
+} from '@/lib/api/shipping'
+import {
+  handleWishlistList,
+  handleWishlistAdd,
+  handleWishlistRemove,
+} from '@/lib/api/wishlist'
+import {
+  handleReviewsList,
+  handleReviewCreate,
+  handleMyReviewStatus,
+} from '@/lib/api/reviews'
+import {
+  validateCouponForUser,
+  handleCouponValidate,
+  handleAdminCouponsList,
+  handleAdminCouponCreate,
+  handleAdminCouponUpdate,
+  handleAdminCouponDelete,
+} from '@/lib/api/coupons'
 import {
   TIER_META,
   TIERS,
@@ -16,7 +39,7 @@ import {
   TIER_DISCOUNT,
 } from '@/lib/membership'
 import { SECTOR_KEYS, GOVERNORATE_KEYS } from '@/lib/directory'
-import { CATEGORY_KEYS, COMMISSION_PERCENT, TIER_DISCOUNT_PERCENT } from '@/lib/store'
+import { CATEGORY_KEYS, COMMISSION_PERCENT, TIER_DISCOUNT_PERCENT, computeShippingFee, FREE_SHIPPING_THRESHOLD, SHIPPING_FEES_OMR } from '@/lib/store'
 import { slugify, uniqueVendorSlug } from '@/lib/slug'
 import {
   SPECIALTY_KEYS,
@@ -61,61 +84,8 @@ function handleCORS(response) {
 }
 
 /**
- * Validates a coupon for a given user and subtotal (after-tier-discount amount).
- * Does NOT mutate usage counters — that's done after successful order creation.
- * @param {string} rawCode
- * @param {string} userId
- * @param {number} baseAmount — amount on which coupon applies (after tier discount)
- * @returns {Promise<{ok: boolean, error?: string, coupon?: any, discountAmount?: number}>}
+ * (Coupon validation helper is imported from /lib/api/coupons.js)
  */
-async function validateCouponForUser(rawCode, userId, baseAmount) {
-  const code = String(rawCode || '').trim().toUpperCase()
-  if (!code) return { ok: false, error: 'رمز الكوبون مطلوب' }
-  const coupon = await Coupon.findOne({ code })
-  if (!coupon) return { ok: false, error: 'رمز الكوبون غير صحيح' }
-  if (!coupon.active) return { ok: false, error: 'الكوبون غير فعّال' }
-  const now = new Date()
-  if (coupon.startsAt && now < coupon.startsAt) {
-    return { ok: false, error: 'الكوبون غير فعّال بعد' }
-  }
-  if (coupon.expiresAt && now > coupon.expiresAt) {
-    return { ok: false, error: 'انتهت صلاحية الكوبون' }
-  }
-  if (coupon.usageLimit > 0 && coupon.usedCount >= coupon.usageLimit) {
-    return { ok: false, error: 'تم استنفاد هذا الكوبون' }
-  }
-  if (coupon.minSubtotal > 0 && baseAmount < coupon.minSubtotal) {
-    return {
-      ok: false,
-      error: `الحد الأدنى لاستخدام الكوبون: ${coupon.minSubtotal} ر.ع`,
-    }
-  }
-  if (userId && coupon.perUserLimit > 0) {
-    const used = await CouponRedemption.countDocuments({
-      couponId: coupon._id,
-      userId,
-    })
-    if (used >= coupon.perUserLimit) {
-      return {
-        ok: false,
-        error: 'لقد استخدمت هذا الكوبون لأقصى عدد مسموح به',
-      }
-    }
-  }
-  // Compute discount
-  let discountAmount = 0
-  if (coupon.type === 'PERCENT') {
-    discountAmount = +(baseAmount * (coupon.value / 100)).toFixed(3)
-    if (coupon.maxDiscount > 0 && discountAmount > coupon.maxDiscount) {
-      discountAmount = coupon.maxDiscount
-    }
-  } else {
-    // FIXED
-    discountAmount = Math.min(coupon.value, baseAmount)
-  }
-  discountAmount = Math.max(0, +discountAmount.toFixed(3))
-  return { ok: true, coupon, discountAmount }
-}
 
 export async function OPTIONS() {
   return handleCORS(new NextResponse(null, { status: 200 }))
@@ -132,6 +102,11 @@ async function handleRoute(request, { params }) {
       return handleCORS(
         NextResponse.json({ message: 'Majles API is running' })
       )
+    }
+
+    // -------- Public shipping quote --------
+    if (route === '/shipping/quote' && method === 'POST') {
+      return handleShippingQuote(request)
     }
 
     // -------- SIGNUP --------
@@ -2588,300 +2563,26 @@ async function handleRoute(request, { params }) {
       )
     }
 
-    // ---- GET /products/:id/reviews (public reviews list) ----
+    // ---- Product Reviews (see /lib/api/reviews.js) ----
     if (productReviewsMatch && method === 'GET') {
-      await connectDB()
-      const id = productReviewsMatch[1]
-      const product = await Product.findById(id).select({ _id: 1 }).lean()
-      if (!product) {
-        return handleCORS(
-          NextResponse.json({ error: 'المنتج غير موجود' }, { status: 404 })
-        )
-      }
-      const reviews = await ProductReview.find({ productId: id })
-        .sort({ createdAt: -1 })
-        .limit(50)
-        .lean()
-      const userIds = [...new Set(reviews.map((r) => r.userId))]
-      const users = await User.find({ _id: { $in: userIds } })
-        .select({ _id: 1, name: 1, photo: 1 })
-        .lean()
-      const uMap = Object.fromEntries(users.map((u) => [u._id, u]))
-      return handleCORS(
-        NextResponse.json({
-          reviews: reviews.map((r) => ({
-            id: r._id,
-            rating: r.rating,
-            comment: r.comment || '',
-            createdAt: r.createdAt,
-            clientName: uMap[r.userId]?.name || 'عميل',
-            clientPhoto: uMap[r.userId]?.photo || '',
-          })),
-        })
-      )
+      return handleReviewsList(productReviewsMatch[1])
     }
-
-    // ---- POST /products/:id/reviews (client submits a review) ----
     if (productReviewsMatch && method === 'POST') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      await connectDB()
-      const id = productReviewsMatch[1]
-      const product = await Product.findById(id)
-      if (!product) {
-        return handleCORS(
-          NextResponse.json({ error: 'المنتج غير موجود' }, { status: 404 })
-        )
-      }
-      const body = await request.json().catch(() => ({}))
-      const rating = Number(body?.rating)
-      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-        return handleCORS(
-          NextResponse.json(
-            { error: 'التقييم يجب أن يكون بين 1 و 5 نجوم' },
-            { status: 400 }
-          )
-        )
-      }
-      const comment = String(body?.comment || '').trim().slice(0, 1000)
-
-      // Vendor cannot review own product
-      if (String(product.vendorId) === String(session.user.id)) {
-        return handleCORS(
-          NextResponse.json(
-            { error: 'لا يمكنك تقييم منتجك الخاص' },
-            { status: 400 }
-          )
-        )
-      }
-
-      // Verify purchase: must have at least one PAID/SHIPPED/DELIVERED order containing this product
-      const purchase = await Order.findOne({
-        buyerId: session.user.id,
-        'items.productId': id,
-        status: { $in: ['PAID', 'SHIPPED', 'DELIVERED'] },
-      })
-        .select({ _id: 1 })
-        .lean()
-      if (!purchase) {
-        return handleCORS(
-          NextResponse.json(
-            { error: 'يجب شراء المنتج أولاً لتتمكن من تقييمه' },
-            { status: 403 }
-          )
-        )
-      }
-
-      // Prevent duplicate review
-      const existing = await ProductReview.findOne({
-        productId: id,
-        userId: session.user.id,
-      }).lean()
-      if (existing) {
-        return handleCORS(
-          NextResponse.json(
-            { error: 'لقد قمت بتقييم هذا المنتج مسبقاً' },
-            { status: 409 }
-          )
-        )
-      }
-
-      const review = await ProductReview.create({
-        productId: id,
-        userId: session.user.id,
-        orderId: purchase._id,
-        rating,
-        comment,
-      })
-
-      // Recompute product rating + reviewCount
-      const agg = await ProductReview.aggregate([
-        { $match: { productId: id } },
-        { $group: { _id: null, avg: { $avg: '$rating' }, count: { $sum: 1 } } },
-      ])
-      const avg = agg[0]?.avg || 0
-      const count = agg[0]?.count || 0
-      product.rating = Math.round(avg * 100) / 100
-      product.reviewCount = count
-      product.updatedAt = new Date()
-      await product.save()
-
-      return handleCORS(
-        NextResponse.json({
-          success: true,
-          review: {
-            id: review._id,
-            rating: review.rating,
-            comment: review.comment,
-            createdAt: review.createdAt,
-          },
-          product: {
-            rating: product.rating,
-            reviewCount: product.reviewCount,
-          },
-        })
-      )
+      return handleReviewCreate(request, productReviewsMatch[1])
     }
-
-    // ---- GET /products/:id/my-review-status (is current user eligible?) ----
     if (productMyReviewStatusMatch && method === 'GET') {
-      await connectDB()
-      const id = productMyReviewStatusMatch[1]
-      const product = await Product.findById(id).select({ _id: 1, vendorId: 1 }).lean()
-      if (!product) {
-        return handleCORS(
-          NextResponse.json({ error: 'المنتج غير موجود' }, { status: 404 })
-        )
-      }
-      
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json(
-            { hasPurchased: false, alreadyReviewed: false, canReview: false, loggedIn: false }
-          )
-        )
-      }
-      const isOwnProduct = String(product.vendorId) === String(session.user.id)
-      const purchase = await Order.findOne({
-        buyerId: session.user.id,
-        'items.productId': id,
-        status: { $in: ['PAID', 'SHIPPED', 'DELIVERED'] },
-      })
-        .select({ _id: 1 })
-        .lean()
-      const existing = await ProductReview.findOne({
-        productId: id,
-        userId: session.user.id,
-      })
-        .select({ _id: 1, rating: 1, comment: 1, createdAt: 1 })
-        .lean()
-      return handleCORS(
-        NextResponse.json({
-          loggedIn: true,
-          isOwnProduct,
-          hasPurchased: !!purchase,
-          alreadyReviewed: !!existing,
-          canReview: !!purchase && !existing && !isOwnProduct,
-          myReview: existing
-            ? {
-                id: existing._id,
-                rating: existing.rating,
-                comment: existing.comment,
-                createdAt: existing.createdAt,
-              }
-            : null,
-        })
-      )
+      return handleMyReviewStatus(productMyReviewStatusMatch[1])
     }
 
-    /* ============================================================
-       MARKETPLACE — WISHLIST (FAVORITES)
-       ============================================================ */
-    // ---- GET /wishlist (my wishlist with product details) ----
+    // ---- Wishlist (see /lib/api/wishlist.js) ----
     if (route === '/wishlist' && method === 'GET') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      await connectDB()
-      const user = await User.findById(session.user.id).select({ wishlist: 1 }).lean()
-      const ids = user?.wishlist || []
-      if (ids.length === 0) {
-        return handleCORS(NextResponse.json({ items: [], count: 0 }))
-      }
-      const products = await Product.find({ _id: { $in: ids }, isActive: true }).lean()
-      // Attach vendor slug/name for nice UI
-      const vendorIds = [...new Set(products.map((p) => p.vendorId))]
-      const vendors = await User.find({ _id: { $in: vendorIds } })
-        .select({ _id: 1, name: 1, vendorProfile: 1 })
-        .lean()
-      const vMap = Object.fromEntries(vendors.map((v) => [v._id, v]))
-      const items = products.map((p) => ({
-        id: p._id,
-        ...p,
-        _id: undefined,
-        vendorName: vMap[p.vendorId]?.vendorProfile?.businessName || vMap[p.vendorId]?.name || 'تاجر',
-        vendorSlug: vMap[p.vendorId]?.vendorProfile?.slug || '',
-      }))
-      // Preserve order of wishlist ids (newest first as added)
-      const orderMap = Object.fromEntries(ids.map((id, i) => [id, i]))
-      items.sort((a, b) => (orderMap[a.id] ?? 0) - (orderMap[b.id] ?? 0))
-      return handleCORS(
-        NextResponse.json({ items, count: items.length })
-      )
+      return handleWishlistList()
     }
-
-    // ---- POST /wishlist/:productId (add to wishlist, idempotent) ----
     if (wishlistItemMatch && method === 'POST') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      await connectDB()
-      const productId = wishlistItemMatch[1]
-      const product = await Product.findById(productId).select({ _id: 1, isActive: 1 }).lean()
-      if (!product) {
-        return handleCORS(
-          NextResponse.json({ error: 'المنتج غير موجود' }, { status: 404 })
-        )
-      }
-      const user = await User.findById(session.user.id)
-      if (!user) {
-        return handleCORS(
-          NextResponse.json({ error: 'المستخدم غير موجود' }, { status: 404 })
-        )
-      }
-      const list = Array.isArray(user.wishlist) ? user.wishlist : []
-      if (list.includes(productId)) {
-        return handleCORS(
-          NextResponse.json({ success: true, alreadyInWishlist: true, count: list.length })
-        )
-      }
-      // Prepend so newest is first
-      user.wishlist = [productId, ...list].slice(0, 500) // safety cap
-      await user.save()
-      return handleCORS(
-        NextResponse.json({ success: true, count: user.wishlist.length })
-      )
+      return handleWishlistAdd(wishlistItemMatch[1])
     }
-
-    // ---- DELETE /wishlist/:productId (remove from wishlist) ----
     if (wishlistItemMatch && method === 'DELETE') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      await connectDB()
-      const productId = wishlistItemMatch[1]
-      const user = await User.findById(session.user.id)
-      if (!user) {
-        return handleCORS(
-          NextResponse.json({ error: 'المستخدم غير موجود' }, { status: 404 })
-        )
-      }
-      const list = Array.isArray(user.wishlist) ? user.wishlist : []
-      const next = list.filter((id) => id !== productId)
-      if (next.length === list.length) {
-        return handleCORS(
-          NextResponse.json({ success: true, notFound: true, count: list.length })
-        )
-      }
-      user.wishlist = next
-      await user.save()
-      return handleCORS(
-        NextResponse.json({ success: true, count: next.length })
-      )
+      return handleWishlistRemove(wishlistItemMatch[1])
     }
 
 
@@ -3379,227 +3080,21 @@ async function handleRoute(request, { params }) {
     }
 
 
-    /* ============================================================
-       MARKETPLACE — COUPONS (discount codes)
-       ============================================================ */
-    // ---- POST /coupons/validate (auth) - preview coupon discount ----
+    // ---- Coupons + Admin CRUD (see /lib/api/coupons.js) ----
     if (route === '/coupons/validate' && method === 'POST') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ valid: false, error: 'يجب تسجيل الدخول' }, { status: 401 })
-        )
-      }
-      await connectDB()
-      const body = await request.json().catch(() => ({}))
-      const rawCode = body?.code
-      const subtotal = Number(body?.subtotal || 0)
-      if (!rawCode || subtotal <= 0) {
-        return handleCORS(
-          NextResponse.json({ valid: false, error: 'السلة فارغة' }, { status: 400 })
-        )
-      }
-      // Apply tier discount first (same as order creation) to get "baseAmount"
-      const buyer = await User.findById(session.user.id).select({ membershipTier: 1 }).lean()
-      const tier = buyer?.membershipTier || 'FREE'
-      const tierPct = TIER_DISCOUNT_PERCENT[tier] || 0
-      const tierDiscount = +(subtotal * (tierPct / 100)).toFixed(3)
-      const baseAmount = +(subtotal - tierDiscount).toFixed(3)
-      const r = await validateCouponForUser(rawCode, session.user.id, baseAmount)
-      if (!r.ok) {
-        return handleCORS(
-          NextResponse.json({ valid: false, error: r.error })
-        )
-      }
-      const finalTotal = Math.max(0, +(baseAmount - r.discountAmount).toFixed(3))
-      return handleCORS(
-        NextResponse.json({
-          valid: true,
-          code: r.coupon.code,
-          type: r.coupon.type,
-          value: r.coupon.value,
-          description: r.coupon.description || '',
-          tierDiscountPercent: tierPct,
-          tierDiscountAmount: tierDiscount,
-          baseAmount,
-          couponDiscountAmount: r.discountAmount,
-          finalTotal,
-        })
-      )
+      return handleCouponValidate(request)
     }
-
-    // ---- GET /admin/coupons (ADMIN only) ----
     if (route === '/admin/coupons' && method === 'GET') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      if (session.user.role !== 'ADMIN') {
-        return handleCORS(
-          NextResponse.json({ error: 'صلاحيات مسؤول مطلوبة' }, { status: 403 })
-        )
-      }
-      await connectDB()
-      const list = await Coupon.find({}).sort({ createdAt: -1 }).lean()
-      return handleCORS(
-        NextResponse.json({
-          coupons: list.map((c) => ({
-            id: c._id,
-            code: c.code,
-            description: c.description,
-            type: c.type,
-            value: c.value,
-            minSubtotal: c.minSubtotal,
-            maxDiscount: c.maxDiscount,
-            startsAt: c.startsAt,
-            expiresAt: c.expiresAt,
-            usageLimit: c.usageLimit,
-            usedCount: c.usedCount,
-            perUserLimit: c.perUserLimit,
-            active: c.active,
-            createdAt: c.createdAt,
-          })),
-        })
-      )
+      return handleAdminCouponsList()
     }
-
-    // ---- POST /admin/coupons (ADMIN create) ----
     if (route === '/admin/coupons' && method === 'POST') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      if (session.user.role !== 'ADMIN') {
-        return handleCORS(
-          NextResponse.json({ error: 'صلاحيات مسؤول مطلوبة' }, { status: 403 })
-        )
-      }
-      await connectDB()
-      const body = await request.json().catch(() => ({}))
-      const code = String(body?.code || '').trim().toUpperCase()
-      if (!/^[A-Z0-9_-]{3,32}$/.test(code)) {
-        return handleCORS(
-          NextResponse.json(
-            { error: 'الرمز يجب أن يكون بين 3 و 32 من الأحرف والأرقام' },
-            { status: 400 }
-          )
-        )
-      }
-      const type = body?.type === 'FIXED' ? 'FIXED' : 'PERCENT'
-      const value = Number(body?.value)
-      if (!(value > 0)) {
-        return handleCORS(
-          NextResponse.json({ error: 'قيمة الخصم غير صحيحة' }, { status: 400 })
-        )
-      }
-      if (type === 'PERCENT' && value > 100) {
-        return handleCORS(
-          NextResponse.json(
-            { error: 'نسبة الخصم يجب ألا تتجاوز 100%' },
-            { status: 400 }
-          )
-        )
-      }
-      const existing = await Coupon.findOne({ code }).lean()
-      if (existing) {
-        return handleCORS(
-          NextResponse.json({ error: 'رمز الكوبون مستخدم مسبقاً' }, { status: 409 })
-        )
-      }
-      const coupon = await Coupon.create({
-        code,
-        description: String(body?.description || '').slice(0, 200),
-        type,
-        value,
-        minSubtotal: Math.max(0, Number(body?.minSubtotal || 0)),
-        maxDiscount: Math.max(0, Number(body?.maxDiscount || 0)),
-        startsAt: body?.startsAt ? new Date(body.startsAt) : new Date(),
-        expiresAt: body?.expiresAt ? new Date(body.expiresAt) : null,
-        usageLimit: Math.max(0, Number(body?.usageLimit || 0)),
-        perUserLimit: Math.max(0, Number(body?.perUserLimit || 1)),
-        active: body?.active !== false,
-        createdBy: session.user.id,
-      })
-      return handleCORS(
-        NextResponse.json({ success: true, coupon: { id: coupon._id, code: coupon.code } })
-      )
+      return handleAdminCouponCreate(request)
     }
-
-    // ---- PATCH /admin/coupons/:id (ADMIN toggle active / edit) ----
     if (adminCouponActionMatch && method === 'PATCH') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      if (session.user.role !== 'ADMIN') {
-        return handleCORS(
-          NextResponse.json({ error: 'صلاحيات مسؤول مطلوبة' }, { status: 403 })
-        )
-      }
-      await connectDB()
-      const id = adminCouponActionMatch[1]
-      const coupon = await Coupon.findById(id)
-      if (!coupon) {
-        return handleCORS(
-          NextResponse.json({ error: 'الكوبون غير موجود' }, { status: 404 })
-        )
-      }
-      const body = await request.json().catch(() => ({}))
-      if (typeof body?.active === 'boolean') coupon.active = body.active
-      if (typeof body?.description === 'string') {
-        coupon.description = body.description.slice(0, 200)
-      }
-      if (body?.expiresAt !== undefined) {
-        coupon.expiresAt = body.expiresAt ? new Date(body.expiresAt) : null
-      }
-      if (body?.usageLimit !== undefined) {
-        coupon.usageLimit = Math.max(0, Number(body.usageLimit) || 0)
-      }
-      if (body?.perUserLimit !== undefined) {
-        coupon.perUserLimit = Math.max(0, Number(body.perUserLimit) || 0)
-      }
-      coupon.updatedAt = new Date()
-      await coupon.save()
-      return handleCORS(NextResponse.json({ success: true }))
+      return handleAdminCouponUpdate(request, adminCouponActionMatch[1])
     }
-
-    // ---- DELETE /admin/coupons/:id (ADMIN delete, only if unused) ----
     if (adminCouponActionMatch && method === 'DELETE') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      if (session.user.role !== 'ADMIN') {
-        return handleCORS(
-          NextResponse.json({ error: 'صلاحيات مسؤول مطلوبة' }, { status: 403 })
-        )
-      }
-      await connectDB()
-      const id = adminCouponActionMatch[1]
-      const coupon = await Coupon.findById(id)
-      if (!coupon) {
-        return handleCORS(
-          NextResponse.json({ error: 'الكوبون غير موجود' }, { status: 404 })
-        )
-      }
-      if (coupon.usedCount > 0) {
-        return handleCORS(
-          NextResponse.json(
-            { error: 'لا يمكن حذف كوبون تم استخدامه — يمكنك تعطيله بدلاً من ذلك' },
-            { status: 400 }
-          )
-        )
-      }
-      await Coupon.deleteOne({ _id: id })
-      return handleCORS(NextResponse.json({ success: true }))
+      return handleAdminCouponDelete(adminCouponActionMatch[1])
     }
 
 
@@ -3701,7 +3196,10 @@ async function handleRoute(request, { params }) {
         couponDiscount = cv.discountAmount
         couponRef = cv.coupon
       }
-      const totalPaid = Math.max(0, +(afterTier - couponDiscount).toFixed(3))
+      const afterCoupon = Math.max(0, +(afterTier - couponDiscount).toFixed(3))
+      // ----- Shipping fee (based on governorate) -----
+      const shippingFee = computeShippingFee(shipping.governorate, afterCoupon)
+      const totalPaid = Math.max(0, +(afterCoupon + shippingFee).toFixed(3))
 
       // Decrement stock + salesCount atomically per product
       for (const it of resolvedItems) {
@@ -3720,6 +3218,7 @@ async function handleRoute(request, { params }) {
         tierAtPurchase: tier,
         couponCode: couponRef ? couponRef.code : '',
         couponDiscount,
+        shippingFee,
         commissionPercent: COMMISSION_PERCENT,
         commissionAmount,
         totalPaid,

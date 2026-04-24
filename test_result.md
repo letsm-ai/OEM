@@ -2735,6 +2735,77 @@ agent_communication:
           - Image uploads: banner (1200x400 recommended) + logo (square). Client-side compressed to data URL.
           - Save button calls PUT /api/vendor/profile with all fields. Shows success/error toast.
           - Shows live preview link: {origin}/store/vendor/{slug}.
+  - task: "Refactor — extract marketplace Phase 5 handlers into /lib/api/ modules"
+    implemented: true
+    working: true
+    file: "/app/lib/api/_helpers.js, /app/lib/api/shipping.js, /app/lib/api/wishlist.js, /app/lib/api/reviews.js, /app/lib/api/coupons.js, /app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Structural refactor to reduce route.js complexity as marketplace grows.
+          
+          Created new /app/lib/api/ directory with modular handler files:
+          - _helpers.js: Shared json/ok/err/requireAuth/requireRole/handleCORS utilities.
+          - shipping.js: handleShippingQuote.
+          - wishlist.js: handleWishlistList / Add / Remove.
+          - reviews.js: handleReviewsList / ReviewCreate / MyReviewStatus.
+          - coupons.js: validateCouponForUser (shared with order handler) + handleCouponValidate + handleAdminCouponsList/Create/Update/Delete.
+          
+          Each handler returns NextResponse directly so the main route.js catch-all simply delegates with a single-line call per matcher.
+          
+          Route.js reductions:
+          - Before refactor: 4019 lines
+          - After refactor: 3538 lines  (-481 lines, ~12% reduction)
+          
+          Verified after refactor:
+          • Build compiles clean (no lint errors).
+          • GET /api/ → 200.
+          • GET /api/products, GET /api/vendors → still work.
+          • POST /api/shipping/quote (all governorates + free threshold) → all pass.
+          • GET /api/wishlist unauth → 401 'غير مصرح'.
+          • Full test script /tmp/test_wishlist_coupons.py → 37/38 pass (1 test needed updating to account for shipping fee now applied to totalPaid, which is the correct behavior — not a regression).
+          
+          Pattern established for future extractions of auth, directory, expert, and product handlers.
+
+
+  - task: "Dynamic Shipping Fees — POST /api/shipping/quote + shipping applied at POST /api/orders"
+    implemented: true
+    working: true
+    file: "/app/lib/store.js, /app/lib/models.js, /app/app/api/[[...path]]/route.js, /app/app/store/checkout/_CheckoutClient.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          NEW Phase 5 feature: Dynamic shipping fees per Omani governorate + free shipping threshold.
+          
+          Config (/app/lib/store.js):
+          - SHIPPING_FEES_OMR: MUSCAT=1.5, BATINAH=2.0, DAKHILIYAH=2.5, DHAHIRAH=2.5, SHARQIYAH=3.0, BURAIMI=3.0, DHOFAR=5.0, MUSANDAM=6.0, WUSTA=6.0.
+          - DEFAULT_SHIPPING_FEE=3.0 (for unknown governorate).
+          - FREE_SHIPPING_THRESHOLD=30 OMR — when afterCoupon amount ≥ 30, shipping is FREE.
+          - computeShippingFee(governorate, amount) helper.
+          
+          Schema: Added `shippingFee: Number` to OrderSchema.
+          
+          Endpoints:
+          1) POST /api/shipping/quote (public, no auth) — body {governorate, amount}. Returns {governorate, fee, isFree, freeThreshold, freeThresholdReached, allRates}.
+          2) POST /api/orders (updated): Now computes shipping fee server-side based on shipping address governorate and afterCoupon amount. Adds it to totalPaid. Persists shippingFee on Order.
+          
+          Verified manually with curl: MUSCAT+10→1.5, DHOFAR+10→5, MUSCAT+50→0 (free), UNKNOWN→3.
+          
+          UI (Checkout page):
+          - New "الشحن" row in order summary (green "مجاني 🎉" when free, else price).
+          - Live update when governorate dropdown changes.
+          - Free-shipping progress hint: amber bar showing "أضف X ر.ع للحصول على شحن مجاني!".
+          - Submit button shows new final total including shipping.
+
+
 
 agent_communication:
   - agent: "main"
