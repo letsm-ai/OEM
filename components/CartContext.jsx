@@ -53,6 +53,8 @@ export function CartProvider({ children }) {
             image: it.image || '',
             unitPrice: it.unitPrice,
             quantity: it.quantity,
+            variantId: it.variantId || '',
+            variantName: it.variantName || '',
             stock: 999, // will be re-validated at checkout
           })))
         } else if (items.length > 0) {
@@ -77,6 +79,8 @@ export function CartProvider({ children }) {
             nameAr: it.nameAr,
             unitPrice: it.unitPrice,
             image: it.image || '',
+            variantId: it.variantId || '',
+            variantName: it.variantName || '',
           })),
         }),
       })
@@ -93,17 +97,24 @@ export function CartProvider({ children }) {
     return () => clearTimeout(syncTimeout.current)
   }, [items, hydrated, session?.user?.id, syncToServer])
 
-  const addItem = useCallback((product, quantity = 1) => {
+  const addItem = useCallback((product, quantity = 1, variant = null) => {
     const qty = Math.max(1, parseInt(quantity, 10) || 1)
+    const variantId = variant?.id || ''
+    const variantName = variant?.name || ''
+    const effectivePrice = variant && variant.price > 0 ? variant.price : product.price
+    const effectiveStock = variant ? (variant.stock ?? 0) : (product.stock ?? 0)
+    const effectiveImage = variant?.image || (product.images && product.images[0]) || ''
     setItems((list) => {
-      const idx = list.findIndex((x) => x.productId === product.id)
+      const idx = list.findIndex(
+        (x) => x.productId === product.id && (x.variantId || '') === variantId
+      )
       if (idx >= 0) {
         const next = [...list]
         next[idx] = {
           ...next[idx],
           quantity: Math.min(
             (next[idx].quantity || 1) + qty,
-            product.stock ?? 999
+            effectiveStock || 999
           ),
         }
         return next
@@ -113,29 +124,35 @@ export function CartProvider({ children }) {
         {
           productId: product.id,
           nameAr: product.nameAr,
-          image: (product.images && product.images[0]) || '',
-          unitPrice: product.price,
+          image: effectiveImage,
+          unitPrice: effectivePrice,
           vendorName: product.vendorName || '',
-          stock: product.stock || 0,
-          quantity: Math.min(qty, product.stock ?? 999),
+          stock: effectiveStock || 0,
+          quantity: Math.min(qty, effectiveStock || 999),
+          variantId,
+          variantName,
         },
       ]
     })
   }, [])
 
-  const updateQuantity = useCallback((productId, quantity) => {
+  const updateQuantity = useCallback((productId, quantity, variantId = '') => {
     const qty = Math.max(1, parseInt(quantity, 10) || 1)
     setItems((list) =>
       list.map((x) =>
-        x.productId === productId
+        x.productId === productId && (x.variantId || '') === (variantId || '')
           ? { ...x, quantity: Math.min(qty, x.stock ?? 999) }
           : x
       )
     )
   }, [])
 
-  const removeItem = useCallback((productId) => {
-    setItems((list) => list.filter((x) => x.productId !== productId))
+  const removeItem = useCallback((productId, variantId = '') => {
+    setItems((list) =>
+      list.filter(
+        (x) => !(x.productId === productId && (x.variantId || '') === (variantId || ''))
+      )
+    )
   }, [])
 
   const clear = useCallback(() => {

@@ -111,7 +111,11 @@ export default function CheckoutClient({ tier, user, isLoggedIn = true }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        items: items.map((it) => ({ productId: it.productId, quantity: it.quantity })),
+        items: items.map((it) => ({
+          productId: it.productId,
+          quantity: it.quantity,
+          variantId: it.variantId || undefined,
+        })),
         shippingAddress: addr,
         couponCode: coupon ? coupon.code : undefined,
         paymentMethod: paymentMethod === 'COD' ? 'COD' : undefined,
@@ -248,8 +252,11 @@ export default function CheckoutClient({ tier, user, isLoggedIn = true }) {
             <h2 className="mb-3 text-sm font-bold text-[#1B3A6B]">ملخص الطلب ({items.length} منتج)</h2>
             <ul className="mb-3 max-h-40 space-y-2 overflow-y-auto text-xs">
               {items.map((it) => (
-                <li key={it.productId} className="flex items-center justify-between gap-2">
-                  <span className="line-clamp-1">{it.nameAr} × {it.quantity}</span>
+                <li key={`${it.productId}__${it.variantId || ''}`} className="flex items-center justify-between gap-2">
+                  <span className="line-clamp-1">
+                    {it.nameAr}
+                    {it.variantName ? ` (${it.variantName})` : ''} × {it.quantity}
+                  </span>
                   <span className="flex-shrink-0 font-semibold text-[#1B3A6B]">
                     {formatOMR(it.unitPrice * it.quantity)}
                   </span>

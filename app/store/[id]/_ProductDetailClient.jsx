@@ -43,8 +43,28 @@ export default function ProductDetailClient({ product }) {
   const [qty, setQty] = useState(1)
   const [selImg, setSelImg] = useState(0)
   const [added, setAdded] = useState(false)
-  const outOfStock = (product.stock || 0) <= 0
+
+  // Variants (خيارات المنتج)
+  const hasVariants = !!product.hasVariants && Array.isArray(product.variants) && product.variants.length > 0
+  const [selectedVariantId, setSelectedVariantId] = useState(
+    hasVariants ? product.variants[0].id : ''
+  )
+  const selectedVariant = hasVariants
+    ? (product.variants.find((v) => v.id === selectedVariantId) || product.variants[0])
+    : null
+
+  const effectivePrice = selectedVariant && selectedVariant.price > 0
+    ? selectedVariant.price
+    : product.price
+  const effectiveStock = hasVariants ? (selectedVariant?.stock || 0) : (product.stock || 0)
+  const outOfStock = effectiveStock <= 0
+
   const isFav = hasFav(product.id)
+
+  // Reset qty when variant changes (prevent out-of-range qty)
+  useEffect(() => {
+    if (qty > effectiveStock && effectiveStock > 0) setQty(1)
+  }, [selectedVariantId]) // eslint-disable-line
 
   const onToggleFav = async () => {
     const r = await toggleFav(product.id)
@@ -93,12 +113,12 @@ export default function ProductDetailClient({ product }) {
   const imgs = product.images && product.images.length > 0 ? product.images : []
 
   const handleAdd = () => {
-    addItem(product, qty)
+    addItem(product, qty, selectedVariant)
     setAdded(true)
     setTimeout(() => setAdded(false), 1500)
   }
   const buyNow = () => {
-    addItem(product, qty)
+    addItem(product, qty, selectedVariant)
     router.push('/store/cart')
   }
 
@@ -210,7 +230,7 @@ export default function ProductDetailClient({ product }) {
 
             <div className="mt-4 rounded-xl bg-gradient-to-bl from-[#1B3A6B] to-[#152c52] p-4 text-white">
               <div className="text-3xl font-extrabold">
-                {formatOMR(product.price)}
+                {formatOMR(effectivePrice)}
                 <span className="ms-2 text-sm font-medium opacity-80">ريال عماني</span>
               </div>
               <div className="mt-1 text-[11px] opacity-80">خصم العضوية يُطبّق عند إتمام الطلب</div>
@@ -225,12 +245,55 @@ export default function ProductDetailClient({ product }) {
               </div>
             )}
 
+            {/* Variants selector (خيارات المنتج) */}
+            {hasVariants && (
+              <div className="mt-4">
+                <h2 className="mb-1.5 text-sm font-bold text-[#1B3A6B]">اختر الخيار</h2>
+                <div className="flex flex-wrap gap-2">
+                  {product.variants.map((v) => {
+                    const active = v.id === selectedVariantId
+                    const vOut = (v.stock || 0) <= 0
+                    return (
+                      <button
+                        key={v.id}
+                        type="button"
+                        disabled={vOut}
+                        onClick={() => setSelectedVariantId(v.id)}
+                        className={`group inline-flex min-w-[100px] flex-col items-center rounded-xl border-2 px-3 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                          active
+                            ? 'border-[#C9A84C] bg-[#C9A84C]/10 text-[#1B3A6B]'
+                            : 'border-gray-200 bg-white text-gray-700 hover:border-[#1B3A6B]'
+                        }`}
+                      >
+                        <span className="text-sm font-bold">{v.name}</span>
+                        {v.price > 0 && v.price !== product.price && (
+                          <span className="mt-0.5 text-xs font-medium text-[#C9A84C]">{formatOMR(v.price)} ر.ع</span>
+                        )}
+                        {v.sku && (
+                          <span dir="ltr" className="mt-0.5 text-[10px] text-gray-400">SKU: {v.sku}</span>
+                        )}
+                        {vOut && (
+                          <span className="mt-0.5 text-[10px] font-bold text-red-500">نفد</span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
             <div className="mt-4 flex items-center gap-2 text-sm">
               <Package className="h-4 w-4 text-gray-500" />
               {outOfStock ? (
                 <span className="font-semibold text-red-600">نفد المخزون</span>
               ) : (
-                <span className="text-gray-700">متوفر: <b>{product.stock}</b> قطعة</span>
+                <span className="text-gray-700">
+                  {hasVariants && selectedVariant ? (
+                    <>متوفر من "{selectedVariant.name}": <b>{effectiveStock}</b> قطعة</>
+                  ) : (
+                    <>متوفر: <b>{effectiveStock}</b> قطعة</>
+                  )}
+                </span>
               )}
             </div>
 
@@ -246,7 +309,7 @@ export default function ProductDetailClient({ product }) {
                   {qty}
                 </div>
                 <button
-                  onClick={() => setQty((n) => Math.min(product.stock || 99, n + 1))}
+                  onClick={() => setQty((n) => Math.min(effectiveStock || 99, n + 1))}
                   className="flex h-10 w-10 items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50"
                 >
                   <Plus className="h-4 w-4" />

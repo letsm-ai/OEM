@@ -44,7 +44,7 @@ export default function CartClient({ tier, authed }) {
           <div className="space-y-3">
             {items.map((it) => (
               <div
-                key={it.productId}
+                key={`${it.productId}__${it.variantId || ''}`}
                 className="flex items-center gap-3 rounded-xl border border-gray-200 bg-white p-3"
               >
                 <div className="h-20 w-20 flex-shrink-0 overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
@@ -61,6 +61,11 @@ export default function CartClient({ tier, authed }) {
                   >
                     {it.nameAr}
                   </Link>
+                  {it.variantName && (
+                    <div className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-[#C9A84C]/15 px-2 py-0.5 text-[11px] font-semibold text-[#1B3A6B]">
+                      {it.variantName}
+                    </div>
+                  )}
                   {it.vendorName && (
                     <div className="truncate text-[11px] text-gray-500">{it.vendorName}</div>
                   )}
@@ -70,7 +75,7 @@ export default function CartClient({ tier, authed }) {
                 </div>
                 <div className="flex items-center gap-1">
                   <button
-                    onClick={() => updateQuantity(it.productId, it.quantity - 1)}
+                    onClick={() => updateQuantity(it.productId, it.quantity - 1, it.variantId)}
                     disabled={it.quantity <= 1}
                     className="flex h-8 w-8 items-center justify-center rounded-md border border-gray-300 disabled:opacity-40"
                   >
@@ -78,7 +83,7 @@ export default function CartClient({ tier, authed }) {
                   </button>
                   <div className="w-10 text-center text-sm font-bold">{it.quantity}</div>
                   <button
-                    onClick={() => updateQuantity(it.productId, it.quantity + 1)}
+                    onClick={() => updateQuantity(it.productId, it.quantity + 1, it.variantId)}
                     disabled={it.quantity >= (it.stock || 999)}
                     className="flex h-8 w-8 items-center justify-center rounded-md border border-gray-300 disabled:opacity-40"
                   >
@@ -86,7 +91,7 @@ export default function CartClient({ tier, authed }) {
                   </button>
                 </div>
                 <button
-                  onClick={() => removeItem(it.productId)}
+                  onClick={() => removeItem(it.productId, it.variantId)}
                   className="ml-2 rounded-md p-2 text-red-500 hover:bg-red-50"
                   title="حذف"
                 >

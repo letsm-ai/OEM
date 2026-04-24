@@ -194,9 +194,34 @@ function ProductFormModal({ product, onClose, onSaved }) {
     category: product?.category || 'OTHER',
     stock: product?.stock ?? 0,
     images: product?.images || [],
+    hasVariants: !!product?.hasVariants,
+    variants: Array.isArray(product?.variants) ? product.variants : [],
   })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+
+  const addVariant = () => {
+    setForm((f) => ({
+      ...f,
+      hasVariants: true,
+      variants: [
+        ...(f.variants || []),
+        { name: '', sku: '', price: f.price || 0, stock: 0, image: '', attrs: {} },
+      ],
+    }))
+  }
+  const updateVariant = (idx, patch) => {
+    setForm((f) => ({
+      ...f,
+      variants: f.variants.map((v, i) => (i === idx ? { ...v, ...patch } : v)),
+    }))
+  }
+  const removeVariant = (idx) => {
+    setForm((f) => {
+      const next = f.variants.filter((_, i) => i !== idx)
+      return { ...f, variants: next, hasVariants: next.length > 0 }
+    })
+  }
 
   const onFile = async (e) => {
     const files = Array.from(e.target.files || []).slice(0, 5 - form.images.length)
@@ -235,11 +260,33 @@ function ProductFormModal({ product, onClose, onSaved }) {
     if (!form.nameAr.trim()) return setError('اسم المنتج مطلوب')
     const price = Number(form.price)
     if (!Number.isFinite(price) || price < 0) return setError('السعر غير صحيح')
+    // Client-side variant validation
+    if (form.hasVariants && form.variants.length > 0) {
+      for (let i = 0; i < form.variants.length; i++) {
+        const v = form.variants[i]
+        if (!String(v.name || '').trim()) return setError(`اسم الخيار رقم ${i + 1} مطلوب`)
+        const vp = Number(v.price)
+        if (!Number.isFinite(vp) || vp < 0) return setError(`سعر الخيار "${v.name}" غير صحيح`)
+      }
+    }
     setLoading(true)
+    const payload = {
+      ...form,
+      price,
+      variants: form.hasVariants ? form.variants.map((v) => ({
+        id: v.id,
+        name: String(v.name || '').trim(),
+        sku: String(v.sku || '').trim(),
+        price: Number(v.price) || 0,
+        stock: parseInt(v.stock, 10) || 0,
+        image: v.image || '',
+        attrs: v.attrs || {},
+      })) : [],
+    }
     const res = await fetch(product ? `/api/products/${product.id}` : '/api/products', {
       method: product ? 'PUT' : 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...form, price }),
+      body: JSON.stringify(payload),
     })
     const data = await res.json().catch(() => ({}))
     setLoading(false)
@@ -295,6 +342,74 @@ function ProductFormModal({ product, onClose, onSaved }) {
                 </label>
               )}
             </div>
+          </div>
+          {/* Variants Editor (خيارات المنتج) */}
+          <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <div>
+                <div className="text-sm font-bold text-[#1B3A6B]">خيارات المنتج (Variants)</div>
+                <div className="text-[11px] text-gray-500">
+                  أضف أحجام/ألوان/أنواع مع سعر ومخزون منفصلين لكل خيار (اختياري)
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={addVariant}
+                className="inline-flex items-center gap-1 rounded-lg bg-[#C9A84C] px-3 py-1.5 text-xs font-bold text-[#1B3A6B] hover:bg-[#b89440]"
+              >
+                <Plus className="h-3.5 w-3.5" /> إضافة خيار
+              </button>
+            </div>
+            {form.hasVariants && form.variants.length > 0 ? (
+              <div className="space-y-2">
+                {form.variants.map((v, i) => (
+                  <div key={i} className="grid gap-2 rounded-lg border border-gray-200 bg-white p-2 sm:grid-cols-[1fr_1fr_90px_90px_32px]">
+                    <input
+                      placeholder="اسم الخيار (مثال: صغير / أحمر)"
+                      value={v.name}
+                      onChange={(e) => updateVariant(i, { name: e.target.value })}
+                      className="rounded-md border border-gray-300 px-2 py-1.5 text-xs outline-none focus:border-[#1B3A6B]"
+                    />
+                    <input
+                      placeholder="SKU (اختياري)"
+                      dir="ltr"
+                      value={v.sku}
+                      onChange={(e) => updateVariant(i, { sku: e.target.value })}
+                      className="rounded-md border border-gray-300 px-2 py-1.5 text-xs outline-none focus:border-[#1B3A6B]"
+                    />
+                    <input
+                      type="number" step="0.001" min="0"
+                      placeholder="السعر"
+                      value={v.price}
+                      onChange={(e) => updateVariant(i, { price: e.target.value })}
+                      className="rounded-md border border-gray-300 px-2 py-1.5 text-xs outline-none focus:border-[#1B3A6B]"
+                    />
+                    <input
+                      type="number" min="0"
+                      placeholder="المخزون"
+                      value={v.stock}
+                      onChange={(e) => updateVariant(i, { stock: e.target.value })}
+                      className="rounded-md border border-gray-300 px-2 py-1.5 text-xs outline-none focus:border-[#1B3A6B]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeVariant(i)}
+                      className="flex items-center justify-center rounded-md p-1 text-red-500 hover:bg-red-50"
+                      aria-label="حذف الخيار"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+                <div className="text-[11px] text-gray-500">
+                  ملاحظة: عند وجود خيارات، يصبح "الكمية في المخزون" مجموع مخزون الخيارات تلقائياً.
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-dashed border-gray-300 bg-white p-3 text-center text-xs text-gray-500">
+                لا توجد خيارات. اتركه فارغاً لمنتج بسيط بسعر واحد.
+              </div>
+            )}
           </div>
           {error && (
             <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-800">

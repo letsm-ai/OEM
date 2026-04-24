@@ -47,6 +47,7 @@ import {
 import { SECTOR_KEYS, GOVERNORATE_KEYS } from '@/lib/directory'
 import { CATEGORY_KEYS, COMMISSION_PERCENT, TIER_DISCOUNT_PERCENT, computeShippingFee, FREE_SHIPPING_THRESHOLD, SHIPPING_FEES_OMR, COD_EXTRA_FEE_OMR } from '@/lib/store'
 import { slugify, uniqueVendorSlug } from '@/lib/slug'
+import { sanitizeVariants, findVariant } from '@/lib/variants'
 import {
   SPECIALTY_KEYS,
   specialtyLabel,
@@ -135,9 +136,22 @@ async function finalizeOrderPayment(order, buyer) {
     // 1) Decrement stock + increment salesCount
     for (const it of items) {
       try {
-        await Product.findByIdAndUpdate(it.productId, {
-          $inc: { stock: -Math.abs(it.quantity || 1), salesCount: Math.abs(it.quantity || 1) },
-        })
+        if (it.variantId) {
+          await Product.updateOne(
+            { _id: it.productId, 'variants.id': it.variantId },
+            {
+              $inc: {
+                'variants.$.stock': -Math.abs(it.quantity || 1),
+                stock: -Math.abs(it.quantity || 1),
+                salesCount: Math.abs(it.quantity || 1),
+              },
+            }
+          )
+        } else {
+          await Product.findByIdAndUpdate(it.productId, {
+            $inc: { stock: -Math.abs(it.quantity || 1), salesCount: Math.abs(it.quantity || 1) },
+          })
+        }
       } catch (e) {
         console.error('[order] stock decrement failed:', e)
       }
@@ -2982,6 +2996,13 @@ async function handleRoute(request, { params }) {
             .slice(0, 5)
         : []
       const stock = Math.max(0, parseInt(body?.stock || 0, 10) || 0)
+      // Variants (optional)
+      const vres = sanitizeVariants(body?.variants)
+      if (!vres.ok) {
+        return handleCORS(
+          NextResponse.json({ error: vres.error }, { status: 400 })
+        )
+      }
       const product = await Product.create({
         vendorId: session.user.id,
         nameAr,
@@ -2990,7 +3011,10 @@ async function handleRoute(request, { params }) {
         price: +price.toFixed(3),
         category,
         images,
-        stock,
+        // If variants exist, stock is the sum across variants; otherwise use the plain stock input.
+        stock: vres.hasVariants ? vres.aggregatedStock : stock,
+        hasVariants: vres.hasVariants,
+        variants: vres.variants,
         isActive: true,
         salesCount: 0,
         createdAt: new Date(),
@@ -3062,6 +3086,21 @@ async function handleRoute(request, { params }) {
         product.stock = Math.max(0, parseInt(body.stock, 10) || 0)
       }
       if (body.isActive !== undefined) product.isActive = !!body.isActive
+      // Variants (if provided, replace whole array)
+      if (body.variants !== undefined) {
+        const vres = sanitizeVariants(body.variants)
+        if (!vres.ok) {
+          return handleCORS(
+            NextResponse.json({ error: vres.error }, { status: 400 })
+          )
+        }
+        product.variants = vres.variants
+        product.hasVariants = vres.hasVariants
+        if (vres.hasVariants) {
+          // when variants exist, overall stock becomes the sum
+          product.stock = vres.aggregatedStock
+        }
+      }
       if (Array.isArray(body.images)) {
         product.images = body.images
           .filter(
@@ -3539,6 +3578,8 @@ async function handleRoute(request, { params }) {
       const byId = Object.fromEntries(products.map((p) => [p._id, p]))
 
       const resolvedItems = []
+      // Track per-variant deductions so we can decrement atomically.
+      const variantDeductions = [] // { productId, variantId, qty }
       for (const it of cartItems) {
         const qty = Math.max(1, parseInt(it.quantity, 10) || 1)
         const p = byId[String(it.productId)]
@@ -3550,6 +3591,52 @@ async function handleRoute(request, { params }) {
             )
           )
         }
+
+        // Variant logic
+        if (p.hasVariants && p.variants?.length > 0) {
+          const vid = String(it.variantId || '')
+          if (!vid) {
+            return handleCORS(
+              NextResponse.json(
+                { error: `يرجى اختيار خيار (متغير) للمنتج "${p.nameAr}"` },
+                { status: 400 }
+              )
+            )
+          }
+          const variant = findVariant(p, vid)
+          if (!variant) {
+            return handleCORS(
+              NextResponse.json(
+                { error: `الخيار المحدد للمنتج "${p.nameAr}" غير موجود` },
+                { status: 400 }
+              )
+            )
+          }
+          if (variant.stock < qty) {
+            return handleCORS(
+              NextResponse.json(
+                { error: `الكمية المتاحة من "${p.nameAr} - ${variant.name}" غير كافية` },
+                { status: 409 }
+              )
+            )
+          }
+          const unitPrice = variant.price > 0 ? variant.price : p.price
+          resolvedItems.push({
+            productId: p._id,
+            vendorId: p.vendorId,
+            nameAr: p.nameAr,
+            image: variant.image || (p.images && p.images[0]) || '',
+            unitPrice,
+            quantity: qty,
+            lineSubtotal: +(unitPrice * qty).toFixed(3),
+            variantId: variant.id,
+            variantName: variant.name,
+          })
+          variantDeductions.push({ productId: p._id, variantId: variant.id, qty })
+          continue
+        }
+
+        // No variants — fall back to simple stock
         if (p.stock < qty) {
           return handleCORS(
             NextResponse.json(
@@ -3566,6 +3653,8 @@ async function handleRoute(request, { params }) {
           unitPrice: p.price,
           quantity: qty,
           lineSubtotal: +(p.price * qty).toFixed(3),
+          variantId: '',
+          variantName: '',
         })
       }
 
@@ -3600,12 +3689,27 @@ async function handleRoute(request, { params }) {
       const codFee = isCOD ? COD_EXTRA_FEE_OMR : 0
       const totalPaid = Math.max(0, +(afterCoupon + shippingFee + codFee).toFixed(3))
 
-      // Decrement stock + salesCount atomically per product
+      // Decrement stock + salesCount atomically per product (and per-variant if applicable)
       for (const it of resolvedItems) {
-        await Product.findByIdAndUpdate(it.productId, {
-          $inc: { stock: -it.quantity, salesCount: it.quantity },
-          $set: { updatedAt: new Date() },
-        })
+        if (it.variantId) {
+          // Variant-based stock: decrement the matching variant AND the aggregate stock
+          await Product.updateOne(
+            { _id: it.productId, 'variants.id': it.variantId },
+            {
+              $inc: {
+                'variants.$.stock': -it.quantity,
+                stock: -it.quantity,
+                salesCount: it.quantity,
+              },
+              $set: { updatedAt: new Date() },
+            }
+          )
+        } else {
+          await Product.findByIdAndUpdate(it.productId, {
+            $inc: { stock: -it.quantity, salesCount: it.quantity },
+            $set: { updatedAt: new Date() },
+          })
+        }
       }
 
       const order = await Order.create({
