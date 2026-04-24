@@ -29,6 +29,12 @@ import {
   handleAdminCouponDelete,
 } from '@/lib/api/coupons'
 import {
+  isThawaniEnabled,
+  createCheckoutSession as thawaniCreateSession,
+  getCheckoutSession as thawaniGetSession,
+  verifyWebhookSignature as thawaniVerifySignature,
+} from '@/lib/payments/thawani'
+import {
   TIER_META,
   TIERS,
   oneYearFromNow,
@@ -86,6 +92,124 @@ function handleCORS(response) {
 /**
  * (Coupon validation helper is imported from /lib/api/coupons.js)
  */
+
+/**
+ * Idempotent post-payment side effects: decrement stock, record coupon redemption,
+ * increment coupon.usedCount, send buyer+vendor emails. Safe to call multiple times
+ * (uses `order.paymentProcessedSideEffects` flag).
+ *
+ * @param {any} order — the order Mongoose doc (or plain object with _id)
+ * @param {any} buyer — user doc {_id, name, email}
+ * @returns {Promise<void>}
+ */
+async function finalizeOrderPayment(order, buyer) {
+  try {
+    // Load a fresh copy (atomicity for the flag)
+    const fresh = await Order.findById(order._id)
+    if (!fresh) return
+    if (fresh.paymentProcessedSideEffects) return // already done
+    fresh.status = 'PAID'
+    fresh.paymentStatus = 'PAID'
+    fresh.paidAt = fresh.paidAt || new Date()
+    fresh.paymentProcessedSideEffects = true
+    await fresh.save()
+
+    const items = fresh.items || []
+
+    // 1) Decrement stock + increment salesCount
+    for (const it of items) {
+      try {
+        await Product.findByIdAndUpdate(it.productId, {
+          $inc: { stock: -Math.abs(it.quantity || 1), salesCount: Math.abs(it.quantity || 1) },
+        })
+      } catch (e) {
+        console.error('[order] stock decrement failed:', e)
+      }
+    }
+
+    // 2) Coupon redemption
+    if (fresh.couponCode && fresh.couponDiscount > 0) {
+      try {
+        const couponDoc = await Coupon.findOne({ code: fresh.couponCode })
+        if (couponDoc) {
+          const alreadyRedeemed = await CouponRedemption.findOne({
+            couponId: couponDoc._id,
+            orderId: fresh._id,
+          })
+          if (!alreadyRedeemed) {
+            await CouponRedemption.create({
+              couponId: couponDoc._id,
+              code: couponDoc.code,
+              userId: fresh.buyerId,
+              orderId: fresh._id,
+              amountSaved: fresh.couponDiscount,
+            })
+            await Coupon.findByIdAndUpdate(couponDoc._id, {
+              $inc: { usedCount: 1 },
+              $set: { updatedAt: new Date() },
+            })
+          }
+        }
+      } catch (e) {
+        console.error('[order] coupon redemption failed:', e)
+      }
+    }
+
+    // 3) Emails (fire-and-forget)
+    ;(async () => {
+      try {
+        const orderObj = {
+          id: fresh._id,
+          items,
+          subtotal: fresh.subtotal,
+          discountPercent: fresh.discountPercent,
+          discountAmount: fresh.discountAmount,
+          totalPaid: fresh.totalPaid,
+          shippingAddress: fresh.shippingAddress,
+        }
+        if (buyer?.email) {
+          sendOrderConfirmationEmail({
+            to: buyer.email,
+            name: buyer.name,
+            order: orderObj,
+          }).catch((err) => console.error('[email] buyer confirm failed', err))
+        }
+        const byVendor = items.reduce((acc, it) => {
+          acc[it.vendorId] = acc[it.vendorId] || []
+          acc[it.vendorId].push(it)
+          return acc
+        }, {})
+        const vendorIds = Object.keys(byVendor)
+        const vendors = await User.find({ _id: { $in: vendorIds } })
+          .select({ _id: 1, name: 1, email: 1 })
+          .lean()
+        for (const v of vendors) {
+          const vItems = byVendor[v._id] || []
+          const vSubtotal = vItems.reduce((s, it) => s + it.lineSubtotal, 0)
+          const vCommission = +(vSubtotal * (COMMISSION_PERCENT / 100)).toFixed(3)
+          const vNet = +(vSubtotal - vCommission).toFixed(3)
+          if (v.email) {
+            sendVendorNewOrderEmail({
+              to: v.email,
+              vendorName: v.name,
+              order: orderObj,
+              items: vItems,
+              buyerName: buyer?.name || '',
+              buyerEmail: buyer?.email || '',
+              vendorSubtotal: +vSubtotal.toFixed(3),
+              vendorCommission: vCommission,
+              vendorNet: vNet,
+            }).catch((err) => console.error('[email] vendor notify failed', err))
+          }
+        }
+      } catch (e) {
+        console.error('[order] email block failed', e)
+      }
+    })()
+  } catch (e) {
+    console.error('[finalizeOrderPayment] fatal', e)
+  }
+}
 
 export async function OPTIONS() {
   return handleCORS(new NextResponse(null, { status: 200 }))
@@ -3230,98 +3354,68 @@ async function handleRoute(request, { params }) {
           addressLine: String(shipping.addressLine || '').slice(0, 300),
           notes: String(shipping.notes || '').slice(0, 300),
         },
-        status: 'PAID', // MOCK payment: immediately mark as PAID
-        paymentProvider: 'MOCK',
-        paymentStatus: 'PAID',
-        paymentId: 'mock_' + Date.now(),
+        // Provider branch: THAWANI creates order as PENDING (user will pay next),
+        // MOCK marks it PAID immediately (legacy flow).
+        status: isThawaniEnabled() ? 'PENDING' : 'PAID',
+        paymentProvider: isThawaniEnabled() ? 'THAWANI' : 'MOCK',
+        paymentStatus: isThawaniEnabled() ? 'PENDING' : 'PAID',
+        paymentId: isThawaniEnabled() ? '' : 'mock_' + Date.now(),
         createdAt: new Date(),
         updatedAt: new Date(),
       })
 
-      // Record coupon redemption + bump usage (best-effort; not atomic)
-      if (couponRef && couponDiscount > 0) {
-        try {
-          await CouponRedemption.create({
-            couponId: couponRef._id,
-            code: couponRef.code,
-            userId: session.user.id,
-            orderId: order._id,
-            amountSaved: couponDiscount,
-          })
-          await Coupon.findByIdAndUpdate(couponRef._id, {
-            $inc: { usedCount: 1 },
-            $set: { updatedAt: new Date() },
-          })
-        } catch (e) {
-          console.error('[coupon] redemption record failed', e)
+      // ===== BRANCH: Thawani flow =====
+      if (isThawaniEnabled()) {
+        const origin =
+          request.headers.get('origin') ||
+          process.env.NEXT_PUBLIC_BASE_URL ||
+          'http://localhost:3000'
+        const thawaniRes = await thawaniCreateSession({
+          clientReferenceId: order._id,
+          products: resolvedItems.map((it) => ({
+            name: it.nameAr || 'منتج',
+            quantity: it.quantity,
+            unitAmountOmr: it.unitPrice,
+          })),
+          successUrl: `${origin}/store/checkout/success?session_id={CHECKOUT_SESSION_ID}&order_id=${order._id}`,
+          cancelUrl: `${origin}/store/checkout/cancel?order_id=${order._id}`,
+          metadata: {
+            order_id: order._id,
+            buyer_id: String(session.user.id),
+            buyer_name: buyer?.name || '',
+            buyer_email: buyer?.email || '',
+          },
+        })
+        if (!thawaniRes.ok) {
+          // Mark the order as FAILED so it doesn't linger — user can retry
+          order.status = 'FAILED'
+          order.paymentStatus = 'FAILED'
+          await order.save()
+          return handleCORS(
+            NextResponse.json(
+              { error: thawaniRes.error || 'تعذّر بدء عملية الدفع' },
+              { status: 502 }
+            )
+          )
         }
+        // Persist Thawani session info
+        order.thawaniSessionId = thawaniRes.sessionId
+        order.thawaniInvoice = thawaniRes.invoice || ''
+        order.thawaniRedirectUrl = thawaniRes.redirectUrl
+        await order.save()
+        return handleCORS(
+          NextResponse.json({
+            success: true,
+            pending: true,
+            orderId: order._id,
+            sessionId: thawaniRes.sessionId,
+            redirectUrl: thawaniRes.redirectUrl,
+          })
+        )
       }
 
-      // ---------- FIRE-AND-FORGET EMAIL NOTIFICATIONS ----------
-      // (Never block/raise on email errors — they're best-effort.)
-      ;(async () => {
-        try {
-          const orderObj = {
-            id: order._id,
-            items: resolvedItems,
-            subtotal: +subtotal.toFixed(3),
-            discountPercent,
-            discountAmount,
-            totalPaid,
-            shippingAddress: {
-              name: shipping.name,
-              phone: shipping.phone,
-              governorate: shipping.governorate,
-              city: shipping.city,
-              addressLine: shipping.addressLine,
-              notes: shipping.notes,
-            },
-          }
-          // 1) Buyer confirmation
-          if (buyer?.email) {
-            sendOrderConfirmationEmail({
-              to: buyer.email,
-              name: buyer.name,
-              order: orderObj,
-            }).catch((err) =>
-              console.error('[email] order confirmation failed:', err)
-            )
-          }
-          // 2) Per-vendor notification (only their items)
-          const byVendor = resolvedItems.reduce((acc, it) => {
-            acc[it.vendorId] = acc[it.vendorId] || []
-            acc[it.vendorId].push(it)
-            return acc
-          }, {})
-          const vendorIds = Object.keys(byVendor)
-          const vendors = await User.find({ _id: { $in: vendorIds } })
-            .select({ _id: 1, name: 1, email: 1 })
-            .lean()
-          for (const v of vendors) {
-            const vItems = byVendor[v._id] || []
-            const vSubtotal = vItems.reduce((s, it) => s + it.lineSubtotal, 0)
-            const vCommission = +(vSubtotal * (COMMISSION_PERCENT / 100)).toFixed(3)
-            const vNet = +(vSubtotal - vCommission).toFixed(3)
-            if (v.email) {
-              sendVendorNewOrderEmail({
-                to: v.email,
-                vendorName: v.name,
-                order: orderObj,
-                items: vItems,
-                buyerName: buyer?.name || '',
-                buyerEmail: buyer?.email || '',
-                vendorSubtotal: +vSubtotal.toFixed(3),
-                vendorCommission: vCommission,
-                vendorNet: vNet,
-              }).catch((err) =>
-                console.error('[email] vendor notify failed:', err)
-              )
-            }
-          }
-        } catch (emailErr) {
-          console.error('[email] order notification block failed:', emailErr)
-        }
-      })()
+      // ===== BRANCH: Legacy MOCK (mark PAID immediately) =====
+      await finalizeOrderPayment(order, buyer)
 
       return handleCORS(
         NextResponse.json({
@@ -3330,6 +3424,152 @@ async function handleRoute(request, { params }) {
         })
       )
     }
+
+    // ==================================================================
+    // THAWANI PAYMENT — verify + webhook endpoints
+    // ==================================================================
+
+    // ---- POST /orders/verify  (auth) —— called from success page ----
+    if (route === '/orders/verify' && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const body = await request.json().catch(() => ({}))
+      const sessionId = String(body?.sessionId || '')
+      const orderId = String(body?.orderId || '')
+      if (!sessionId && !orderId) {
+        return handleCORS(
+          NextResponse.json({ error: 'معرف الجلسة مطلوب' }, { status: 400 })
+        )
+      }
+      const order = await Order.findOne(
+        sessionId
+          ? { thawaniSessionId: sessionId }
+          : { _id: orderId }
+      )
+      if (!order) {
+        return handleCORS(
+          NextResponse.json({ error: 'الطلب غير موجود' }, { status: 404 })
+        )
+      }
+      // Security: only the buyer can verify their own order
+      if (String(order.buyerId) !== String(session.user.id)) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح بالوصول لهذا الطلب' }, { status: 403 })
+        )
+      }
+
+      // Query Thawani for authoritative status
+      if (order.thawaniSessionId) {
+        const t = await thawaniGetSession(order.thawaniSessionId)
+        if (t.ok) {
+          if (t.paymentStatus === 'paid' && order.status !== 'PAID') {
+            const buyer = await User.findById(order.buyerId).lean()
+            await finalizeOrderPayment(order, buyer)
+          } else if (t.paymentStatus === 'cancelled' && order.status === 'PENDING') {
+            order.status = 'CANCELLED'
+            order.paymentStatus = 'FAILED'
+            order.updatedAt = new Date()
+            await order.save()
+          }
+        }
+      }
+      const fresh = await Order.findById(order._id).lean()
+      return handleCORS(
+        NextResponse.json({
+          success: true,
+          paid: fresh.status === 'PAID',
+          status: fresh.status,
+          paymentStatus: fresh.paymentStatus,
+          order: {
+            id: fresh._id,
+            totalPaid: fresh.totalPaid,
+            couponCode: fresh.couponCode,
+            shippingFee: fresh.shippingFee,
+            items: fresh.items,
+            invoice: fresh.thawaniInvoice || '',
+            createdAt: fresh.createdAt,
+          },
+        })
+      )
+    }
+
+    // ---- POST /webhooks/thawani (public — HMAC verified) ----
+    if (route === '/webhooks/thawani' && method === 'POST') {
+      const rawBody = await request.text()
+      const signature = request.headers.get('thawani-signature') || ''
+      const timestamp = request.headers.get('thawani-timestamp') || ''
+      // If webhook secret not configured, reject with 501 (not 200) so Thawani retries later
+      if (!process.env.THAWANI_WEBHOOK_SECRET) {
+        console.warn('[thawani webhook] WEBHOOK_SECRET not configured')
+        return handleCORS(
+          NextResponse.json({ error: 'webhook secret not configured' }, { status: 501 })
+        )
+      }
+      if (!thawaniVerifySignature(rawBody, timestamp, signature)) {
+        console.warn('[thawani webhook] invalid signature')
+        return handleCORS(
+          NextResponse.json({ error: 'invalid signature' }, { status: 401 })
+        )
+      }
+      let payload
+      try { payload = JSON.parse(rawBody) } catch { payload = null }
+      if (!payload) {
+        return handleCORS(NextResponse.json({ error: 'bad payload' }, { status: 400 }))
+      }
+      const eventType = payload.event_type || ''
+      const data = payload.data || {}
+      await connectDB()
+      try {
+        if (eventType === 'checkout.completed' || eventType === 'payment.succeeded') {
+          // Identify the order via session_id (checkout) or client_reference_id (payment)
+          const sid = data.session_id
+          const clientRef = data.client_reference_id
+          const invoiceId = data.checkout_invoice || data.invoice
+          const query = sid
+            ? { thawaniSessionId: sid }
+            : clientRef
+              ? { _id: clientRef }
+              : invoiceId
+                ? { thawaniInvoice: String(invoiceId) }
+                : null
+          if (query) {
+            const order = await Order.findOne(query)
+            if (order && order.status !== 'PAID') {
+              const buyer = await User.findById(order.buyerId).lean()
+              if (data.payment_id) order.paymentId = data.payment_id
+              await order.save()
+              await finalizeOrderPayment(order, buyer)
+            }
+          }
+        } else if (eventType === 'payment.failed') {
+          const sid = data.session_id
+          const invoiceId = data.checkout_invoice || data.invoice
+          const query = sid
+            ? { thawaniSessionId: sid }
+            : invoiceId
+              ? { thawaniInvoice: String(invoiceId) }
+              : null
+          if (query) {
+            const order = await Order.findOne(query)
+            if (order && order.status === 'PENDING') {
+              order.status = 'FAILED'
+              order.paymentStatus = 'FAILED'
+              order.updatedAt = new Date()
+              await order.save()
+            }
+          }
+        }
+      } catch (e) {
+        console.error('[thawani webhook] processing error', e)
+      }
+      return handleCORS(NextResponse.json({ received: true }))
+    }
+
 
     // ---- GET /orders (my orders as buyer) ----
     if (route === '/orders' && method === 'GET') {

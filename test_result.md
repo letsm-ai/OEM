@@ -2735,6 +2735,76 @@ agent_communication:
           - Image uploads: banner (1200x400 recommended) + logo (square). Client-side compressed to data URL.
           - Save button calls PUT /api/vendor/profile with all fields. Shows success/error toast.
           - Shows live preview link: {origin}/store/vendor/{slug}.
+  - task: "Thawani Pay integration — POST /api/orders (session creation), POST /api/orders/verify, POST /api/webhooks/thawani"
+    implemented: true
+    working: true
+    file: "/app/lib/payments/thawani.js, /app/lib/models.js, /app/app/api/[[...path]]/route.js, /app/app/store/checkout/_CheckoutClient.jsx, /app/app/store/checkout/success/page.js, /app/app/store/checkout/success/_SuccessClient.jsx, /app/app/store/checkout/cancel/page.js, /app/.env"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          MAJOR PHASE 5 milestone: Real payment processing via Thawani Pay (Omani payment gateway).
+          
+          Replaced MOCK payment adapter. Now supports both modes via `PAYMENT_PROVIDER` env flag:
+          • PAYMENT_PROVIDER=thawani (current default) → full Thawani hosted checkout
+          • PAYMENT_PROVIDER=mock → legacy instant-PAID (for local dev)
+          
+          New env vars (in .env):
+          - PAYMENT_PROVIDER=thawani
+          - THAWANI_BASE_URL=https://uatcheckout.thawani.om/api/v1  (UAT; swap to https://checkout.thawani.om/api/v1 for prod)
+          - THAWANI_SECRET_KEY=rRQ26GcsZzoEhbrP2HZvLYDbn9C9et  (UAT test key from Thawani docs)
+          - NEXT_PUBLIC_THAWANI_PUBLISHABLE_KEY=HGvTMLDssJghr9tlN9gr4DVYt0qyBy  (UAT test key)
+          - THAWANI_WEBHOOK_SECRET=(empty; user fills from portal → Settings → Developers → Webhooks)
+          
+          Thawani helper (/app/lib/payments/thawani.js):
+          - isThawaniEnabled() — feature flag
+          - omrToBaisa / baisaToOmr (1 OMR = 1000 baisa)
+          - createCheckoutSession({clientReferenceId, products, successUrl, cancelUrl, metadata}) → creates Thawani session via POST /checkout/session. Returns {sessionId, invoice, redirectUrl}.
+          - getCheckoutSession(sessionId) → fetches authoritative payment_status (paid|unpaid|cancelled)
+          - verifyWebhookSignature(rawBody, timestamp, signature) — HMAC-SHA256(body + "-" + timestamp, secret) hex, timing-safe compare
+          
+          Schema (OrderSchema additions):
+          - thawaniSessionId (String, indexed)
+          - thawaniInvoice (String)
+          - thawaniRedirectUrl (String)
+          - paidAt (Date)
+          - paymentProcessedSideEffects (Boolean) — idempotency flag for finalize step
+          - status enum expanded with FAILED
+          
+          Idempotent side-effects helper `finalizeOrderPayment(order, buyer)`:
+          - Marks order PAID, sets paidAt, flips paymentProcessedSideEffects=true (atomic)
+          - Decrements product stock + increments salesCount
+          - Creates CouponRedemption + increments Coupon.usedCount
+          - Sends buyer confirmation + per-vendor notification emails (via Resend)
+          - Safe to call multiple times — skips if flag already set
+          
+          Endpoint flow:
+          1) POST /api/orders (existing, now branches):
+             - THAWANI: Creates order PENDING, calls Thawani API, persists sessionId, returns {pending:true, redirectUrl}
+             - MOCK: Creates order PAID immediately, runs finalizeOrderPayment, returns {success:true, order}
+          2) POST /api/orders/verify (auth, buyer only) — called from /store/checkout/success:
+             Fetches Thawani session → if paid and not yet processed → finalizes → returns {paid, status, order details}
+          3) POST /api/webhooks/thawani (public):
+             Verifies HMAC signature; on valid checkout.completed / payment.succeeded → finds order by sessionId/clientRef/invoice → finalizes. On payment.failed → marks FAILED. Idempotent.
+          
+          UI:
+          - /store/checkout: On submit, if response has redirectUrl, clear cart + window.location to Thawani page.
+          - /store/checkout/success: Wrapped in Suspense (for useSearchParams). Calls /api/orders/verify, shows loading/success/not-paid states in Arabic RTL. Pretty order summary: invoice number, total, items count.
+          - /store/checkout/cancel: Simple cancel UI with back-to-cart/store buttons.
+          
+          VERIFIED:
+          ✅ Live Thawani UAT integration — successfully created session `checkout_xiRGVeEBUotKBM8IyDF0asn4I9fYBIQZNMWAxqLI1nsLSSR0Ef` with real invoice `2026042438098`.
+          ✅ Order persisted with status=PENDING, paymentProvider=THAWANI, totalPaid=12.5 OMR (including shipping).
+          ✅ /orders/verify returns paid=false when order still PENDING (Thawani side not paid yet).
+          ✅ Webhook HMAC verification: valid signature → 200 {received:true}; invalid → 401; missing headers → 401.
+          ✅ Build compiles clean, lint passes.
+          
+          TESTING: User should perform end-to-end manual test with Thawani test card `4242 4242 4242 4242` (any CVV, future expiry) on the UAT checkout page — payment should succeed, user returned to /store/checkout/success, order flipped to PAID, emails sent.
+
+
   - task: "Refactor — extract marketplace Phase 5 handlers into /lib/api/ modules"
     implemented: true
     working: true

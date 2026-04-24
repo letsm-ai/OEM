@@ -114,6 +114,13 @@ export default function CheckoutClient({ tier, user }) {
       setError(data.error || 'تعذّر إتمام الطلب')
       return
     }
+    // THAWANI flow: redirect user to Thawani hosted checkout
+    if (data.pending && data.redirectUrl) {
+      clear()
+      window.location.href = data.redirectUrl
+      return
+    }
+    // MOCK flow: immediate success
     clear()
     setSuccess(data.order)
   }
