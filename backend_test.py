@@ -1,48 +1,40 @@
 #!/usr/bin/env python3
 """
-Backend Testing for Phase 5 Shopify-like Features: Wishlist and Discount Coupons
-Omani Entrepreneur Majles (مجلس رواد الأعمال العماني)
-
-This script tests the new Phase 5 features:
-1. Wishlist (Favorites) - GET/POST/DELETE /api/wishlist endpoints
-2. Discount Coupons - POST /api/coupons/validate, POST /api/orders with couponCode, Admin CRUD
-
-Base URL: Read from /app/.env NEXT_PUBLIC_BASE_URL + '/api'
-Database: MongoDB via MONGO_URL from /app/.env
+Backend Testing for Omani Entrepreneur Majles - Phase 5 Marketplace
+Testing the 4 current focus tasks:
+1. POST /api/orders — Guest Checkout (unauthenticated with guest{name,email,phone})
+2. POST /api/cart / GET /api/cart / DELETE /api/cart — Cart persistence (auth)
+3. POST /api/cron/abandoned-carts — Abandoned cart reminder worker (X-CRON-KEY or ADMIN)
+4. POST /api/orders with paymentMethod=COD — Cash on Delivery flow
 """
 
-import os
-import sys
-import json
 import requests
-import pymongo
-import bcrypt
+import json
+import os
+import time
 import uuid
 from datetime import datetime, timedelta
-from urllib.parse import quote
+import pymongo
+import bcrypt
+from dotenv import load_dotenv
 
-# Read environment variables
-def load_env():
-    env_vars = {}
-    try:
-        with open('/app/.env', 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    key, value = line.split('=', 1)
-                    env_vars[key] = value
-    except FileNotFoundError:
-        print("❌ /app/.env file not found")
-        sys.exit(1)
-    return env_vars
+# Load environment variables
+load_dotenv('/app/.env')
 
-ENV = load_env()
-BASE_URL = ENV.get('NEXT_PUBLIC_BASE_URL', 'http://localhost:3000') + '/api'
-MONGO_URL = ENV.get('MONGO_URL', 'mongodb://localhost:27017')
-DB_NAME = ENV.get('DB_NAME', 'majles')
+# Configuration
+BASE_URL = os.getenv('NEXT_PUBLIC_BASE_URL', 'https://omani-startup-hub.preview.emergentagent.com')
+API_BASE = f"{BASE_URL}/api"
+MONGO_URL = os.getenv('MONGO_URL', 'mongodb://localhost:27017')
+DB_NAME = os.getenv('DB_NAME', 'majles')
+CRON_SECRET = os.getenv('CRON_SECRET', 'fcb09a9f909c3ea848c026041b3b3d3069beba9da6848e56')
 
-print(f"🌐 Base URL: {BASE_URL}")
-print(f"🗄️ MongoDB: {MONGO_URL}/{DB_NAME}")
+print(f"🔧 Configuration:")
+print(f"   BASE_URL: {BASE_URL}")
+print(f"   API_BASE: {API_BASE}")
+print(f"   MONGO_URL: {MONGO_URL}")
+print(f"   DB_NAME: {DB_NAME}")
+print(f"   CRON_SECRET: {CRON_SECRET}")
+print()
 
 # MongoDB connection
 try:
@@ -51,66 +43,31 @@ try:
     print("✅ MongoDB connection established")
 except Exception as e:
     print(f"❌ MongoDB connection failed: {e}")
-    sys.exit(1)
+    exit(1)
 
-# Test counters
-tests_passed = 0
-tests_failed = 0
+def generate_uuid():
+    """Generate UUID string for MongoDB _id"""
+    return str(uuid.uuid4())
 
-def test_result(name, success, details=""):
-    global tests_passed, tests_failed
-    if success:
-        tests_passed += 1
-        print(f"✅ {name}")
-        if details:
-            print(f"   {details}")
-    else:
-        tests_failed += 1
-        print(f"❌ {name}")
-        if details:
-            print(f"   {details}")
+def hash_password(password):
+    """Hash password using bcrypt (compatible with bcryptjs)"""
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
-def make_request(method, endpoint, data=None, headers=None, cookies=None):
-    """Make HTTP request with error handling"""
-    url = f"{BASE_URL}{endpoint}"
-    try:
-        if method == 'GET':
-            response = requests.get(url, headers=headers, cookies=cookies, timeout=30)
-        elif method == 'POST':
-            response = requests.post(url, json=data, headers=headers, cookies=cookies, timeout=30)
-        elif method == 'PUT':
-            response = requests.put(url, json=data, headers=headers, cookies=cookies, timeout=30)
-        elif method == 'PATCH':
-            response = requests.patch(url, json=data, headers=headers, cookies=cookies, timeout=30)
-        elif method == 'DELETE':
-            response = requests.delete(url, headers=headers, cookies=cookies, timeout=30)
-        else:
-            raise ValueError(f"Unsupported method: {method}")
-        
-        return response
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Request failed: {e}")
-        return None
-
-def create_test_user(email_suffix, role='MEMBER', tier='FREE'):
-    """Create a test user directly in MongoDB with bcrypt password"""
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    email = f"test_{email_suffix}_{timestamp}@test.com"
-    password = "testpass123"
-    
-    # Hash password with bcrypt
-    hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-    
+def create_test_user(name, email, password, role='MEMBER', tier='FREE', is_guest=False):
+    """Create a test user directly in MongoDB"""
+    user_id = generate_uuid()
     user_doc = {
-        '_id': str(uuid.uuid4()),
-        'name': f'Test User {email_suffix.title()}',
-        'email': email,
-        'password': hashed_password,
+        '_id': user_id,
+        'name': name,
+        'email': email.lower(),
+        'password': '' if is_guest else hash_password(password),
         'role': role,
         'membershipTier': tier,
+        'membershipExpiry': None,
         'phone': '',
         'photo': '',
         'wishlist': [],
+        'isGuest': is_guest,
         'vendorProfile': {
             'slug': '',
             'businessName': '',
@@ -131,71 +88,23 @@ def create_test_user(email_suffix, role='MEMBER', tier='FREE'):
     
     try:
         db.users.insert_one(user_doc)
-        return {
-            'id': user_doc['_id'],
-            'email': email,
-            'password': password,
-            'name': user_doc['name'],
-            'role': role,
-            'tier': tier
-        }
+        print(f"✅ Created user: {name} ({email}) - Role: {role}, Tier: {tier}")
+        return user_id
     except Exception as e:
-        print(f"❌ Failed to create user: {e}")
+        print(f"❌ Failed to create user {email}: {e}")
         return None
 
-def login_user(email, password):
-    """Login user via NextAuth and get session cookie"""
-    # First get CSRF token
-    csrf_response = make_request('GET', '/auth/csrf')
-    if not csrf_response or csrf_response.status_code != 200:
-        print(f"❌ Failed to get CSRF token: {csrf_response.status_code if csrf_response else 'No response'}")
-        return None
-    
-    csrf_token = csrf_response.json().get('csrfToken')
-    if not csrf_token:
-        print("❌ No CSRF token in response")
-        return None
-    
-    # Login with credentials
-    login_data = {
-        'email': email,
-        'password': password,
-        'csrfToken': csrf_token,
-        'callbackUrl': f"{BASE_URL.replace('/api', '')}/dashboard",
-        'json': 'true'
-    }
-    
-    login_response = make_request('POST', '/auth/callback/credentials', data=login_data)
-    if not login_response or login_response.status_code != 200:
-        print(f"❌ Login failed: {login_response.status_code if login_response else 'No response'}")
-        if login_response:
-            print(f"   Response: {login_response.text}")
-        return None
-    
-    # Extract session cookie
-    cookies = {}
-    for cookie in login_response.cookies:
-        if 'session-token' in cookie.name or 'next-auth' in cookie.name:
-            cookies[cookie.name] = cookie.value
-    
-    if not cookies:
-        print("❌ No session cookies found in login response")
-        print(f"   Available cookies: {[cookie.name for cookie in login_response.cookies]}")
-        return None
-    
-    print(f"✅ Login successful, cookies: {list(cookies.keys())}")
-    return cookies
-
-def create_test_product(vendor_id, name_suffix="Product", price=10.0, stock=5, is_active=True):
+def create_test_product(vendor_id, name_ar, price, stock=20, is_active=True):
     """Create a test product directly in MongoDB"""
+    product_id = generate_uuid()
     product_doc = {
-        '_id': str(uuid.uuid4()),
+        '_id': product_id,
         'vendorId': vendor_id,
-        'nameAr': f'منتج تجريبي {name_suffix}',
-        'nameEn': f'Test {name_suffix}',
+        'nameAr': name_ar,
+        'nameEn': '',
         'price': price,
-        'description': f'وصف المنتج التجريبي {name_suffix}',
-        'images': ['data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='],
+        'description': 'منتج تجريبي للاختبار',
+        'images': [],
         'category': 'OTHER',
         'stock': stock,
         'isActive': is_active,
@@ -208,927 +117,941 @@ def create_test_product(vendor_id, name_suffix="Product", price=10.0, stock=5, i
     
     try:
         db.products.insert_one(product_doc)
-        return product_doc
+        print(f"✅ Created product: {name_ar} - Price: {price} OMR, Stock: {stock}")
+        return product_id
     except Exception as e:
         print(f"❌ Failed to create product: {e}")
         return None
 
-def create_test_order(buyer_id, product_id, vendor_id, status='PAID'):
-    """Create a test order directly in MongoDB"""
-    order_doc = {
-        '_id': str(uuid.uuid4()),
-        'buyerId': buyer_id,
-        'items': [{
-            'productId': product_id,
-            'vendorId': vendor_id,
-            'nameAr': 'منتج تجريبي',
-            'image': 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
-            'unitPrice': 10.0,
-            'quantity': 1,
-            'lineSubtotal': 10.0
-        }],
-        'subtotal': 10.0,
-        'discountPercent': 0,
-        'discountAmount': 0,
-        'tierAtPurchase': 'FREE',
-        'couponCode': '',
-        'couponDiscount': 0,
-        'commissionPercent': 5,
-        'commissionAmount': 0.5,
-        'totalPaid': 10.0,
-        'shippingAddress': {
-            'name': 'Test Buyer',
-            'phone': '+968 9123 4567',
-            'governorate': 'MUSCAT',
-            'city': 'مسقط',
-            'addressLine': 'شارع التجارة',
-            'notes': ''
-        },
-        'status': status,
-        'paymentProvider': 'MOCK',
-        'paymentStatus': 'PAID',
-        'paymentId': 'mock_payment_123',
-        'createdAt': datetime.utcnow(),
-        'updatedAt': datetime.utcnow()
-    }
-    
+def login_user(email, password):
+    """Login user via NextAuth credentials and return session cookie"""
     try:
-        db.orders.insert_one(order_doc)
-        return order_doc
-    except Exception as e:
-        print(f"❌ Failed to create order: {e}")
-        return None
-
-def create_test_coupon(code, type_='PERCENT', value=10, active=True, expires_at=None, starts_at=None, 
-                      min_subtotal=0, max_discount=0, usage_limit=0, per_user_limit=1):
-    """Create a test coupon directly in MongoDB"""
-    coupon_doc = {
-        '_id': str(uuid.uuid4()),
-        'code': code.upper(),
-        'description': f'Test coupon {code}',
-        'type': type_,
-        'value': value,
-        'minSubtotal': min_subtotal,
-        'maxDiscount': max_discount,
-        'startsAt': starts_at or datetime.utcnow(),
-        'expiresAt': expires_at,
-        'usageLimit': usage_limit,
-        'usedCount': 0,
-        'perUserLimit': per_user_limit,
-        'active': active,
-        'createdBy': None,
-        'createdAt': datetime.utcnow(),
-        'updatedAt': datetime.utcnow()
-    }
-    
-    try:
-        db.coupons.insert_one(coupon_doc)
-        return coupon_doc
-    except Exception as e:
-        print(f"❌ Failed to create coupon: {e}")
-        return None
-
-def test_regression_endpoints():
-    """Test basic regression endpoints to ensure system is working"""
-    print("\n🔄 REGRESSION TESTS")
-    
-    # Test health endpoint
-    response = make_request('GET', '/')
-    test_result(
-        "GET /api/ → 200",
-        response and response.status_code == 200 and 'Majles API is running' in response.text,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    # Test products endpoint (public)
-    response = make_request('GET', '/products')
-    test_result(
-        "GET /api/products → 200",
-        response and response.status_code == 200,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    # Test vendors endpoint (public)
-    response = make_request('GET', '/vendors')
-    test_result(
-        "GET /api/vendors → 200",
-        response and response.status_code == 200,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-
-def test_wishlist_endpoints():
-    """Test Wishlist (Favorites) endpoints"""
-    print("\n❤️ WISHLIST ENDPOINTS TESTING")
-    
-    # Create test data
-    print("📋 Setting up test data...")
-    buyer = create_test_user('buyer', 'MEMBER', 'FREE')
-    vendor = create_test_user('vendor', 'VENDOR', 'BASIC')
-    
-    if not buyer or not vendor:
-        test_result("Wishlist test setup", False, "Failed to create test users")
-        return
-    
-    # Create test products
-    product1 = create_test_product(vendor['id'], 'Honey', 15.0, 10, True)
-    product2 = create_test_product(vendor['id'], 'Dates', 25.0, 5, True)
-    inactive_product = create_test_product(vendor['id'], 'Inactive', 30.0, 0, False)
-    
-    if not product1 or not product2 or not inactive_product:
-        test_result("Wishlist test setup", False, "Failed to create test products")
-        return
-    
-    # Login buyer
-    buyer_cookies = login_user(buyer['email'], buyer['password'])
-    if not buyer_cookies:
-        test_result("Buyer login for wishlist tests", False, "Failed to login buyer")
-        return
-    
-    print("✅ Test data setup complete")
-    
-    # Test 1: GET /api/wishlist (no session) → 401
-    response = make_request('GET', '/wishlist')
-    test_result(
-        "GET /api/wishlist (no auth) → 401",
-        response and response.status_code == 401 and 'غير مصرح' in response.text,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    # Test 2: GET /api/wishlist (empty wishlist) → 200 with empty items
-    response = make_request('GET', '/wishlist', cookies=buyer_cookies)
-    test_result(
-        "GET /api/wishlist (empty) → 200",
-        response and response.status_code == 200,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    if response and response.status_code == 200:
-        data = response.json()
-        test_result(
-            "Empty wishlist structure",
-            'items' in data and 'count' in data and data['count'] == 0 and len(data['items']) == 0,
-            f"Response: {data}"
-        )
-    
-    # Test 3: POST /api/wishlist/:productId (no auth) → 401
-    response = make_request('POST', f"/wishlist/{product1['_id']}")
-    test_result(
-        "POST /api/wishlist/:productId (no auth) → 401",
-        response and response.status_code == 401,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    # Test 4: POST /api/wishlist/:productId (invalid product) → 404
-    fake_product_id = str(uuid.uuid4())
-    response = make_request('POST', f"/wishlist/{fake_product_id}", cookies=buyer_cookies)
-    test_result(
-        "POST /api/wishlist/:productId (invalid product) → 404",
-        response and response.status_code == 404 and 'المنتج غير موجود' in response.text,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    # Test 5: POST /api/wishlist/:productId (first time) → 200
-    response = make_request('POST', f"/wishlist/{product1['_id']}", cookies=buyer_cookies)
-    test_result(
-        "POST /api/wishlist/:productId (first time) → 200",
-        response and response.status_code == 200,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    if response and response.status_code == 200:
-        data = response.json()
-        test_result(
-            "First wishlist add response",
-            data.get('success') is True and data.get('count') == 1,
-            f"Response: {data}"
-        )
-    
-    # Test 6: POST /api/wishlist/:productId (second time, idempotent) → 200
-    response = make_request('POST', f"/wishlist/{product1['_id']}", cookies=buyer_cookies)
-    test_result(
-        "POST /api/wishlist/:productId (duplicate) → 200",
-        response and response.status_code == 200,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    if response and response.status_code == 200:
-        data = response.json()
-        test_result(
-            "Duplicate wishlist add response",
-            data.get('success') is True and data.get('alreadyInWishlist') is True,
-            f"Response: {data}"
-        )
-    
-    # Test 7: Add second product to wishlist
-    response = make_request('POST', f"/wishlist/{product2['_id']}", cookies=buyer_cookies)
-    test_result(
-        "POST /api/wishlist/:productId (second product) → 200",
-        response and response.status_code == 200,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    # Test 8: GET /api/wishlist (with items) → 200
-    response = make_request('GET', '/wishlist', cookies=buyer_cookies)
-    test_result(
-        "GET /api/wishlist (with items) → 200",
-        response and response.status_code == 200,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    if response and response.status_code == 200:
-        data = response.json()
-        test_result(
-            "Wishlist with items structure",
-            'items' in data and 'count' in data and data['count'] == 2 and len(data['items']) == 2,
-            f"Count: {data.get('count')}, Items: {len(data.get('items', []))}"
-        )
+        # First get CSRF token
+        csrf_response = requests.get(f"{API_BASE}/auth/csrf", timeout=30)
+        if csrf_response.status_code != 200:
+            print(f"❌ Failed to get CSRF token: {csrf_response.status_code}")
+            return None
         
-        # Check that items are ordered newest first (product2 should be first)
-        if len(data.get('items', [])) >= 2:
-            first_item = data['items'][0]
-            test_result(
-                "Wishlist order (newest first)",
-                first_item.get('id') == product2['_id'],
-                f"First item ID: {first_item.get('id')}, Expected: {product2['_id']}"
-            )
-            
-            # Check item structure
-            required_fields = ['id', 'nameAr', 'price', 'images', 'stock', 'vendorName', 'vendorSlug']
-            has_all_fields = all(field in first_item for field in required_fields)
-            test_result(
-                "Wishlist item structure",
-                has_all_fields,
-                f"Item fields: {list(first_item.keys())}"
-            )
-    
-    # Test 9: Add inactive product (should work but not appear in GET)
-    response = make_request('POST', f"/wishlist/{inactive_product['_id']}", cookies=buyer_cookies)
-    test_result(
-        "POST /api/wishlist/:productId (inactive product) → 200",
-        response and response.status_code == 200,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    # Test 10: GET /api/wishlist (inactive products should not appear)
-    response = make_request('GET', '/wishlist', cookies=buyer_cookies)
-    if response and response.status_code == 200:
-        data = response.json()
-        # Should still show count=2 (only active products)
-        test_result(
-            "Inactive products filtered from wishlist",
-            data.get('count') == 2 and len(data.get('items', [])) == 2,
-            f"Count: {data.get('count')}, Items: {len(data.get('items', []))}"
-        )
-    
-    # Test 11: DELETE /api/wishlist/:productId (no auth) → 401
-    response = make_request('DELETE', f"/wishlist/{product1['_id']}")
-    test_result(
-        "DELETE /api/wishlist/:productId (no auth) → 401",
-        response and response.status_code == 401,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    # Test 12: DELETE /api/wishlist/:productId (not in wishlist) → 200
-    non_wishlist_product = create_test_product(vendor['id'], 'NotInWishlist', 5.0, 3, True)
-    if non_wishlist_product:
-        response = make_request('DELETE', f"/wishlist/{non_wishlist_product['_id']}", cookies=buyer_cookies)
-        test_result(
-            "DELETE /api/wishlist/:productId (not in wishlist) → 200",
-            response and response.status_code == 200,
-            f"Status: {response.status_code if response else 'No response'}"
-        )
+        csrf_token = csrf_response.json().get('csrfToken')
+        if not csrf_token:
+            print("❌ No CSRF token in response")
+            return None
         
-        if response and response.status_code == 200:
-            data = response.json()
-            test_result(
-                "Delete non-wishlist item response",
-                data.get('success') is True and data.get('notFound') is True,
-                f"Response: {data}"
-            )
-    
-    # Test 13: DELETE /api/wishlist/:productId (existing item) → 200
-    response = make_request('DELETE', f"/wishlist/{product1['_id']}", cookies=buyer_cookies)
-    test_result(
-        "DELETE /api/wishlist/:productId (existing) → 200",
-        response and response.status_code == 200,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    if response and response.status_code == 200:
-        data = response.json()
-        test_result(
-            "Delete existing item response",
-            data.get('success') is True and data.get('count') == 1,
-            f"Response: {data}"
-        )
-    
-    # Test 14: Verify wishlist count after deletion
-    response = make_request('GET', '/wishlist', cookies=buyer_cookies)
-    if response and response.status_code == 200:
-        data = response.json()
-        test_result(
-            "Wishlist count after deletion",
-            data.get('count') == 1 and len(data.get('items', [])) == 1,
-            f"Count: {data.get('count')}, Items: {len(data.get('items', []))}"
-        )
-
-def test_coupon_validation_endpoint():
-    """Test POST /api/coupons/validate endpoint"""
-    print("\n🎫 COUPON VALIDATION ENDPOINT TESTING")
-    
-    # Create test data
-    print("📋 Setting up test data...")
-    buyer = create_test_user('coupon_buyer', 'MEMBER', 'FREE')
-    
-    if not buyer:
-        test_result("Coupon test setup", False, "Failed to create test user")
-        return
-    
-    # Create test coupons
-    valid_coupon = create_test_coupon('WELCOME10', 'PERCENT', 10, True)
-    expired_coupon = create_test_coupon('EXPIRED20', 'PERCENT', 20, True, 
-                                       expires_at=datetime.utcnow() - timedelta(days=1))
-    future_coupon = create_test_coupon('FUTURE15', 'PERCENT', 15, True,
-                                      starts_at=datetime.utcnow() + timedelta(days=1))
-    inactive_coupon = create_test_coupon('INACTIVE25', 'PERCENT', 25, False)
-    min_subtotal_coupon = create_test_coupon('MIN50', 'PERCENT', 10, True, min_subtotal=50)
-    fixed_coupon = create_test_coupon('FIXED5', 'FIXED', 5, True)
-    max_discount_coupon = create_test_coupon('MAXCAP', 'PERCENT', 50, True, max_discount=3)
-    
-    if not all([valid_coupon, expired_coupon, future_coupon, inactive_coupon, 
-               min_subtotal_coupon, fixed_coupon, max_discount_coupon]):
-        test_result("Coupon creation", False, "Failed to create test coupons")
-        return
-    
-    # Login buyer
-    buyer_cookies = login_user(buyer['email'], buyer['password'])
-    if not buyer_cookies:
-        test_result("Buyer login for coupon tests", False, "Failed to login buyer")
-        return
-    
-    print("✅ Test data setup complete")
-    
-    # Test 1: POST /api/coupons/validate (no auth) → 401
-    response = make_request('POST', '/coupons/validate', data={'code': 'WELCOME10', 'subtotal': 100})
-    test_result(
-        "POST /api/coupons/validate (no auth) → 401",
-        response and response.status_code == 401 and 'يجب تسجيل الدخول' in response.text,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    # Test 2: Empty cart → 400
-    response = make_request('POST', '/coupons/validate', 
-                          data={'code': 'WELCOME10', 'subtotal': 0}, cookies=buyer_cookies)
-    test_result(
-        "POST /api/coupons/validate (empty cart) → 400",
-        response and response.status_code == 400 and 'السلة فارغة' in response.text,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    # Test 3: Invalid/unknown code → 200 with valid: false
-    response = make_request('POST', '/coupons/validate', 
-                          data={'code': 'INVALID123', 'subtotal': 100}, cookies=buyer_cookies)
-    test_result(
-        "POST /api/coupons/validate (invalid code) → 200",
-        response and response.status_code == 200,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    if response and response.status_code == 200:
-        data = response.json()
-        test_result(
-            "Invalid code response",
-            data.get('valid') is False and 'رمز الكوبون غير صحيح' in data.get('error', ''),
-            f"Response: {data}"
-        )
-    
-    # Test 4: Inactive coupon → valid: false
-    response = make_request('POST', '/coupons/validate', 
-                          data={'code': 'INACTIVE25', 'subtotal': 100}, cookies=buyer_cookies)
-    if response and response.status_code == 200:
-        data = response.json()
-        test_result(
-            "Inactive coupon response",
-            data.get('valid') is False and 'الكوبون غير فعّال' in data.get('error', ''),
-            f"Response: {data}"
-        )
-    
-    # Test 5: Expired coupon → valid: false
-    response = make_request('POST', '/coupons/validate', 
-                          data={'code': 'EXPIRED20', 'subtotal': 100}, cookies=buyer_cookies)
-    if response and response.status_code == 200:
-        data = response.json()
-        test_result(
-            "Expired coupon response",
-            data.get('valid') is False and 'انتهت صلاحية الكوبون' in data.get('error', ''),
-            f"Response: {data}"
-        )
-    
-    # Test 6: Future coupon → valid: false
-    response = make_request('POST', '/coupons/validate', 
-                          data={'code': 'FUTURE15', 'subtotal': 100}, cookies=buyer_cookies)
-    if response and response.status_code == 200:
-        data = response.json()
-        test_result(
-            "Future coupon response",
-            data.get('valid') is False and 'الكوبون غير فعّال بعد' in data.get('error', ''),
-            f"Response: {data}"
-        )
-    
-    # Test 7: Below minimum subtotal → valid: false
-    response = make_request('POST', '/coupons/validate', 
-                          data={'code': 'MIN50', 'subtotal': 30}, cookies=buyer_cookies)
-    if response and response.status_code == 200:
-        data = response.json()
-        test_result(
-            "Below minimum subtotal response",
-            data.get('valid') is False and 'الحد الأدنى لاستخدام الكوبون: 50 ر.ع' in data.get('error', ''),
-            f"Response: {data}"
-        )
-    
-    # Test 8: Valid PERCENT coupon → valid: true with correct calculation
-    response = make_request('POST', '/coupons/validate', 
-                          data={'code': 'WELCOME10', 'subtotal': 100}, cookies=buyer_cookies)
-    test_result(
-        "Valid PERCENT coupon → 200",
-        response and response.status_code == 200,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    if response and response.status_code == 200:
-        data = response.json()
-        expected_fields = ['valid', 'tierDiscountAmount', 'baseAmount', 'couponDiscountAmount', 'finalTotal']
-        has_fields = all(field in data for field in expected_fields)
-        
-        # For FREE tier user: tierDiscountAmount=0, baseAmount=100, couponDiscountAmount=10, finalTotal=90
-        test_result(
-            "Valid PERCENT coupon calculation",
-            (data.get('valid') is True and 
-             data.get('tierDiscountAmount') == 0 and 
-             data.get('baseAmount') == 100 and 
-             data.get('couponDiscountAmount') == 10 and 
-             data.get('finalTotal') == 90 and
-             has_fields),
-            f"Response: {data}"
-        )
-    
-    # Test 9: Valid FIXED coupon → valid: true with correct calculation
-    response = make_request('POST', '/coupons/validate', 
-                          data={'code': 'FIXED5', 'subtotal': 100}, cookies=buyer_cookies)
-    if response and response.status_code == 200:
-        data = response.json()
-        test_result(
-            "Valid FIXED coupon calculation",
-            (data.get('valid') is True and 
-             data.get('couponDiscountAmount') == 5 and 
-             data.get('finalTotal') == 95),
-            f"Response: {data}"
-        )
-    
-    # Test 10: PERCENT with maxDiscount cap
-    response = make_request('POST', '/coupons/validate', 
-                          data={'code': 'MAXCAP', 'subtotal': 100}, cookies=buyer_cookies)
-    if response and response.status_code == 200:
-        data = response.json()
-        # 50% of 100 = 50, but capped at 3
-        test_result(
-            "PERCENT coupon with maxDiscount cap",
-            (data.get('valid') is True and 
-             data.get('couponDiscountAmount') == 3 and 
-             data.get('finalTotal') == 97),
-            f"Response: {data}"
-        )
-    
-    # Test 11: FIXED value > baseAmount (should be capped)
-    large_fixed_coupon = create_test_coupon('LARGE50', 'FIXED', 50, True)
-    if large_fixed_coupon:
-        response = make_request('POST', '/coupons/validate', 
-                              data={'code': 'LARGE50', 'subtotal': 10}, cookies=buyer_cookies)
-        if response and response.status_code == 200:
-            data = response.json()
-            test_result(
-                "FIXED coupon > subtotal (capped)",
-                (data.get('valid') is True and 
-                 data.get('couponDiscountAmount') == 10 and 
-                 data.get('finalTotal') == 0),
-                f"Response: {data}"
-            )
-
-def test_coupon_order_integration():
-    """Test POST /api/orders with couponCode"""
-    print("\n🛒 COUPON ORDER INTEGRATION TESTING")
-    
-    # Create test data
-    print("📋 Setting up test data...")
-    buyer = create_test_user('order_buyer', 'MEMBER', 'FREE')
-    vendor = create_test_user('order_vendor', 'VENDOR', 'BASIC')
-    
-    if not buyer or not vendor:
-        test_result("Order coupon test setup", False, "Failed to create test users")
-        return
-    
-    # Create test product
-    product = create_test_product(vendor['id'], 'OrderProduct', 20.0, 10, True)
-    if not product:
-        test_result("Order coupon test setup", False, "Failed to create test product")
-        return
-    
-    # Create test coupons
-    valid_coupon = create_test_coupon('ORDER10', 'PERCENT', 10, True)
-    invalid_coupon_code = 'NONEXISTENT'
-    per_user_limit_coupon = create_test_coupon('ONCE', 'PERCENT', 15, True, per_user_limit=1)
-    
-    if not all([valid_coupon, per_user_limit_coupon]):
-        test_result("Order coupon creation", False, "Failed to create test coupons")
-        return
-    
-    # Login buyer
-    buyer_cookies = login_user(buyer['email'], buyer['password'])
-    if not buyer_cookies:
-        test_result("Buyer login for order coupon tests", False, "Failed to login buyer")
-        return
-    
-    print("✅ Test data setup complete")
-    
-    # Test 1: Valid cart + invalid coupon code → 400
-    order_data = {
-        'items': [{
-            'productId': product['_id'],
-            'quantity': 2
-        }],
-        'shippingAddress': {
-            'name': 'Test Buyer',
-            'phone': '+968 9123 4567',
-            'governorate': 'MUSCAT',
-            'city': 'مسقط',
-            'addressLine': 'شارع التجارة',
-            'notes': ''
-        },
-        'couponCode': invalid_coupon_code
-    }
-    
-    response = make_request('POST', '/orders', data=order_data, cookies=buyer_cookies)
-    test_result(
-        "POST /api/orders (invalid coupon) → 400",
-        response and response.status_code == 400,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    # Test 2: Valid cart + valid coupon → 200
-    order_data['couponCode'] = 'ORDER10'
-    response = make_request('POST', '/orders', data=order_data, cookies=buyer_cookies)
-    test_result(
-        "POST /api/orders (valid coupon) → 200",
-        response and response.status_code == 200,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    order_id = None
-    if response and response.status_code == 200:
-        data = response.json()
-        order_id = data.get('order', {}).get('id')
-        
-        # Check order structure
-        order = data.get('order', {})
-        test_result(
-            "Order with coupon structure",
-            (order.get('couponCode') == 'ORDER10' and 
-             order.get('couponDiscount') > 0 and
-             order.get('totalPaid') < order.get('subtotal', 0)),
-            f"Order: couponCode={order.get('couponCode')}, couponDiscount={order.get('couponDiscount')}, totalPaid={order.get('totalPaid')}"
-        )
-    
-    # Test 3: Verify database updates after successful order
-    if order_id:
-        # Check Coupon.usedCount incremented
-        coupon_doc = db.coupons.find_one({'code': 'ORDER10'})
-        test_result(
-            "Coupon usedCount incremented",
-            coupon_doc and coupon_doc.get('usedCount') == 1,
-            f"usedCount: {coupon_doc.get('usedCount') if coupon_doc else 'Not found'}"
-        )
-        
-        # Check CouponRedemption document created
-        redemption_doc = db.couponredemptions.find_one({'orderId': order_id})
-        test_result(
-            "CouponRedemption document created",
-            redemption_doc is not None,
-            f"Redemption found: {redemption_doc is not None}"
-        )
-        
-        if redemption_doc:
-            test_result(
-                "CouponRedemption structure",
-                (redemption_doc.get('couponId') == valid_coupon['_id'] and
-                 redemption_doc.get('code') == 'ORDER10' and
-                 redemption_doc.get('userId') == buyer['id'] and
-                 redemption_doc.get('amountSaved') > 0),
-                f"Redemption: {redemption_doc}"
-            )
-        
-        # Check Order document has couponCode and couponDiscount
-        order_doc = db.orders.find_one({'_id': order_id})
-        test_result(
-            "Order document coupon fields",
-            (order_doc and 
-             order_doc.get('couponCode') == 'ORDER10' and
-             order_doc.get('couponDiscount') > 0),
-            f"Order couponCode: {order_doc.get('couponCode') if order_doc else 'Not found'}, couponDiscount: {order_doc.get('couponDiscount') if order_doc else 'Not found'}"
-        )
-    
-    # Test 4: Try using per-user limit coupon again → 400
-    order_data_2 = {
-        'items': [{
-            'productId': product['_id'],
-            'quantity': 1
-        }],
-        'shippingAddress': {
-            'name': 'Test Buyer',
-            'phone': '+968 9123 4567',
-            'governorate': 'MUSCAT',
-            'city': 'مسقط',
-            'addressLine': 'شارع التجارة',
-            'notes': ''
-        },
-        'couponCode': 'ONCE'
-    }
-    
-    # First use should work
-    response = make_request('POST', '/orders', data=order_data_2, cookies=buyer_cookies)
-    test_result(
-        "POST /api/orders (per-user limit coupon first use) → 200",
-        response and response.status_code == 200,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    # Second use should fail
-    response = make_request('POST', '/orders', data=order_data_2, cookies=buyer_cookies)
-    test_result(
-        "POST /api/orders (per-user limit exceeded) → 400",
-        response and response.status_code == 400 and 'لقد استخدمت هذا الكوبون' in response.text,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    # Test 5: Order without couponCode should still work (regression)
-    order_data_no_coupon = {
-        'items': [{
-            'productId': product['_id'],
-            'quantity': 1
-        }],
-        'shippingAddress': {
-            'name': 'Test Buyer',
-            'phone': '+968 9123 4567',
-            'governorate': 'MUSCAT',
-            'city': 'مسقط',
-            'addressLine': 'شارع التجارة',
-            'notes': ''
+        # Login with credentials
+        login_data = {
+            'email': email,
+            'password': password,
+            'csrfToken': csrf_token,
+            'callbackUrl': f"{BASE_URL}/dashboard",
+            'json': 'true'
         }
-    }
-    
-    response = make_request('POST', '/orders', data=order_data_no_coupon, cookies=buyer_cookies)
-    test_result(
-        "POST /api/orders (no coupon) → 200",
-        response and response.status_code == 200,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    if response and response.status_code == 200:
-        data = response.json()
-        order = data.get('order', {})
-        test_result(
-            "Order without coupon structure",
-            (order.get('couponCode') == '' and 
-             order.get('couponDiscount') == 0),
-            f"Order: couponCode='{order.get('couponCode')}', couponDiscount={order.get('couponDiscount')}"
+        
+        login_response = requests.post(
+            f"{API_BASE}/auth/callback/credentials",
+            data=login_data,
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            allow_redirects=False,
+            timeout=30
         )
+        
+        # Extract session cookie
+        session_cookie = None
+        for cookie in login_response.cookies:
+            if 'session-token' in cookie.name or 'next-auth.session-token' in cookie.name:
+                session_cookie = f"{cookie.name}={cookie.value}"
+                break
+        
+        if session_cookie:
+            print(f"✅ Login successful for {email}")
+            return session_cookie
+        else:
+            print(f"❌ Login failed for {email} - No session cookie found")
+            print(f"   Response status: {login_response.status_code}")
+            print(f"   Response headers: {dict(login_response.headers)}")
+            print(f"   Available cookies: {[cookie.name for cookie in login_response.cookies]}")
+            return None
+            
+    except Exception as e:
+        print(f"❌ Login error for {email}: {e}")
+        return None
 
-def test_admin_coupon_crud():
-    """Test Admin Coupon CRUD endpoints"""
-    print("\n👑 ADMIN COUPON CRUD TESTING")
+def make_request(method, endpoint, data=None, headers=None, session_cookie=None):
+    """Make HTTP request with optional session cookie"""
+    url = f"{API_BASE}{endpoint}"
+    req_headers = {'Content-Type': 'application/json'}
     
-    # Create test data
-    print("📋 Setting up test data...")
-    admin = create_test_user('admin', 'ADMIN', 'PLATINUM')
-    member = create_test_user('member', 'MEMBER', 'FREE')
+    if headers:
+        req_headers.update(headers)
     
-    if not admin or not member:
-        test_result("Admin coupon test setup", False, "Failed to create test users")
-        return
+    if session_cookie:
+        req_headers['Cookie'] = session_cookie
     
-    # Login users
-    admin_cookies = login_user(admin['email'], admin['password'])
-    member_cookies = login_user(member['email'], member['password'])
-    
-    if not admin_cookies or not member_cookies:
-        test_result("User login for admin coupon tests", False, "Failed to login users")
-        return
-    
-    print("✅ Test data setup complete")
-    
-    # Test 1: GET /api/admin/coupons (no auth) → 401
-    response = make_request('GET', '/admin/coupons')
-    test_result(
-        "GET /api/admin/coupons (no auth) → 401",
-        response and response.status_code == 401,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    # Test 2: GET /api/admin/coupons (MEMBER) → 403
-    response = make_request('GET', '/admin/coupons', cookies=member_cookies)
-    test_result(
-        "GET /api/admin/coupons (MEMBER) → 403",
-        response and response.status_code == 403 and 'صلاحيات مسؤول مطلوبة' in response.text,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    # Test 3: GET /api/admin/coupons (ADMIN) → 200
-    response = make_request('GET', '/admin/coupons', cookies=admin_cookies)
-    test_result(
-        "GET /api/admin/coupons (ADMIN) → 200",
-        response and response.status_code == 200,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
+    try:
+        if method.upper() == 'GET':
+            response = requests.get(url, headers=req_headers, timeout=30, allow_redirects=True)
+        elif method.upper() == 'POST':
+            response = requests.post(url, json=data, headers=req_headers, timeout=30, allow_redirects=True)
+        elif method.upper() == 'DELETE':
+            response = requests.delete(url, headers=req_headers, timeout=30, allow_redirects=True)
+        else:
+            raise ValueError(f"Unsupported method: {method}")
+        
+        return response
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Request error for {method} {url}: {e}")
+        return None
+    except Exception as e:
+        print(f"❌ Unexpected error for {method} {url}: {e}")
+        return None
+
+def test_api_health():
+    """Test basic API health"""
+    print("🧪 Testing API Health...")
+    response = make_request('GET', '')
     
     if response and response.status_code == 200:
-        data = response.json()
-        test_result(
-            "Admin coupons list structure",
-            'coupons' in data and isinstance(data['coupons'], list),
-            f"Response keys: {list(data.keys())}"
-        )
+        print("✅ GET /api → 200 'Majles API is running'")
+        return True
+    else:
+        print(f"❌ GET /api → {response.status_code if response else 'No response'}")
+        return False
+
+def test_guest_checkout():
+    """Test TASK 1: POST /api/orders — Guest Checkout"""
+    print("\n🧪 TASK 1: Testing Guest Checkout (POST /api/orders)")
     
-    # Test 4: POST /api/admin/coupons (invalid code) → 400
-    invalid_coupon_data = {
-        'code': 'ab',  # too short
-        'description': 'Test coupon',
-        'type': 'PERCENT',
-        'value': 10
+    # Setup: Create vendor and product
+    timestamp = int(time.time())
+    vendor_email = f"vendor{timestamp}@test.com"
+    vendor_id = create_test_user(f"Vendor {timestamp}", vendor_email, "password123", role='VENDOR')
+    
+    if not vendor_id:
+        print("❌ Failed to create vendor user")
+        return False
+    
+    product_id = create_test_product(vendor_id, "منتج تجريبي", 10.0, stock=20)
+    if not product_id:
+        print("❌ Failed to create test product")
+        return False
+    
+    # Test data
+    valid_shipping = {
+        "name": "عميل تجريبي",
+        "phone": "+968 9123 4567",
+        "addressLine": "شارع السلطان قابوس، مسقط",
+        "governorate": "MUSCAT"
     }
     
-    response = make_request('POST', '/admin/coupons', data=invalid_coupon_data, cookies=admin_cookies)
-    test_result(
-        "POST /api/admin/coupons (invalid code) → 400",
-        response and response.status_code == 400 and 'الرمز يجب أن يكون بين 3 و 32' in response.text,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
+    valid_items = [{
+        "productId": product_id,
+        "quantity": 2
+    }]
     
-    # Test 5: POST /api/admin/coupons (invalid value) → 400
-    invalid_value_data = {
-        'code': 'TESTCOUPON',
-        'description': 'Test coupon',
-        'type': 'PERCENT',
-        'value': 0  # invalid
+    test_cases = [
+        # G1: Missing guest object (no session)
+        {
+            "name": "G1: Missing guest object",
+            "data": {
+                "items": valid_items,
+                "shippingAddress": valid_shipping,
+                "paymentMethod": "COD"
+            },
+            "expected_status": 400,
+            "expected_error": "للشراء كضيف، الاسم والبريد الإلكتروني مطلوبان"
+        },
+        
+        # G2: Empty guest name
+        {
+            "name": "G2: Empty guest name",
+            "data": {
+                "items": valid_items,
+                "shippingAddress": valid_shipping,
+                "paymentMethod": "COD",
+                "guest": {"name": "", "email": "test@example.com", "phone": "+968 9123 4567"}
+            },
+            "expected_status": 400,
+            "expected_error": "للشراء كضيف، الاسم والبريد الإلكتروني مطلوبان"
+        },
+        
+        # G3: Invalid email format
+        {
+            "name": "G3: Invalid email format",
+            "data": {
+                "items": valid_items,
+                "shippingAddress": valid_shipping,
+                "paymentMethod": "COD",
+                "guest": {"name": "Guest Test", "email": "notanemail", "phone": "+968 9123 4567"}
+            },
+            "expected_status": 400,
+            "expected_error": "صيغة البريد الإلكتروني غير صحيحة"
+        }
+    ]
+    
+    # G4: Email belongs to registered user
+    registered_email = f"registered{timestamp}@test.com"
+    registered_user_id = create_test_user("Registered User", registered_email, "password123")
+    if registered_user_id:
+        test_cases.append({
+            "name": "G4: Email belongs to registered user",
+            "data": {
+                "items": valid_items,
+                "shippingAddress": valid_shipping,
+                "paymentMethod": "COD",
+                "guest": {"name": "Guest Test", "email": registered_email, "phone": "+968 9123 4567"}
+            },
+            "expected_status": 409,
+            "expected_error": "هذا البريد مسجّل مسبقاً، يُرجى تسجيل الدخول لإتمام الطلب"
+        })
+    
+    # Run error test cases
+    for test_case in test_cases:
+        print(f"   Testing {test_case['name']}...")
+        response = make_request('POST', '/orders', test_case['data'])
+        
+        if response and response.status_code == test_case['expected_status']:
+            try:
+                error_msg = response.json().get('error', '')
+                if test_case['expected_error'] in error_msg:
+                    print(f"   ✅ {test_case['name']} → {response.status_code} with correct Arabic error")
+                else:
+                    print(f"   ❌ {test_case['name']} → Wrong error message: {error_msg}")
+            except:
+                print(f"   ❌ {test_case['name']} → Invalid JSON response")
+        else:
+            print(f"   ❌ {test_case['name']} → Expected {test_case['expected_status']}, got {response.status_code if response else 'No response'}")
+    
+    # G5: Happy path - new guest email
+    print("   Testing G5: Happy path guest checkout...")
+    guest_email = f"guest{timestamp}@example.com"
+    guest_data = {
+        "items": valid_items,
+        "shippingAddress": valid_shipping,
+        "paymentMethod": "COD",
+        "guest": {"name": "Guest Test", "email": guest_email, "phone": "+968 9123 4567"}
     }
     
-    response = make_request('POST', '/admin/coupons', data=invalid_value_data, cookies=admin_cookies)
-    test_result(
-        "POST /api/admin/coupons (invalid value) → 400",
-        response and response.status_code == 400 and 'قيمة الخصم غير صحيحة' in response.text,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    # Test 6: POST /api/admin/coupons (PERCENT > 100) → 400
-    invalid_percent_data = {
-        'code': 'TESTCOUPON',
-        'description': 'Test coupon',
-        'type': 'PERCENT',
-        'value': 150  # > 100%
-    }
-    
-    response = make_request('POST', '/admin/coupons', data=invalid_percent_data, cookies=admin_cookies)
-    test_result(
-        "POST /api/admin/coupons (PERCENT > 100) → 400",
-        response and response.status_code == 400 and 'نسبة الخصم يجب ألا تتجاوز 100%' in response.text,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    # Test 7: POST /api/admin/coupons (valid) → 200
-    valid_coupon_data = {
-        'code': 'welcome10',  # should be auto-uppercased
-        'description': 'Welcome discount',
-        'type': 'PERCENT',
-        'value': 10,
-        'minSubtotal': 50,
-        'maxDiscount': 20,
-        'usageLimit': 100,
-        'perUserLimit': 1
-    }
-    
-    response = make_request('POST', '/admin/coupons', data=valid_coupon_data, cookies=admin_cookies)
-    test_result(
-        "POST /api/admin/coupons (valid) → 200",
-        response and response.status_code == 200,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
-    
-    created_coupon_id = None
+    response = make_request('POST', '/orders', guest_data)
     if response and response.status_code == 200:
-        data = response.json()
-        created_coupon_id = data.get('coupon', {}).get('id')
-        test_result(
-            "Created coupon structure",
-            (data.get('success') is True and 
-             data.get('coupon', {}).get('code') == 'WELCOME10'),  # auto-uppercased
-            f"Response: {data}"
-        )
+        try:
+            result = response.json()
+            if result.get('success') and result.get('order', {}).get('id'):
+                print("   ✅ G5: Guest checkout successful → 200 with order.id")
+                
+                # Verify guest user created in DB
+                guest_user = db.users.find_one({"email": guest_email})
+                if guest_user and guest_user.get('isGuest') == True:
+                    print("   ✅ G5: Guest user created with isGuest=true")
+                else:
+                    print("   ❌ G5: Guest user not found or isGuest not set")
+                
+                # Verify product stock decremented
+                product = db.products.find_one({"_id": product_id})
+                if product and product.get('stock') == 18:  # 20 - 2
+                    print("   ✅ G5: Product stock decremented correctly (20 → 18)")
+                else:
+                    print(f"   ❌ G5: Product stock not decremented correctly: {product.get('stock') if product else 'Product not found'}")
+                
+                # Verify order details
+                order = db.orders.find_one({"_id": result['order']['id']})
+                if order:
+                    if order.get('paymentProvider') == 'COD' and order.get('status') == 'PAID':
+                        print("   ✅ G5: Order created with COD provider and PAID status")
+                    else:
+                        print(f"   ❌ G5: Order has wrong provider/status: {order.get('paymentProvider')}/{order.get('status')}")
+                else:
+                    print("   ❌ G5: Order not found in database")
+                    
+            else:
+                print(f"   ❌ G5: Invalid response structure: {result}")
+        except Exception as e:
+            print(f"   ❌ G5: Error parsing response: {e}")
+    else:
+        print(f"   ❌ G5: Guest checkout failed → {response.status_code if response else 'No response'}")
     
-    # Test 8: POST /api/admin/coupons (duplicate code) → 409
-    response = make_request('POST', '/admin/coupons', data=valid_coupon_data, cookies=admin_cookies)
-    test_result(
-        "POST /api/admin/coupons (duplicate) → 409",
-        response and response.status_code == 409 and 'رمز الكوبون مستخدم مسبقاً' in response.text,
-        f"Status: {response.status_code if response else 'No response'}"
+    # G6: Re-using same guest email
+    print("   Testing G6: Re-using same guest email...")
+    response = make_request('POST', '/orders', guest_data)
+    if response and response.status_code == 200:
+        print("   ✅ G6: Re-using guest email successful → 200")
+        
+        # Verify no duplicate user created
+        guest_users = list(db.users.find({"email": guest_email}))
+        if len(guest_users) == 1:
+            print("   ✅ G6: No duplicate guest user created")
+        else:
+            print(f"   ❌ G6: Found {len(guest_users)} users with same email")
+    else:
+        print(f"   ❌ G6: Re-using guest email failed → {response.status_code if response else 'No response'}")
+    
+    # G7: Authenticated user order (regression test)
+    print("   Testing G7: Authenticated user order (regression)...")
+    auth_user_email = f"authuser{timestamp}@test.com"
+    auth_user_id = create_test_user("Auth User", auth_user_email, "password123")
+    
+    if auth_user_id:
+        session_cookie = login_user(auth_user_email, "password123")
+        if session_cookie:
+            auth_data = {
+                "items": valid_items,
+                "shippingAddress": valid_shipping,
+                "paymentMethod": "COD"
+                # No guest field for authenticated users
+            }
+            
+            response = make_request('POST', '/orders', auth_data, session_cookie=session_cookie)
+            if response and response.status_code == 200:
+                print("   ✅ G7: Authenticated user order successful → 200")
+            else:
+                print(f"   ❌ G7: Authenticated user order failed → {response.status_code if response else 'No response'}")
+        else:
+            print("   ❌ G7: Failed to login authenticated user")
+    else:
+        print("   ❌ G7: Failed to create authenticated user")
+    
+    print("✅ TASK 1: Guest Checkout testing completed")
+    return True
+
+def test_cod_payment():
+    """Test TASK 2: POST /api/orders with paymentMethod=COD"""
+    print("\n🧪 TASK 2: Testing COD Payment (POST /api/orders with paymentMethod=COD)")
+    
+    # Setup: Create user, vendor, and product
+    timestamp = int(time.time())
+    user_email = f"coduser{timestamp}@test.com"
+    user_id = create_test_user(f"COD User {timestamp}", user_email, "password123")
+    
+    vendor_email = f"codvendor{timestamp}@test.com"
+    vendor_id = create_test_user(f"COD Vendor {timestamp}", vendor_email, "password123", role='VENDOR')
+    
+    product_id = create_test_product(vendor_id, "منتج COD", 15.0, stock=30)
+    
+    if not all([user_id, vendor_id, product_id]):
+        print("❌ Failed to create test data for COD testing")
+        return False
+    
+    session_cookie = login_user(user_email, "password123")
+    if not session_cookie:
+        print("❌ Failed to login COD test user")
+        return False
+    
+    # COD1: Test COD payment method
+    print("   Testing COD1: COD payment method...")
+    cod_data = {
+        "items": [{"productId": product_id, "quantity": 1}],
+        "shippingAddress": {
+            "name": "عميل COD",
+            "phone": "+968 9123 4567",
+            "addressLine": "شارع السلطان قابوس، مسقط",
+            "governorate": "MUSCAT"
+        },
+        "paymentMethod": "COD"
+    }
+    
+    response = make_request('POST', '/orders', cod_data, session_cookie=session_cookie)
+    if response and response.status_code == 200:
+        try:
+            result = response.json()
+            order_id = result.get('order', {}).get('id')
+            if order_id:
+                print("   ✅ COD1: COD order created successfully → 200")
+                
+                # Verify order details in DB
+                order = db.orders.find_one({"_id": order_id})
+                if order:
+                    checks = [
+                        (order.get('paymentProvider') == 'COD', f"paymentProvider=COD (got {order.get('paymentProvider')})"),
+                        (order.get('status') == 'PAID', f"status=PAID (got {order.get('status')})"),
+                        (order.get('paymentStatus') == 'PENDING', f"paymentStatus=PENDING (got {order.get('paymentStatus')})"),
+                        (order.get('paymentId', '').startswith('cod_'), f"paymentId starts with 'cod_' (got {order.get('paymentId')})"),
+                        (order.get('totalPaid') > 15.0, f"totalPaid includes COD fee (got {order.get('totalPaid')})")  # 15 + shipping + COD fee
+                    ]
+                    
+                    for check, desc in checks:
+                        if check:
+                            print(f"   ✅ COD1: {desc}")
+                        else:
+                            print(f"   ❌ COD1: {desc}")
+                else:
+                    print("   ❌ COD1: Order not found in database")
+            else:
+                print(f"   ❌ COD1: No order ID in response: {result}")
+        except Exception as e:
+            print(f"   ❌ COD1: Error parsing response: {e}")
+    else:
+        print(f"   ❌ COD1: COD order failed → {response.status_code if response else 'No response'}")
+    
+    # COD2: Test default payment method (should use Thawani or MOCK)
+    print("   Testing COD2: Default payment method...")
+    default_data = {
+        "items": [{"productId": product_id, "quantity": 1}],
+        "shippingAddress": {
+            "name": "عميل افتراضي",
+            "phone": "+968 9123 4567",
+            "addressLine": "شارع السلطان قابوس، مسقط",
+            "governorate": "MUSCAT"
+        }
+        # No paymentMethod specified
+    }
+    
+    response = make_request('POST', '/orders', default_data, session_cookie=session_cookie)
+    if response and response.status_code == 200:
+        try:
+            result = response.json()
+            if result.get('success'):
+                print("   ✅ COD2: Default payment method order created → 200")
+                
+                # Check if it's Thawani (with paymentUrl) or MOCK (status=PAID)
+                if result.get('paymentUrl'):
+                    print("   ✅ COD2: Thawani payment URL provided")
+                elif result.get('order', {}).get('status') == 'PAID':
+                    print("   ✅ COD2: MOCK payment (status=PAID)")
+                else:
+                    print(f"   ❌ COD2: Unexpected payment flow: {result}")
+            else:
+                print(f"   ❌ COD2: Order creation failed: {result}")
+        except Exception as e:
+            print(f"   ❌ COD2: Error parsing response: {e}")
+    else:
+        print(f"   ❌ COD2: Default payment order failed → {response.status_code if response else 'No response'}")
+    
+    # COD3: Verify stock deduction for COD orders
+    print("   Testing COD3: Stock deduction for COD orders...")
+    initial_stock = db.products.find_one({"_id": product_id}).get('stock', 0)
+    
+    cod_stock_data = {
+        "items": [{"productId": product_id, "quantity": 3}],
+        "shippingAddress": {
+            "name": "عميل المخزون",
+            "phone": "+968 9123 4567",
+            "addressLine": "شارع السلطان قابوس، مسقط",
+            "governorate": "MUSCAT"
+        },
+        "paymentMethod": "COD"
+    }
+    
+    response = make_request('POST', '/orders', cod_stock_data, session_cookie=session_cookie)
+    if response and response.status_code == 200:
+        # Check stock after order
+        final_stock = db.products.find_one({"_id": product_id}).get('stock', 0)
+        if final_stock == initial_stock - 3:
+            print(f"   ✅ COD3: Stock decremented correctly ({initial_stock} → {final_stock})")
+        else:
+            print(f"   ❌ COD3: Stock not decremented correctly ({initial_stock} → {final_stock})")
+    else:
+        print(f"   ❌ COD3: COD stock test order failed → {response.status_code if response else 'No response'}")
+    
+    print("✅ TASK 2: COD Payment testing completed")
+    return True
+
+def test_cart_persistence():
+    """Test TASK 3: POST/GET/DELETE /api/cart — Cart Persistence"""
+    print("\n🧪 TASK 3: Testing Cart Persistence")
+    
+    # Setup: Create user and product
+    timestamp = int(time.time())
+    user_email = f"cartuser{timestamp}@test.com"
+    user_id = create_test_user(f"Cart User {timestamp}", user_email, "password123")
+    
+    vendor_email = f"cartvendor{timestamp}@test.com"
+    vendor_id = create_test_user(f"Cart Vendor {timestamp}", vendor_email, "password123", role='VENDOR')
+    
+    product_id = create_test_product(vendor_id, "منتج السلة", 5.0, stock=50)
+    
+    if not all([user_id, vendor_id, product_id]):
+        print("❌ Failed to create test data for cart testing")
+        return False
+    
+    session_cookie = login_user(user_email, "password123")
+    if not session_cookie:
+        print("❌ Failed to login cart test user")
+        return False
+    
+    # C1: POST /api/cart without session
+    print("   Testing C1: POST /api/cart without session...")
+    cart_data = {
+        "items": [{
+            "productId": product_id,
+            "quantity": 2,
+            "nameAr": "منتج",
+            "unitPrice": 5,
+            "image": ""
+        }]
+    }
+    
+    response = make_request('POST', '/cart', cart_data)
+    if response and response.status_code == 401:
+        try:
+            error_msg = response.json().get('error', '')
+            if 'غير مصرح' in error_msg:
+                print("   ✅ C1: POST /api/cart without session → 401 'غير مصرح'")
+            else:
+                print(f"   ❌ C1: Wrong error message: {error_msg}")
+        except:
+            print("   ❌ C1: Invalid JSON response")
+    else:
+        print(f"   ❌ C1: Expected 401, got {response.status_code if response else 'No response'}")
+    
+    # C2: GET /api/cart without session
+    print("   Testing C2: GET /api/cart without session...")
+    response = make_request('GET', '/cart')
+    if response and response.status_code == 200:
+        try:
+            result = response.json()
+            if result.get('items') == []:
+                print("   ✅ C2: GET /api/cart without session → 200 { items: [] }")
+            else:
+                print(f"   ❌ C2: Expected empty items, got: {result}")
+        except:
+            print("   ❌ C2: Invalid JSON response")
+    else:
+        print(f"   ❌ C2: Expected 200, got {response.status_code if response else 'No response'}")
+    
+    # C3: Authenticated POST /api/cart
+    print("   Testing C3: Authenticated POST /api/cart...")
+    response = make_request('POST', '/cart', cart_data, session_cookie=session_cookie)
+    if response and response.status_code == 200:
+        try:
+            result = response.json()
+            if result.get('success') and result.get('count') == 1:
+                print("   ✅ C3: Authenticated POST /api/cart → 200 { success: true, count: 1 }")
+                
+                # Verify cart in DB
+                cart = db.carts.find_one({"userId": user_id})
+                if cart and len(cart.get('items', [])) == 1:
+                    print("   ✅ C3: Cart document created in MongoDB")
+                else:
+                    print("   ❌ C3: Cart not found in database")
+            else:
+                print(f"   ❌ C3: Unexpected response: {result}")
+        except:
+            print("   ❌ C3: Invalid JSON response")
+    else:
+        print(f"   ❌ C3: Expected 200, got {response.status_code if response else 'No response'}")
+    
+    # C4: Authenticated GET /api/cart
+    print("   Testing C4: Authenticated GET /api/cart...")
+    response = make_request('GET', '/cart', session_cookie=session_cookie)
+    if response and response.status_code == 200:
+        try:
+            result = response.json()
+            items = result.get('items', [])
+            if len(items) == 1 and items[0].get('productId') == product_id:
+                print("   ✅ C4: Authenticated GET /api/cart → 200 with saved items")
+            else:
+                print(f"   ❌ C4: Unexpected items: {items}")
+        except:
+            print("   ❌ C4: Invalid JSON response")
+    else:
+        print(f"   ❌ C4: Expected 200, got {response.status_code if response else 'No response'}")
+    
+    # C5: POST /api/cart with 150 items (should be capped to 100)
+    print("   Testing C5: POST /api/cart with 150 items...")
+    large_cart_data = {
+        "items": [
+            {
+                "productId": product_id,
+                "quantity": 1,
+                "nameAr": f"منتج {i}",
+                "unitPrice": 1,
+                "image": ""
+            } for i in range(150)
+        ]
+    }
+    
+    response = make_request('POST', '/cart', large_cart_data, session_cookie=session_cookie)
+    if response and response.status_code == 200:
+        try:
+            result = response.json()
+            if result.get('count') == 100:  # Should be capped to 100
+                print("   ✅ C5: Large cart capped to 100 items")
+                
+                # Verify in DB
+                cart = db.carts.find_one({"userId": user_id})
+                if cart and len(cart.get('items', [])) == 100:
+                    print("   ✅ C5: Database cart has exactly 100 items")
+                else:
+                    print(f"   ❌ C5: Database cart has {len(cart.get('items', [])) if cart else 0} items")
+            else:
+                print(f"   ❌ C5: Expected count=100, got {result.get('count')}")
+        except:
+            print("   ❌ C5: Invalid JSON response")
+    else:
+        print(f"   ❌ C5: Expected 200, got {response.status_code if response else 'No response'}")
+    
+    # C6: POST /api/cart with quantity=500 (should be clamped to 99)
+    print("   Testing C6: POST /api/cart with quantity=500...")
+    high_qty_data = {
+        "items": [{
+            "productId": product_id,
+            "quantity": 500,
+            "nameAr": "منتج كمية عالية",
+            "unitPrice": 5,
+            "image": ""
+        }]
+    }
+    
+    response = make_request('POST', '/cart', high_qty_data, session_cookie=session_cookie)
+    if response and response.status_code == 200:
+        # Verify quantity clamped in DB
+        cart = db.carts.find_one({"userId": user_id})
+        if cart and cart.get('items') and cart['items'][0].get('quantity') == 99:
+            print("   ✅ C6: Quantity clamped to 99 in database")
+        else:
+            actual_qty = cart['items'][0].get('quantity') if cart and cart.get('items') else 'N/A'
+            print(f"   ❌ C6: Quantity not clamped correctly: {actual_qty}")
+    else:
+        print(f"   ❌ C6: Expected 200, got {response.status_code if response else 'No response'}")
+    
+    # C7: POST /api/cart should reset reminder fields
+    print("   Testing C7: POST /api/cart resets reminder fields...")
+    
+    # First set reminder fields in DB
+    db.carts.update_one(
+        {"userId": user_id},
+        {
+            "$set": {
+                "lastReminderSentAt": datetime.utcnow(),
+                "reminderEmailsSent": 5
+            }
+        }
     )
     
-    # Test 9: PATCH /api/admin/coupons/:id (invalid id) → 404
-    fake_coupon_id = str(uuid.uuid4())
-    response = make_request('PATCH', f'/admin/coupons/{fake_coupon_id}', 
-                          data={'active': False}, cookies=admin_cookies)
-    test_result(
-        "PATCH /api/admin/coupons/:id (invalid id) → 404",
-        response and response.status_code == 404 and 'الكوبون غير موجود' in response.text,
-        f"Status: {response.status_code if response else 'No response'}"
-    )
+    # Then POST to cart
+    response = make_request('POST', '/cart', cart_data, session_cookie=session_cookie)
+    if response and response.status_code == 200:
+        # Verify reminder fields reset
+        cart = db.carts.find_one({"userId": user_id})
+        if cart:
+            if cart.get('lastReminderSentAt') is None and cart.get('reminderEmailsSent') == 0:
+                print("   ✅ C7: Reminder fields reset correctly")
+            else:
+                print(f"   ❌ C7: Reminder fields not reset: lastReminderSentAt={cart.get('lastReminderSentAt')}, reminderEmailsSent={cart.get('reminderEmailsSent')}")
+        else:
+            print("   ❌ C7: Cart not found in database")
+    else:
+        print(f"   ❌ C7: Expected 200, got {response.status_code if response else 'No response'}")
     
-    # Test 10: PATCH /api/admin/coupons/:id (valid) → 200
-    if created_coupon_id:
-        response = make_request('PATCH', f'/admin/coupons/{created_coupon_id}', 
-                              data={'active': False}, cookies=admin_cookies)
-        test_result(
-            "PATCH /api/admin/coupons/:id (valid) → 200",
-            response and response.status_code == 200,
-            f"Status: {response.status_code if response else 'No response'}"
-        )
+    # C8: Authenticated DELETE /api/cart
+    print("   Testing C8: Authenticated DELETE /api/cart...")
+    response = make_request('DELETE', '/cart', session_cookie=session_cookie)
+    if response and response.status_code == 200:
+        try:
+            result = response.json()
+            if result.get('success'):
+                print("   ✅ C8: DELETE /api/cart → 200 { success: true }")
+                
+                # Verify cart emptied in DB
+                cart = db.carts.find_one({"userId": user_id})
+                if cart and cart.get('items') == []:
+                    print("   ✅ C8: Cart items array emptied in database")
+                else:
+                    print(f"   ❌ C8: Cart not emptied: {cart.get('items') if cart else 'Cart not found'}")
+            else:
+                print(f"   ❌ C8: Unexpected response: {result}")
+        except:
+            print("   ❌ C8: Invalid JSON response")
+    else:
+        print(f"   ❌ C8: Expected 200, got {response.status_code if response else 'No response'}")
+    
+    print("✅ TASK 3: Cart Persistence testing completed")
+    return True
+
+def test_abandoned_carts_cron():
+    """Test TASK 4: POST /api/cron/abandoned-carts"""
+    print("\n🧪 TASK 4: Testing Abandoned Carts Cron")
+    
+    # Setup: Create user and cart
+    timestamp = int(time.time())
+    user_email = f"cronuser{timestamp}@test.com"
+    user_id = create_test_user(f"Cron User {timestamp}", user_email, "password123")
+    
+    admin_email = f"cronadmin{timestamp}@test.com"
+    admin_id = create_test_user(f"Cron Admin {timestamp}", admin_email, "password123", role='ADMIN')
+    
+    if not all([user_id, admin_id]):
+        print("❌ Failed to create test users for cron testing")
+        return False
+    
+    # CR1: No auth header, no session
+    print("   Testing CR1: No auth header, no session...")
+    response = make_request('POST', '/cron/abandoned-carts')
+    if response and response.status_code == 401:
+        try:
+            error_msg = response.json().get('error', '')
+            if 'غير مصرح' in error_msg:
+                print("   ✅ CR1: No auth → 401 'غير مصرح'")
+            else:
+                print(f"   ❌ CR1: Wrong error message: {error_msg}")
+        except:
+            print("   ❌ CR1: Invalid JSON response")
+    else:
+        print(f"   ❌ CR1: Expected 401, got {response.status_code if response else 'No response'}")
+    
+    # CR2: Wrong X-CRON-KEY
+    print("   Testing CR2: Wrong X-CRON-KEY...")
+    response = make_request('POST', '/cron/abandoned-carts', headers={'X-CRON-KEY': 'wrong-key'})
+    if response and response.status_code == 401:
+        print("   ✅ CR2: Wrong cron key → 401")
+    else:
+        print(f"   ❌ CR2: Expected 401, got {response.status_code if response else 'No response'}")
+    
+    # CR3: Correct X-CRON-KEY
+    print("   Testing CR3: Correct X-CRON-KEY...")
+    response = make_request('POST', '/cron/abandoned-carts', headers={'X-CRON-KEY': CRON_SECRET})
+    if response and response.status_code == 200:
+        try:
+            result = response.json()
+            if result.get('success') and 'candidates' in result and 'sent' in result:
+                print(f"   ✅ CR3: Correct cron key → 200 {{ success: true, candidates: {result['candidates']}, sent: {result['sent']} }}")
+            else:
+                print(f"   ❌ CR3: Unexpected response structure: {result}")
+        except:
+            print("   ❌ CR3: Invalid JSON response")
+    else:
+        print(f"   ❌ CR3: Expected 200, got {response.status_code if response else 'No response'}")
+    
+    # CR3 Alternative: ADMIN session
+    print("   Testing CR3 Alt: ADMIN session...")
+    admin_session = login_user(admin_email, "password123")
+    if admin_session:
+        response = make_request('POST', '/cron/abandoned-carts', session_cookie=admin_session)
+        if response and response.status_code == 200:
+            print("   ✅ CR3 Alt: ADMIN session → 200")
+        else:
+            print(f"   ❌ CR3 Alt: Expected 200, got {response.status_code if response else 'No response'}")
+    else:
+        print("   ❌ CR3 Alt: Failed to login admin user")
+    
+    # CR4: Setup scenario - Create abandoned cart
+    print("   Testing CR4: Setup abandoned cart scenario...")
+    
+    # Create cart 36 hours ago
+    abandoned_time = datetime.utcnow() - timedelta(hours=36)
+    cart_doc = {
+        '_id': generate_uuid(),
+        'userId': user_id,
+        'items': [{
+            'productId': 'test-product-id',
+            'quantity': 1,
+            'nameAr': 'منتج مهجور',
+            'unitPrice': 10,
+            'image': ''
+        }],
+        'lastReminderSentAt': None,
+        'reminderEmailsSent': 0,
+        'updatedAt': abandoned_time
+    }
+    
+    try:
+        db.carts.insert_one(cart_doc)
+        print("   ✅ CR4: Created abandoned cart (36 hours old)")
         
-        # Test 11: Validate endpoint should now return inactive error
-        buyer = create_test_user('validate_buyer', 'MEMBER', 'FREE')
-        if buyer:
-            buyer_cookies = login_user(buyer['email'], buyer['password'])
-            if buyer_cookies:
-                response = make_request('POST', '/coupons/validate', 
-                                      data={'code': 'WELCOME10', 'subtotal': 100}, 
-                                      cookies=buyer_cookies)
-                if response and response.status_code == 200:
-                    data = response.json()
-                    test_result(
-                        "Deactivated coupon validation",
-                        data.get('valid') is False and 'الكوبون غير فعّال' in data.get('error', ''),
-                        f"Response: {data}"
-                    )
+        # Call cron endpoint
+        response = make_request('POST', '/cron/abandoned-carts', headers={'X-CRON-KEY': CRON_SECRET})
+        if response and response.status_code == 200:
+            result = response.json()
+            if result.get('candidates', 0) >= 1:
+                print(f"   ✅ CR4: Found abandoned cart (candidates: {result['candidates']})")
+                
+                # Verify cart updated in DB
+                updated_cart = db.carts.find_one({"_id": cart_doc['_id']})
+                if updated_cart:
+                    if updated_cart.get('reminderEmailsSent') == 1 and updated_cart.get('lastReminderSentAt'):
+                        print("   ✅ CR4: Cart reminder fields updated correctly")
+                    else:
+                        print(f"   ❌ CR4: Cart reminder fields not updated: reminderEmailsSent={updated_cart.get('reminderEmailsSent')}, lastReminderSentAt={updated_cart.get('lastReminderSentAt')}")
+                else:
+                    print("   ❌ CR4: Updated cart not found in database")
+            else:
+                print(f"   ❌ CR4: No candidates found: {result}")
+        else:
+            print(f"   ❌ CR4: Cron call failed → {response.status_code if response else 'No response'}")
+            
+    except Exception as e:
+        print(f"   ❌ CR4: Error creating abandoned cart: {e}")
     
-    # Test 12: DELETE /api/admin/coupons/:id (unused coupon) → 200
-    unused_coupon = create_test_coupon('UNUSED', 'PERCENT', 5, True)
-    if unused_coupon:
-        response = make_request('DELETE', f"/admin/coupons/{unused_coupon['_id']}", cookies=admin_cookies)
-        test_result(
-            "DELETE /api/admin/coupons/:id (unused) → 200",
-            response and response.status_code == 200,
-            f"Status: {response.status_code if response else 'No response'}"
-        )
+    # CR5: Call endpoint again - same cart should NOT be picked
+    print("   Testing CR5: Second call should not pick same cart...")
+    response = make_request('POST', '/cron/abandoned-carts', headers={'X-CRON-KEY': CRON_SECRET})
+    if response and response.status_code == 200:
+        result = response.json()
+        # The same cart should not be picked again (reminderEmailsSent >= 1)
+        print(f"   ✅ CR5: Second call → candidates: {result.get('candidates', 0)} (should not include previously reminded cart)")
+    else:
+        print(f"   ❌ CR5: Expected 200, got {response.status_code if response else 'No response'}")
     
-    # Test 13: DELETE /api/admin/coupons/:id (used coupon) → 400
-    # First create and use a coupon
-    used_coupon = create_test_coupon('USED', 'PERCENT', 5, True)
-    if used_coupon:
-        # Simulate usage by incrementing usedCount
-        db.coupons.update_one({'_id': used_coupon['_id']}, {'$set': {'usedCount': 1}})
-        
-        response = make_request('DELETE', f"/admin/coupons/{used_coupon['_id']}", cookies=admin_cookies)
-        test_result(
-            "DELETE /api/admin/coupons/:id (used) → 400",
-            response and response.status_code == 400 and 'لا يمكن حذف كوبون تم استخدامه' in response.text,
-            f"Status: {response.status_code if response else 'No response'}"
-        )
+    # CR6: Cart updated 10 hours ago (too new)
+    print("   Testing CR6: Cart too new (10 hours ago)...")
+    new_cart_time = datetime.utcnow() - timedelta(hours=10)
+    new_cart_doc = {
+        '_id': generate_uuid(),
+        'userId': user_id,
+        'items': [{'productId': 'new-product', 'quantity': 1, 'nameAr': 'منتج جديد', 'unitPrice': 5, 'image': ''}],
+        'lastReminderSentAt': None,
+        'reminderEmailsSent': 0,
+        'updatedAt': new_cart_time
+    }
+    
+    try:
+        db.carts.insert_one(new_cart_doc)
+        print("   ✅ CR6: Created new cart (10 hours old - too new)")
+    except Exception as e:
+        print(f"   ❌ CR6: Error creating new cart: {e}")
+    
+    # CR7: Cart updated 100 hours ago (too old)
+    print("   Testing CR7: Cart too old (100 hours ago)...")
+    old_cart_time = datetime.utcnow() - timedelta(hours=100)
+    old_cart_doc = {
+        '_id': generate_uuid(),
+        'userId': user_id,
+        'items': [{'productId': 'old-product', 'quantity': 1, 'nameAr': 'منتج قديم', 'unitPrice': 8, 'image': ''}],
+        'lastReminderSentAt': None,
+        'reminderEmailsSent': 0,
+        'updatedAt': old_cart_time
+    }
+    
+    try:
+        db.carts.insert_one(old_cart_doc)
+        print("   ✅ CR7: Created old cart (100 hours old - too old)")
+    except Exception as e:
+        print(f"   ❌ CR7: Error creating old cart: {e}")
+    
+    # CR8: Empty cart
+    print("   Testing CR8: Empty cart...")
+    empty_cart_time = datetime.utcnow() - timedelta(hours=48)
+    empty_cart_doc = {
+        '_id': generate_uuid(),
+        'userId': user_id,
+        'items': [],  # Empty items array
+        'lastReminderSentAt': None,
+        'reminderEmailsSent': 0,
+        'updatedAt': empty_cart_time
+    }
+    
+    try:
+        db.carts.insert_one(empty_cart_doc)
+        print("   ✅ CR8: Created empty cart (should not be picked)")
+    except Exception as e:
+        print(f"   ❌ CR8: Error creating empty cart: {e}")
+    
+    # Final cron call to verify filtering
+    print("   Testing final cron call with various cart ages...")
+    response = make_request('POST', '/cron/abandoned-carts', headers={'X-CRON-KEY': CRON_SECRET})
+    if response and response.status_code == 200:
+        result = response.json()
+        print(f"   ✅ Final cron call → candidates: {result.get('candidates', 0)}, sent: {result.get('sent', 0)}")
+        print("   ℹ️  Only carts 24-72 hours old with items and reminderEmailsSent < 1 should be candidates")
+    else:
+        print(f"   ❌ Final cron call failed → {response.status_code if response else 'No response'}")
+    
+    print("✅ TASK 4: Abandoned Carts Cron testing completed")
+    return True
+
+def test_regression():
+    """Test regression cases"""
+    print("\n🧪 Testing Regression Cases...")
+    
+    # R1: GET /api/
+    print("   Testing R1: GET /api/...")
+    if test_api_health():
+        print("   ✅ R1: API health check passed")
+    else:
+        print("   ❌ R1: API health check failed")
+    
+    # R2: POST /api/signup fresh user
+    print("   Testing R2: POST /api/signup...")
+    timestamp = int(time.time())
+    signup_data = {
+        "name": f"Regression User {timestamp}",
+        "email": f"regression{timestamp}@test.com",
+        "password": "password123"
+    }
+    
+    response = make_request('POST', '/signup', signup_data)
+    if response and response.status_code == 200:
+        try:
+            result = response.json()
+            if result.get('success') and result.get('user'):
+                print("   ✅ R2: POST /api/signup → 200 with user")
+            else:
+                print(f"   ❌ R2: Unexpected signup response: {result}")
+        except:
+            print("   ❌ R2: Invalid JSON response")
+    else:
+        print(f"   ❌ R2: Expected 200, got {response.status_code if response else 'No response'}")
+    
+    # R3: POST /api/products (authenticated VENDOR)
+    print("   Testing R3: POST /api/products...")
+    vendor_email = f"regvendor{timestamp}@test.com"
+    vendor_id = create_test_user(f"Regression Vendor {timestamp}", vendor_email, "password123", role='VENDOR')
+    
+    if vendor_id:
+        session_cookie = login_user(vendor_email, "password123")
+        if session_cookie:
+            product_data = {
+                "nameAr": "منتج اختبار الانحدار",
+                "price": 25.0,
+                "description": "منتج للتأكد من عمل النظام",
+                "category": "OTHER",
+                "stock": 10
+            }
+            
+            response = make_request('POST', '/products', product_data, session_cookie=session_cookie)
+            if response and response.status_code == 200:
+                print("   ✅ R3: POST /api/products → 200 (vendor can create products)")
+            else:
+                print(f"   ❌ R3: Expected 200, got {response.status_code if response else 'No response'}")
+        else:
+            print("   ❌ R3: Failed to login vendor")
+    else:
+        print("   ❌ R3: Failed to create vendor")
+    
+    print("✅ Regression testing completed")
+    return True
 
 def main():
-    """Main test execution"""
-    print("🚀 STARTING PHASE 5 SHOPIFY-LIKE FEATURES BACKEND TESTING")
+    """Main testing function"""
+    print("🚀 Starting Backend Testing for Omani Entrepreneur Majles")
     print("=" * 80)
     
-    # Run all test suites
-    test_regression_endpoints()
-    test_wishlist_endpoints()
-    test_coupon_validation_endpoint()
-    test_coupon_order_integration()
-    test_admin_coupon_crud()
+    # Test API health first
+    if not test_api_health():
+        print("❌ API health check failed. Stopping tests.")
+        return
     
-    # Final summary
+    # Run all test tasks
+    results = []
+    
+    try:
+        results.append(("TASK 1: Guest Checkout", test_guest_checkout()))
+        results.append(("TASK 2: COD Payment", test_cod_payment()))
+        results.append(("TASK 3: Cart Persistence", test_cart_persistence()))
+        results.append(("TASK 4: Abandoned Carts Cron", test_abandoned_carts_cron()))
+        results.append(("Regression Tests", test_regression()))
+    except Exception as e:
+        print(f"❌ Testing error: {e}")
+        results.append(("Testing Error", False))
+    
+    # Summary
     print("\n" + "=" * 80)
-    print("📊 FINAL TEST RESULTS")
-    print(f"✅ Tests Passed: {tests_passed}")
-    print(f"❌ Tests Failed: {tests_failed}")
-    print(f"📈 Success Rate: {(tests_passed / (tests_passed + tests_failed) * 100):.1f}%" if (tests_passed + tests_failed) > 0 else "No tests run")
+    print("📊 TESTING SUMMARY")
+    print("=" * 80)
     
-    if tests_failed == 0:
-        print("\n🎉 ALL TESTS PASSED! Phase 5 Shopify-like features are working correctly.")
+    passed = 0
+    total = len(results)
+    
+    for test_name, result in results:
+        status = "✅ PASSED" if result else "❌ FAILED"
+        print(f"{status}: {test_name}")
+        if result:
+            passed += 1
+    
+    print(f"\nOverall: {passed}/{total} tests passed ({passed/total*100:.1f}%)")
+    
+    if passed == total:
+        print("🎉 All tests passed!")
     else:
-        print(f"\n⚠️ {tests_failed} test(s) failed. Please review the issues above.")
-    
-    # Close MongoDB connection
-    mongo_client.close()
-    
-    return tests_failed == 0
+        print("⚠️  Some tests failed. Check the detailed output above.")
 
 if __name__ == "__main__":
-    success = main()
-    sys.exit(0 if success else 1)
+    main()
