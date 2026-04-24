@@ -4,7 +4,7 @@ import crypto from 'crypto'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { connectDB } from '@/lib/db'
-import { User, Membership, PasswordResetToken, Company, Expert, Availability, Appointment, VendorApplication, Product, ProductReview, Order, Coupon, CouponRedemption, Cart, StockMovement } from '@/lib/models'
+import { User, Membership, PasswordResetToken, Company, Expert, Availability, Appointment, VendorApplication, Product, ProductReview, Order, Coupon, CouponRedemption, Cart, StockMovement, Promotion } from '@/lib/models'
 
 // ---- Extracted modular handlers ----
 import {
@@ -49,6 +49,7 @@ import { CATEGORY_KEYS, COMMISSION_PERCENT, TIER_DISCOUNT_PERCENT, computeShippi
 import { slugify, uniqueVendorSlug } from '@/lib/slug'
 import { sanitizeVariants, findVariant } from '@/lib/variants'
 import { recordStockMovement, isLowStock, lowStockVariants } from '@/lib/inventory'
+import { applyAllPromotions } from '@/lib/promotions'
 import {
   SPECIALTY_KEYS,
   specialtyLabel,
@@ -3465,7 +3466,210 @@ async function handleRoute(request, { params }) {
       )
     }
 
-    // ---- POST /vendor/products/import (bulk CSV import for vendors) ----
+    /* ============================================================
+       PROMOTIONS (عروض ترويجية)
+       ============================================================ */
+    // ---- GET /vendor/promotions (list vendor's promos) ----
+    if (route === '/vendor/promotions' && method === 'GET') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
+      }
+      await connectDB()
+      const dbUser = await User.findById(session.user.id).lean()
+      if (!dbUser || (dbUser.role !== 'VENDOR' && dbUser.role !== 'ADMIN')) {
+        return handleCORS(
+          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
+        )
+      }
+      const promos = await Promotion.find({ vendorId: session.user.id })
+        .sort({ createdAt: -1 })
+        .lean()
+      return handleCORS(
+        NextResponse.json({
+          promotions: promos.map((p) => ({ id: p._id, ...p, _id: undefined })),
+        })
+      )
+    }
+
+    // ---- POST /vendor/promotions (create) ----
+    if (route === '/vendor/promotions' && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
+      }
+      await connectDB()
+      const dbUser = await User.findById(session.user.id).lean()
+      if (!dbUser || (dbUser.role !== 'VENDOR' && dbUser.role !== 'ADMIN')) {
+        return handleCORS(
+          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
+        )
+      }
+      const body = await request.json().catch(() => ({}))
+      const type = String(body?.type || '').toUpperCase()
+      if (!['BUY_X_GET_Y', 'TIER'].includes(type)) {
+        return handleCORS(
+          NextResponse.json({ error: 'نوع العرض غير صحيح' }, { status: 400 })
+        )
+      }
+      const nameAr = String(body?.nameAr || '').trim()
+      if (!nameAr || nameAr.length > 100) {
+        return handleCORS(
+          NextResponse.json({ error: 'اسم العرض مطلوب (≤ 100 حرف)' }, { status: 400 })
+        )
+      }
+      const doc = {
+        vendorId: session.user.id,
+        type,
+        nameAr,
+        descriptionAr: String(body?.descriptionAr || '').slice(0, 500),
+        productIds: Array.isArray(body?.productIds) ? body.productIds.slice(0, 100) : [],
+        isActive: body?.isActive !== false,
+        priority: parseInt(body?.priority || 0, 10) || 0,
+        startDate: body?.startDate ? new Date(body.startDate) : new Date(),
+        endDate: body?.endDate ? new Date(body.endDate) : null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }
+      if (type === 'BUY_X_GET_Y') {
+        const buyQty = Math.max(1, parseInt(body?.buyQty || 2, 10) || 2)
+        const getQty = Math.max(1, parseInt(body?.getQty || 1, 10) || 1)
+        const pct = Math.max(1, Math.min(100, parseInt(body?.getDiscountPercent || 100, 10) || 100))
+        doc.buyQty = buyQty
+        doc.getQty = getQty
+        doc.getDiscountPercent = pct
+      } else if (type === 'TIER') {
+        const tiers = Array.isArray(body?.tiers) ? body.tiers : []
+        if (tiers.length === 0) {
+          return handleCORS(
+            NextResponse.json({ error: 'أضف مستوى واحد على الأقل' }, { status: 400 })
+          )
+        }
+        const clean = []
+        for (let i = 0; i < tiers.length; i++) {
+          const t = tiers[i]
+          const minSpend = Number(t.minSpend)
+          const percent = Number(t.percent)
+          if (!Number.isFinite(minSpend) || minSpend < 0) {
+            return handleCORS(
+              NextResponse.json({ error: `قيمة الحد الأدنى للمستوى ${i + 1} غير صحيحة` }, { status: 400 })
+            )
+          }
+          if (!Number.isFinite(percent) || percent < 1 || percent > 90) {
+            return handleCORS(
+              NextResponse.json({ error: `نسبة الخصم للمستوى ${i + 1} يجب أن تكون 1-90%` }, { status: 400 })
+            )
+          }
+          clean.push({ minSpend: +minSpend.toFixed(3), percent: Math.round(percent) })
+        }
+        doc.tiers = clean
+      }
+      const p = await Promotion.create(doc)
+      return handleCORS(
+        NextResponse.json({
+          promotion: { id: p._id, ...p.toObject(), _id: undefined },
+        })
+      )
+    }
+
+    // ---- PUT/DELETE /vendor/promotions/:id ----
+    const promotionMatch = route.match(/^\/vendor\/promotions\/([A-Za-z0-9-]+)$/)
+    if (promotionMatch && (method === 'PUT' || method === 'DELETE')) {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
+      }
+      await connectDB()
+      const id = promotionMatch[1]
+      const promo = await Promotion.findById(id)
+      if (!promo) {
+        return handleCORS(
+          NextResponse.json({ error: 'العرض غير موجود' }, { status: 404 })
+        )
+      }
+      if (promo.vendorId !== session.user.id && session.user.role !== 'ADMIN') {
+        return handleCORS(
+          NextResponse.json({ error: 'لا يمكنك تعديل هذا العرض' }, { status: 403 })
+        )
+      }
+      if (method === 'DELETE') {
+        await Promotion.deleteOne({ _id: id })
+        return handleCORS(NextResponse.json({ success: true }))
+      }
+      const body = await request.json().catch(() => ({}))
+      if (body.nameAr !== undefined) promo.nameAr = String(body.nameAr).trim().slice(0, 100)
+      if (body.descriptionAr !== undefined) promo.descriptionAr = String(body.descriptionAr).slice(0, 500)
+      if (body.isActive !== undefined) promo.isActive = !!body.isActive
+      if (body.priority !== undefined) promo.priority = parseInt(body.priority, 10) || 0
+      if (body.productIds !== undefined) promo.productIds = Array.isArray(body.productIds) ? body.productIds.slice(0, 100) : []
+      if (body.startDate !== undefined) promo.startDate = body.startDate ? new Date(body.startDate) : new Date()
+      if (body.endDate !== undefined) promo.endDate = body.endDate ? new Date(body.endDate) : null
+      if (promo.type === 'BUY_X_GET_Y') {
+        if (body.buyQty !== undefined) promo.buyQty = Math.max(1, parseInt(body.buyQty, 10) || 2)
+        if (body.getQty !== undefined) promo.getQty = Math.max(1, parseInt(body.getQty, 10) || 1)
+        if (body.getDiscountPercent !== undefined) promo.getDiscountPercent = Math.max(1, Math.min(100, parseInt(body.getDiscountPercent, 10) || 100))
+      } else if (promo.type === 'TIER' && Array.isArray(body.tiers)) {
+        const clean = []
+        for (let i = 0; i < body.tiers.length; i++) {
+          const t = body.tiers[i]
+          const minSpend = Number(t.minSpend)
+          const percent = Number(t.percent)
+          if (!Number.isFinite(minSpend) || minSpend < 0 || !Number.isFinite(percent) || percent < 1 || percent > 90) continue
+          clean.push({ minSpend: +minSpend.toFixed(3), percent: Math.round(percent) })
+        }
+        promo.tiers = clean
+      }
+      promo.updatedAt = new Date()
+      await promo.save()
+      return handleCORS(
+        NextResponse.json({
+          promotion: { id: promo._id, ...promo.toObject(), _id: undefined },
+        })
+      )
+    }
+
+    // ---- GET /products/:id/promotions (public: promo badges for a product) ----
+    const productPromosMatch = route.match(
+      /^\/products\/([A-Za-z0-9-]+)\/promotions$/
+    )
+    if (productPromosMatch && method === 'GET') {
+      await connectDB()
+      const id = productPromosMatch[1]
+      const p = await Product.findById(id).lean()
+      if (!p) {
+        return handleCORS(
+          NextResponse.json({ error: 'المنتج غير موجود' }, { status: 404 })
+        )
+      }
+      const now = new Date()
+      const all = await Promotion.find({
+        vendorId: p.vendorId,
+        isActive: true,
+        $and: [
+          { $or: [{ startDate: { $lte: now } }, { startDate: null }] },
+          { $or: [{ endDate: { $gte: now } }, { endDate: null }] },
+        ],
+      }).lean()
+      const applicable = all.filter((pr) =>
+        !pr.productIds?.length || pr.productIds.includes(String(id))
+      )
+      return handleCORS(
+        NextResponse.json({
+          promotions: applicable.map((pr) => ({
+            id: pr._id,
+            type: pr.type,
+            nameAr: pr.nameAr,
+            descriptionAr: pr.descriptionAr,
+            buyQty: pr.buyQty,
+            getQty: pr.getQty,
+            getDiscountPercent: pr.getDiscountPercent,
+            tiers: pr.tiers,
+          })),
+        })
+      )
+    }
+
+
     if (route === '/vendor/products/import' && method === 'POST') {
       const session = await getServerSession(authOptions)
       if (!session?.user) {
@@ -4281,9 +4485,26 @@ async function handleRoute(request, { params }) {
       const tier = buyer?.membershipTier || 'FREE'
       const discountPercent = TIER_DISCOUNT_PERCENT[tier] || 0
       const subtotal = resolvedItems.reduce((s, it) => s + it.lineSubtotal, 0)
-      const discountAmount = +(subtotal * (discountPercent / 100)).toFixed(3)
-      const commissionAmount = +(subtotal * (COMMISSION_PERCENT / 100)).toFixed(3)
-      const afterTier = +(subtotal - discountAmount).toFixed(3)
+
+      // ----- Promotions (BUY_X_GET_Y, TIER) -----
+      const now = new Date()
+      const vendorIds = [...new Set(resolvedItems.map((it) => it.vendorId))]
+      const activePromos = await Promotion.find({
+        vendorId: { $in: vendorIds },
+        isActive: true,
+        $and: [
+          { $or: [{ startDate: { $lte: now } }, { startDate: null }] },
+          { $or: [{ endDate: { $gte: now } }, { endDate: null }] },
+        ],
+      }).lean()
+      const promoResult = applyAllPromotions(resolvedItems, activePromos)
+      const promoDiscount = promoResult.totalDiscount
+      const afterPromos = Math.max(0, +(subtotal - promoDiscount).toFixed(3))
+
+      // Membership tier discount is computed on the post-promo subtotal
+      const discountAmount = +(afterPromos * (discountPercent / 100)).toFixed(3)
+      const commissionAmount = +(afterPromos * (COMMISSION_PERCENT / 100)).toFixed(3)
+      const afterTier = +(afterPromos - discountAmount).toFixed(3)
 
       // ----- Coupon (optional) -----
       const couponCodeRaw = String(body?.couponCode || '').trim()
@@ -4363,6 +4584,14 @@ async function handleRoute(request, { params }) {
         tierAtPurchase: tier,
         couponCode: couponRef ? couponRef.code : '',
         couponDiscount,
+        promoDiscount,
+        appliedPromotions: promoResult.appliedPromotions.map((a) => ({
+          promoId: a.promoId,
+          nameAr: a.nameAr,
+          type: a.type,
+          discount: a.discount,
+          notes: a.notes || [],
+        })),
         shippingFee,
         commissionPercent: COMMISSION_PERCENT,
         commissionAmount,

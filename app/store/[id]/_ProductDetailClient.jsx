@@ -88,19 +88,24 @@ export default function ProductDetailClient({ product }) {
   // Related products
   const [related, setRelated] = useState([])
 
+  // Active promotions for this product
+  const [promotions, setPromotions] = useState([])
+
   useEffect(() => {
     let ignore = false
     ;(async () => {
       try {
-        const [r1, r2, r3] = await Promise.all([
+        const [r1, r2, r3, r4] = await Promise.all([
           fetch(`/api/products/${product.id}/reviews`).then((r) => r.json()),
           fetch(`/api/products/${product.id}/my-review-status`).then((r) => r.json()),
           fetch(`/api/products/${product.id}/related`).then((r) => r.json()),
+          fetch(`/api/products/${product.id}/promotions`).then((r) => r.json()),
         ])
         if (ignore) return
         setReviews(r1?.reviews || [])
         setMyStatus(r2 || null)
         setRelated(r3?.products || [])
+        setPromotions(r4?.promotions || [])
       } catch (e) {
         /* noop */
       } finally {
@@ -235,6 +240,38 @@ export default function ProductDetailClient({ product }) {
               </div>
               <div className="mt-1 text-[11px] opacity-80">خصم العضوية يُطبّق عند إتمام الطلب</div>
             </div>
+
+            {/* Active Promotions Banner */}
+            {promotions.length > 0 && (
+              <div className="mt-3 space-y-1.5">
+                {promotions.map((pr) => (
+                  <div
+                    key={pr.id}
+                    className="flex items-start gap-2 rounded-lg border-2 border-[#C9A84C] bg-gradient-to-l from-[#C9A84C]/15 to-[#C9A84C]/5 p-3"
+                  >
+                    <div className="text-2xl leading-none">
+                      {pr.type === 'BUY_X_GET_Y' ? '🎁' : '🔥'}
+                    </div>
+                    <div className="flex-1">
+                      <div className="text-sm font-extrabold text-[#1B3A6B]">{pr.nameAr}</div>
+                      <div className="text-[11px] text-gray-700">
+                        {pr.type === 'BUY_X_GET_Y' ? (
+                          <>اشتر {pr.buyQty} احصل على {pr.getQty} {pr.getDiscountPercent === 100 ? 'مجاناً' : `بخصم ${pr.getDiscountPercent}%`}</>
+                        ) : (
+                          <span className="flex flex-wrap gap-1">
+                            {(pr.tiers || []).map((t, i) => (
+                              <span key={i} className="rounded bg-white px-1.5 py-0.5 text-[10px] font-bold text-[#1B3A6B]">
+                                ≥{t.minSpend} ر.ع ← {t.percent}% خصم
+                              </span>
+                            ))}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {product.description && (
               <div className="mt-4">

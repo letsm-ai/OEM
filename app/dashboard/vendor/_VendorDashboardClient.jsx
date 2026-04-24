@@ -58,6 +58,7 @@ export default function VendorDashboardClient() {
           <TabBtn active={tab === 'analytics'} onClick={() => setTab('analytics')} icon={<BarChart3 className="h-4 w-4" />} label="التحليلات" />
           <TabBtn active={tab === 'products'} onClick={() => setTab('products')} icon={<Package className="h-4 w-4" />} label="منتجاتي" />
           <TabBtn active={tab === 'inventory'} onClick={() => setTab('inventory')} icon={<Warehouse className="h-4 w-4" />} label="المخزون" />
+          <TabBtn active={tab === 'promotions'} onClick={() => setTab('promotions')} icon={<Tag className="h-4 w-4" />} label="العروض" />
           <TabBtn active={tab === 'orders'} onClick={() => setTab('orders')} icon={<ShoppingCart className="h-4 w-4" />} label="الطلبات" />
           <TabBtn active={tab === 'earnings'} onClick={() => setTab('earnings')} icon={<Wallet className="h-4 w-4" />} label="الأرباح" />
           <TabBtn active={tab === 'profile'} onClick={() => setTab('profile')} icon={<SettingsIcon className="h-4 w-4" />} label="بروفايل المتجر" />
@@ -66,6 +67,7 @@ export default function VendorDashboardClient() {
         {tab === 'analytics' && <AnalyticsTab />}
         {tab === 'products' && <ProductsTab />}
         {tab === 'inventory' && <InventoryTab />}
+        {tab === 'promotions' && <PromotionsTab />}
         {tab === 'orders' && <OrdersTab />}
         {tab === 'earnings' && <EarningsTab />}
         {tab === 'profile' && <ProfileTab />}
@@ -85,6 +87,307 @@ function TabBtn({ active, onClick, icon, label }) {
       {icon}
       {label}
     </button>
+  )
+}
+
+/* --------------- PROMOTIONS (vendor) --------------- */
+function PromotionsTab() {
+  const [promos, setPromos] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [editing, setEditing] = useState(null) // object or null
+
+  const load = async () => {
+    setLoading(true)
+    const r = await fetch('/api/vendor/promotions')
+    const d = await r.json()
+    setPromos(d.promotions || [])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  const onDelete = async (id) => {
+    if (!confirm('هل تريد حذف هذا العرض؟')) return
+    await fetch(`/api/vendor/promotions/${id}`, { method: 'DELETE' })
+    load()
+  }
+  const onToggle = async (p) => {
+    await fetch(`/api/vendor/promotions/${p.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isActive: !p.isActive }),
+    })
+    load()
+  }
+
+  return (
+    <div>
+      <div className="mb-3 flex items-center justify-between">
+        <div className="text-sm text-gray-500">{promos.length} عرض</div>
+        <button
+          onClick={() => setEditing({})}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-[#C9A84C] px-4 py-2 text-sm font-bold text-[#1B3A6B] hover:bg-[#b89440]"
+        >
+          <Plus className="h-4 w-4" /> إضافة عرض
+        </button>
+      </div>
+      {loading ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-6 w-6 animate-spin text-[#1B3A6B]" />
+        </div>
+      ) : promos.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-gray-300 bg-white p-8 text-center text-sm text-gray-500">
+          🎁 لا توجد عروض ترويجية. أنشئ عرضاً لجذب المزيد من المبيعات.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {promos.map((p) => (
+            <PromotionCard
+              key={p.id}
+              promo={p}
+              onEdit={() => setEditing(p)}
+              onDelete={() => onDelete(p.id)}
+              onToggle={() => onToggle(p)}
+            />
+          ))}
+        </div>
+      )}
+      {editing !== null && (
+        <PromotionFormModal
+          promo={editing.id ? editing : null}
+          onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); load() }}
+        />
+      )}
+    </div>
+  )
+}
+
+function PromotionCard({ promo, onEdit, onDelete, onToggle }) {
+  const now = new Date()
+  const ended = promo.endDate && new Date(promo.endDate) < now
+  const future = promo.startDate && new Date(promo.startDate) > now
+  return (
+    <div className={`rounded-xl border bg-white p-4 shadow-sm ${promo.isActive && !ended ? 'border-green-200' : 'border-gray-200 opacity-80'}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1 rounded-full bg-[#1B3A6B] px-2 py-0.5 text-[10px] font-bold text-white">
+              {promo.type === 'BUY_X_GET_Y' ? '🎁 اشتر X احصل على Y' : '📊 خصم تدريجي'}
+            </span>
+            {!promo.isActive && <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-bold text-gray-600">معطّل</span>}
+            {ended && <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-700">انتهى</span>}
+            {future && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">لم يبدأ</span>}
+          </div>
+          <div className="mt-1.5 text-sm font-bold text-[#1B3A6B]">{promo.nameAr}</div>
+          {promo.descriptionAr && (
+            <div className="mt-0.5 text-[11px] text-gray-500">{promo.descriptionAr}</div>
+          )}
+          <div className="mt-2 text-xs text-gray-700">
+            {promo.type === 'BUY_X_GET_Y' ? (
+              <>اشتر <b>{promo.buyQty}</b> احصل على <b>{promo.getQty}</b> بخصم <b>{promo.getDiscountPercent}%</b></>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {(promo.tiers || []).map((t, i) => (
+                  <span key={i} className="rounded-md bg-gray-100 px-2 py-0.5 text-[11px]">
+                    ≥ {t.minSpend} ر.ع → <b className="text-[#C9A84C]">{t.percent}%</b>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="mt-1.5 text-[10px] text-gray-400">
+            المنتجات: {promo.productIds?.length > 0 ? `${promo.productIds.length} منتج محدّد` : 'كل منتجاتي'}
+            {promo.endDate && ` · ينتهي ${new Date(promo.endDate).toLocaleDateString('ar-OM')}`}
+          </div>
+        </div>
+        <div className="flex flex-shrink-0 flex-col gap-1">
+          <button
+            onClick={onToggle}
+            className={`rounded-md p-1.5 ${promo.isActive ? 'text-green-700 hover:bg-green-50' : 'text-gray-400 hover:bg-gray-50'}`}
+            title={promo.isActive ? 'تعطيل' : 'تفعيل'}
+          >
+            <Power className="h-4 w-4" />
+          </button>
+          <button onClick={onEdit} className="rounded-md p-1.5 text-blue-600 hover:bg-blue-50" title="تعديل">
+            <Edit2 className="h-4 w-4" />
+          </button>
+          <button onClick={onDelete} className="rounded-md p-1.5 text-red-500 hover:bg-red-50" title="حذف">
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PromotionFormModal({ promo, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    type: promo?.type || 'BUY_X_GET_Y',
+    nameAr: promo?.nameAr || '',
+    descriptionAr: promo?.descriptionAr || '',
+    isActive: promo?.isActive !== false,
+    buyQty: promo?.buyQty || 2,
+    getQty: promo?.getQty || 1,
+    getDiscountPercent: promo?.getDiscountPercent || 100,
+    tiers: promo?.tiers?.length ? promo.tiers : [{ minSpend: 30, percent: 10 }],
+    endDate: promo?.endDate ? new Date(promo.endDate).toISOString().split('T')[0] : '',
+  })
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setError('')
+    if (!form.nameAr.trim()) return setError('اسم العرض مطلوب')
+    setLoading(true)
+    const payload = {
+      type: form.type,
+      nameAr: form.nameAr.trim(),
+      descriptionAr: form.descriptionAr,
+      isActive: form.isActive,
+      endDate: form.endDate || null,
+    }
+    if (form.type === 'BUY_X_GET_Y') {
+      payload.buyQty = parseInt(form.buyQty, 10) || 2
+      payload.getQty = parseInt(form.getQty, 10) || 1
+      payload.getDiscountPercent = parseInt(form.getDiscountPercent, 10) || 100
+    } else {
+      payload.tiers = form.tiers.filter((t) => t.minSpend >= 0 && t.percent >= 1)
+    }
+    const res = await fetch(
+      promo ? `/api/vendor/promotions/${promo.id}` : '/api/vendor/promotions',
+      {
+        method: promo ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }
+    )
+    const d = await res.json().catch(() => ({}))
+    setLoading(false)
+    if (!res.ok) return setError(d.error || 'خطأ')
+    onSaved()
+  }
+
+  const addTier = () => setForm((f) => ({ ...f, tiers: [...f.tiers, { minSpend: 0, percent: 10 }] }))
+  const updTier = (i, k, v) => setForm((f) => ({ ...f, tiers: f.tiers.map((t, j) => j === i ? { ...t, [k]: v } : t) }))
+  const rmTier = (i) => setForm((f) => ({ ...f, tiers: f.tiers.filter((_, j) => j !== i) }))
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4">
+      <form onSubmit={submit} className="mt-10 w-full max-w-xl rounded-2xl bg-white p-5 shadow-xl">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-base font-bold text-[#1B3A6B]">
+            {promo ? 'تعديل العرض' : 'إضافة عرض جديد'}
+          </h3>
+          <button type="button" onClick={onClose} className="rounded-md p-1 hover:bg-gray-100">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="mb-3 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => setForm({ ...form, type: 'BUY_X_GET_Y' })}
+            className={`rounded-lg border-2 p-3 text-xs font-bold transition ${form.type === 'BUY_X_GET_Y' ? 'border-[#C9A84C] bg-[#C9A84C]/10 text-[#1B3A6B]' : 'border-gray-200 bg-white text-gray-600'}`}
+          >
+            🎁 اشتر X احصل على Y
+          </button>
+          <button
+            type="button"
+            onClick={() => setForm({ ...form, type: 'TIER' })}
+            className={`rounded-lg border-2 p-3 text-xs font-bold transition ${form.type === 'TIER' ? 'border-[#C9A84C] bg-[#C9A84C]/10 text-[#1B3A6B]' : 'border-gray-200 bg-white text-gray-600'}`}
+          >
+            📊 خصم تدريجي
+          </button>
+        </div>
+
+        <div className="mb-3 grid gap-2">
+          <label className="text-xs font-semibold">اسم العرض *</label>
+          <input
+            required
+            value={form.nameAr}
+            onChange={(e) => setForm({ ...form, nameAr: e.target.value })}
+            placeholder="مثال: اشتر 2 احصل على 1 مجاناً"
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-[#1B3A6B]"
+          />
+        </div>
+        <div className="mb-3 grid gap-2">
+          <label className="text-xs font-semibold">وصف العرض (اختياري)</label>
+          <textarea
+            rows={2}
+            value={form.descriptionAr}
+            onChange={(e) => setForm({ ...form, descriptionAr: e.target.value.slice(0, 500) })}
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-[#1B3A6B]"
+          />
+        </div>
+
+        {form.type === 'BUY_X_GET_Y' && (
+          <div className="mb-3 grid grid-cols-3 gap-2">
+            <div className="grid gap-1">
+              <label className="text-[11px] font-semibold">اشتر</label>
+              <input type="number" min="1" value={form.buyQty} onChange={(e) => setForm({ ...form, buyQty: e.target.value })} className="rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-[#1B3A6B]" />
+            </div>
+            <div className="grid gap-1">
+              <label className="text-[11px] font-semibold">احصل على</label>
+              <input type="number" min="1" value={form.getQty} onChange={(e) => setForm({ ...form, getQty: e.target.value })} className="rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-[#1B3A6B]" />
+            </div>
+            <div className="grid gap-1">
+              <label className="text-[11px] font-semibold">بخصم %</label>
+              <input type="number" min="1" max="100" value={form.getDiscountPercent} onChange={(e) => setForm({ ...form, getDiscountPercent: e.target.value })} className="rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-[#1B3A6B]" />
+            </div>
+            <div className="col-span-3 text-[11px] text-gray-500">
+              مثال: اشتر {form.buyQty} احصل على {form.getQty} بخصم {form.getDiscountPercent}% {form.getDiscountPercent === 100 ? '(مجاناً)' : ''}
+            </div>
+          </div>
+        )}
+
+        {form.type === 'TIER' && (
+          <div className="mb-3">
+            <div className="mb-1.5 flex items-center justify-between">
+              <label className="text-xs font-semibold">مستويات الخصم</label>
+              <button type="button" onClick={addTier} className="text-[11px] font-bold text-[#1B3A6B] hover:underline">+ إضافة مستوى</button>
+            </div>
+            <div className="space-y-2">
+              {form.tiers.map((t, i) => (
+                <div key={i} className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 p-2">
+                  <span className="text-xs text-gray-500">إذا اشترى بـ ≥</span>
+                  <input type="number" step="0.5" min="0" value={t.minSpend} onChange={(e) => updTier(i, 'minSpend', Number(e.target.value))} className="w-20 rounded-md border border-gray-300 px-2 py-1 text-xs" />
+                  <span className="text-xs text-gray-500">ر.ع → خصم</span>
+                  <input type="number" min="1" max="90" value={t.percent} onChange={(e) => updTier(i, 'percent', Number(e.target.value))} className="w-16 rounded-md border border-gray-300 px-2 py-1 text-xs" />
+                  <span className="text-xs text-gray-500">%</span>
+                  <button type="button" onClick={() => rmTier(i)} className="ms-auto text-red-500 hover:text-red-700"><X className="h-3.5 w-3.5" /></button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="mb-3 grid grid-cols-2 gap-3">
+          <div className="grid gap-1">
+            <label className="text-xs font-semibold">تاريخ انتهاء (اختياري)</label>
+            <input type="date" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} className="rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+          </div>
+          <label className="flex items-center gap-2 pt-6 text-sm font-semibold">
+            <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} className="h-4 w-4 accent-[#C9A84C]" />
+            نشط
+          </label>
+        </div>
+
+        {error && (
+          <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-800">
+            <AlertCircle className="inline-block h-3.5 w-3.5" /> {error}
+          </div>
+        )}
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold hover:bg-gray-50">
+            إلغاء
+          </button>
+          <button type="submit" disabled={loading} className="inline-flex items-center gap-1 rounded-lg bg-[#C9A84C] px-4 py-2 text-sm font-bold text-[#1B3A6B] hover:bg-[#b89440] disabled:opacity-50">
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />} حفظ
+          </button>
+        </div>
+      </form>
+    </div>
   )
 }
 
