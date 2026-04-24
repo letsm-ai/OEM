@@ -1,19 +1,78 @@
 'use client'
 
 import Link from 'next/link'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { ShoppingCart, Minus, Plus, ChevronRight, CheckCircle2, Package, Tag, Store as StoreIcon, ArrowLeft } from 'lucide-react'
+import { useSession } from 'next-auth/react'
+import { ShoppingCart, Minus, Plus, ChevronRight, CheckCircle2, Package, Tag, Store as StoreIcon, ArrowLeft, Star, MessageSquare, Lock } from 'lucide-react'
 import { formatOMR, categoryEmoji, categoryLabel } from '@/lib/store'
 import { useCart } from '@/components/CartContext'
 
+function StarRow({ value = 0, size = 'h-4 w-4', interactive = false, onChange }) {
+  return (
+    <div className="flex items-center gap-0.5">
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button
+          key={n}
+          type="button"
+          disabled={!interactive}
+          onClick={() => interactive && onChange?.(n)}
+          className={`${interactive ? 'cursor-pointer hover:scale-110' : 'cursor-default'} transition`}
+          aria-label={`${n} نجوم`}
+        >
+          <Star
+            className={`${size} ${
+              n <= Math.round(value)
+                ? 'fill-[#C9A84C] text-[#C9A84C]'
+                : 'text-gray-300'
+            }`}
+          />
+        </button>
+      ))}
+    </div>
+  )
+}
+
 export default function ProductDetailClient({ product }) {
   const router = useRouter()
+  const { data: session } = useSession()
   const { addItem } = useCart()
   const [qty, setQty] = useState(1)
   const [selImg, setSelImg] = useState(0)
   const [added, setAdded] = useState(false)
   const outOfStock = (product.stock || 0) <= 0
+
+  // Reviews state
+  const [reviews, setReviews] = useState([])
+  const [reviewsLoading, setReviewsLoading] = useState(true)
+  const [rating, setRating] = useState(Number(product.rating || 0))
+  const [reviewCount, setReviewCount] = useState(Number(product.reviewCount || 0))
+  const [myStatus, setMyStatus] = useState(null)
+  const [newRating, setNewRating] = useState(0)
+  const [newComment, setNewComment] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [submitMsg, setSubmitMsg] = useState('')
+  const [submitErr, setSubmitErr] = useState('')
+
+  useEffect(() => {
+    let ignore = false
+    ;(async () => {
+      try {
+        const [r1, r2] = await Promise.all([
+          fetch(`/api/products/${product.id}/reviews`).then((r) => r.json()),
+          fetch(`/api/products/${product.id}/my-review-status`).then((r) => r.json()),
+        ])
+        if (ignore) return
+        setReviews(r1?.reviews || [])
+        setMyStatus(r2 || null)
+      } catch (e) {
+        /* noop */
+      } finally {
+        if (!ignore) setReviewsLoading(false)
+      }
+    })()
+    return () => { ignore = true }
+  }, [product.id, session?.user?.id])
 
   const imgs = product.images && product.images.length > 0 ? product.images : []
 
@@ -25,6 +84,45 @@ export default function ProductDetailClient({ product }) {
   const buyNow = () => {
     addItem(product, qty)
     router.push('/store/cart')
+  }
+
+  const submitReview = async () => {
+    setSubmitMsg(''); setSubmitErr('')
+    if (newRating < 1 || newRating > 5) {
+      setSubmitErr('يرجى اختيار التقييم أولاً (1-5 نجوم)')
+      return
+    }
+    setSubmitting(true)
+    try {
+      const res = await fetch(`/api/products/${product.id}/reviews`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rating: newRating, comment: newComment }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setSubmitErr(data?.error || 'حدث خطأ أثناء إرسال التقييم')
+      } else {
+        setSubmitMsg('تم إرسال تقييمك بنجاح، شكراً لك!')
+        setNewRating(0); setNewComment('')
+        // Optimistically update UI
+        if (data?.product) {
+          setRating(data.product.rating)
+          setReviewCount(data.product.reviewCount)
+        }
+        // Refetch reviews + status
+        const [r1, r2] = await Promise.all([
+          fetch(`/api/products/${product.id}/reviews`).then((r) => r.json()),
+          fetch(`/api/products/${product.id}/my-review-status`).then((r) => r.json()),
+        ])
+        setReviews(r1?.reviews || [])
+        setMyStatus(r2 || null)
+      }
+    } catch (e) {
+      setSubmitErr('تعذّر الاتصال، حاول مرة أخرى')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -77,6 +175,16 @@ export default function ProductDetailClient({ product }) {
               <div dir="ltr" className="mt-1 text-right text-sm text-gray-400">
                 {product.nameEn}
               </div>
+            )}
+
+            {reviewCount > 0 ? (
+              <div className="mt-2 flex items-center gap-2 text-sm">
+                <StarRow value={rating} />
+                <span className="font-bold text-gray-800">{rating.toFixed(1)}</span>
+                <span className="text-gray-500">({reviewCount} تقييم)</span>
+              </div>
+            ) : (
+              <div className="mt-2 text-xs text-gray-400">لا توجد تقييمات بعد</div>
             )}
 
             <div className="mt-2 inline-flex items-center gap-1 self-start text-xs text-gray-500">
@@ -156,6 +264,137 @@ export default function ProductDetailClient({ product }) {
               </button>
             </div>
           </div>
+        </div>
+
+        {/* ====================== Reviews Section ====================== */}
+        <div className="mt-6 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+          <div className="mb-5 flex items-start justify-between gap-4">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="h-5 w-5 text-[#1B3A6B]" />
+              <h2 className="text-lg font-extrabold text-[#1B3A6B]">
+                تقييمات العملاء
+              </h2>
+              {reviewCount > 0 && (
+                <span className="rounded-full bg-[#1B3A6B]/5 px-2.5 py-0.5 text-xs font-semibold text-[#1B3A6B]">
+                  {reviewCount}
+                </span>
+              )}
+            </div>
+            {reviewCount > 0 && (
+              <div className="flex items-center gap-2 text-sm">
+                <StarRow value={rating} size="h-5 w-5" />
+                <div className="text-right">
+                  <div className="text-xl font-extrabold text-[#1B3A6B]">{rating.toFixed(1)}</div>
+                  <div className="text-[10px] text-gray-500">من 5</div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Submission form / eligibility messages */}
+          {!session && (
+            <div className="mb-5 rounded-xl border border-dashed border-gray-300 bg-gray-50 p-4 text-sm text-gray-600">
+              <Link href={`/login?callbackUrl=/store/${product.id}`} className="inline-flex items-center gap-1.5 font-semibold text-[#1B3A6B] hover:underline">
+                <Lock className="h-4 w-4" /> سجّل الدخول لتتمكن من إضافة تقييم
+              </Link>
+            </div>
+          )}
+
+          {session && myStatus && (
+            <>
+              {myStatus.isOwnProduct ? (
+                <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                  لا يمكنك تقييم منتجك الخاص.
+                </div>
+              ) : myStatus.alreadyReviewed ? (
+                <div className="mb-5 rounded-xl border border-green-200 bg-green-50 p-4">
+                  <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-green-800">
+                    <CheckCircle2 className="h-4 w-4" /> لقد قمت بتقييم هذا المنتج مسبقاً
+                  </div>
+                  {myStatus.myReview && (
+                    <div className="flex items-center gap-2 text-sm">
+                      <StarRow value={myStatus.myReview.rating} />
+                      <span className="text-gray-700">{myStatus.myReview.rating}/5</span>
+                      {myStatus.myReview.comment && (
+                        <span className="text-gray-600">— {myStatus.myReview.comment}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : !myStatus.hasPurchased ? (
+                <div className="mb-5 rounded-xl border border-dashed border-gray-300 bg-gray-50 p-4 text-sm text-gray-600">
+                  يمكنك تقييم هذا المنتج بعد شرائه من المتجر.
+                </div>
+              ) : (
+                <div className="mb-5 rounded-xl border border-gray-200 bg-white p-4">
+                  <div className="mb-2 text-sm font-bold text-[#1B3A6B]">أضف تقييمك</div>
+                  <div className="mb-3 flex items-center gap-2">
+                    <StarRow value={newRating} size="h-7 w-7" interactive onChange={setNewRating} />
+                    <span className="text-xs text-gray-500">{newRating ? `${newRating}/5` : 'اختر عدد النجوم'}</span>
+                  </div>
+                  <textarea
+                    value={newComment}
+                    onChange={(e) => setNewComment(e.target.value.slice(0, 1000))}
+                    placeholder="اكتب تجربتك مع المنتج (اختياري)"
+                    rows={3}
+                    className="w-full resize-none rounded-lg border border-gray-300 bg-white p-3 text-sm outline-none focus:border-[#1B3A6B]"
+                  />
+                  <div className="mt-1 text-left text-[10px] text-gray-400">{newComment.length}/1000</div>
+                  {submitErr && (
+                    <div className="mb-2 rounded-lg bg-red-50 p-2 text-xs font-semibold text-red-700">{submitErr}</div>
+                  )}
+                  {submitMsg && (
+                    <div className="mb-2 rounded-lg bg-green-50 p-2 text-xs font-semibold text-green-700">{submitMsg}</div>
+                  )}
+                  <button
+                    onClick={submitReview}
+                    disabled={submitting}
+                    className="inline-flex items-center gap-2 rounded-xl bg-[#C9A84C] px-4 py-2 text-sm font-semibold text-[#1B3A6B] hover:bg-[#b89440] disabled:opacity-50"
+                  >
+                    {submitting ? 'جارٍ الإرسال...' : 'إرسال التقييم'}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Reviews list */}
+          {reviewsLoading ? (
+            <div className="py-8 text-center text-sm text-gray-500">جارٍ التحميل...</div>
+          ) : reviews.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-8 text-center text-sm text-gray-500">
+              لا توجد تقييمات بعد — كن أول من يقيّم هذا المنتج!
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {reviews.map((r) => (
+                <div key={r.id} className="rounded-xl border border-gray-200 bg-white p-4">
+                  <div className="mb-1.5 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      {r.clientPhoto ? (
+                        <img src={r.clientPhoto} alt="" className="h-8 w-8 rounded-full object-cover" />
+                      ) : (
+                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#1B3A6B] text-xs font-bold text-white">
+                          {(r.clientName || '?').charAt(0)}
+                        </div>
+                      )}
+                      <div className="text-sm font-bold text-gray-800">{r.clientName}</div>
+                    </div>
+                    <div className="text-[11px] text-gray-400">
+                      {new Date(r.createdAt).toLocaleDateString('ar-OM', { year: 'numeric', month: 'long', day: 'numeric' })}
+                    </div>
+                  </div>
+                  <div className="mb-1 flex items-center gap-2">
+                    <StarRow value={r.rating} size="h-3.5 w-3.5" />
+                    <span className="text-xs font-semibold text-gray-600">{r.rating}/5</span>
+                  </div>
+                  {r.comment && (
+                    <p className="text-sm leading-relaxed text-gray-700">{r.comment}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

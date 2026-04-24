@@ -4,7 +4,7 @@ import crypto from 'crypto'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { connectDB } from '@/lib/db'
-import { User, Membership, PasswordResetToken, Company, Expert, Availability, Appointment, VendorApplication, Product, Order } from '@/lib/models'
+import { User, Membership, PasswordResetToken, Company, Expert, Availability, Appointment, VendorApplication, Product, ProductReview, Order } from '@/lib/models'
 import {
   TIER_META,
   TIERS,
@@ -1264,6 +1264,12 @@ async function handleRoute(request, { params }) {
 
     // Marketplace matchers
     const productDetailMatch = route.match(/^\/products\/([A-Za-z0-9-]+)$/)
+    const productReviewsMatch = route.match(
+      /^\/products\/([A-Za-z0-9-]+)\/reviews$/
+    )
+    const productMyReviewStatusMatch = route.match(
+      /^\/products\/([A-Za-z0-9-]+)\/my-review-status$/
+    )
     const orderDetailMatch = route.match(/^\/orders\/([A-Za-z0-9-]+)$/)
     const orderStatusMatch = route.match(
       /^\/vendor\/orders\/([A-Za-z0-9-]+)\/status$/
@@ -2515,6 +2521,197 @@ async function handleRoute(request, { params }) {
                 }
               : null,
           },
+        })
+      )
+    }
+
+    // ---- GET /products/:id/reviews (public reviews list) ----
+    if (productReviewsMatch && method === 'GET') {
+      await connectDB()
+      const id = productReviewsMatch[1]
+      const product = await Product.findById(id).select({ _id: 1 }).lean()
+      if (!product) {
+        return handleCORS(
+          NextResponse.json({ error: 'المنتج غير موجود' }, { status: 404 })
+        )
+      }
+      const reviews = await ProductReview.find({ productId: id })
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .lean()
+      const userIds = [...new Set(reviews.map((r) => r.userId))]
+      const users = await User.find({ _id: { $in: userIds } })
+        .select({ _id: 1, name: 1, photo: 1 })
+        .lean()
+      const uMap = Object.fromEntries(users.map((u) => [u._id, u]))
+      return handleCORS(
+        NextResponse.json({
+          reviews: reviews.map((r) => ({
+            id: r._id,
+            rating: r.rating,
+            comment: r.comment || '',
+            createdAt: r.createdAt,
+            clientName: uMap[r.userId]?.name || 'عميل',
+            clientPhoto: uMap[r.userId]?.photo || '',
+          })),
+        })
+      )
+    }
+
+    // ---- POST /products/:id/reviews (client submits a review) ----
+    if (productReviewsMatch && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const id = productReviewsMatch[1]
+      const product = await Product.findById(id)
+      if (!product) {
+        return handleCORS(
+          NextResponse.json({ error: 'المنتج غير موجود' }, { status: 404 })
+        )
+      }
+      const body = await request.json().catch(() => ({}))
+      const rating = Number(body?.rating)
+      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'التقييم يجب أن يكون بين 1 و 5 نجوم' },
+            { status: 400 }
+          )
+        )
+      }
+      const comment = String(body?.comment || '').trim().slice(0, 1000)
+
+      // Vendor cannot review own product
+      if (String(product.vendorId) === String(session.user.id)) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'لا يمكنك تقييم منتجك الخاص' },
+            { status: 400 }
+          )
+        )
+      }
+
+      // Verify purchase: must have at least one PAID/SHIPPED/DELIVERED order containing this product
+      const purchase = await Order.findOne({
+        buyerId: session.user.id,
+        'items.productId': id,
+        status: { $in: ['PAID', 'SHIPPED', 'DELIVERED'] },
+      })
+        .select({ _id: 1 })
+        .lean()
+      if (!purchase) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'يجب شراء المنتج أولاً لتتمكن من تقييمه' },
+            { status: 403 }
+          )
+        )
+      }
+
+      // Prevent duplicate review
+      const existing = await ProductReview.findOne({
+        productId: id,
+        userId: session.user.id,
+      }).lean()
+      if (existing) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'لقد قمت بتقييم هذا المنتج مسبقاً' },
+            { status: 409 }
+          )
+        )
+      }
+
+      const review = await ProductReview.create({
+        productId: id,
+        userId: session.user.id,
+        orderId: purchase._id,
+        rating,
+        comment,
+      })
+
+      // Recompute product rating + reviewCount
+      const agg = await ProductReview.aggregate([
+        { $match: { productId: id } },
+        { $group: { _id: null, avg: { $avg: '$rating' }, count: { $sum: 1 } } },
+      ])
+      const avg = agg[0]?.avg || 0
+      const count = agg[0]?.count || 0
+      product.rating = Math.round(avg * 100) / 100
+      product.reviewCount = count
+      product.updatedAt = new Date()
+      await product.save()
+
+      return handleCORS(
+        NextResponse.json({
+          success: true,
+          review: {
+            id: review._id,
+            rating: review.rating,
+            comment: review.comment,
+            createdAt: review.createdAt,
+          },
+          product: {
+            rating: product.rating,
+            reviewCount: product.reviewCount,
+          },
+        })
+      )
+    }
+
+    // ---- GET /products/:id/my-review-status (is current user eligible?) ----
+    if (productMyReviewStatusMatch && method === 'GET') {
+      await connectDB()
+      const id = productMyReviewStatusMatch[1]
+      const product = await Product.findById(id).select({ _id: 1, vendorId: 1 }).lean()
+      if (!product) {
+        return handleCORS(
+          NextResponse.json({ error: 'المنتج غير موجود' }, { status: 404 })
+        )
+      }
+      
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json(
+            { hasPurchased: false, alreadyReviewed: false, canReview: false, loggedIn: false }
+          )
+        )
+      }
+      const isOwnProduct = String(product.vendorId) === String(session.user.id)
+      const purchase = await Order.findOne({
+        buyerId: session.user.id,
+        'items.productId': id,
+        status: { $in: ['PAID', 'SHIPPED', 'DELIVERED'] },
+      })
+        .select({ _id: 1 })
+        .lean()
+      const existing = await ProductReview.findOne({
+        productId: id,
+        userId: session.user.id,
+      })
+        .select({ _id: 1, rating: 1, comment: 1, createdAt: 1 })
+        .lean()
+      return handleCORS(
+        NextResponse.json({
+          loggedIn: true,
+          isOwnProduct,
+          hasPurchased: !!purchase,
+          alreadyReviewed: !!existing,
+          canReview: !!purchase && !existing && !isOwnProduct,
+          myReview: existing
+            ? {
+                id: existing._id,
+                rating: existing.rating,
+                comment: existing.comment,
+                createdAt: existing.createdAt,
+              }
+            : null,
         })
       )
     }

@@ -2782,6 +2782,179 @@ agent_communication:
       
       Use direct pymongo for test data setup (UUIDs + bcrypt) as in previous tests.
 
+  - task: "Product Reviews — POST /api/products/:id/reviews, GET /api/products/:id/reviews, GET /api/products/:id/my-review-status"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js, /app/lib/models.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW Phase 5 Shopify-like feature: Product ratings & reviews (1-5 stars).
+          
+          Schema changes:
+          - Product: added rating (Number, default 0, avg 0..5, rounded 2 decimals) and reviewCount (Number, default 0).
+          - NEW ProductReview model: {_id (UUID), productId, userId, orderId, rating (1-5 int), comment (max 1000), createdAt}. Unique compound index on (productId, userId) to prevent duplicate reviews.
+          
+          New endpoints:
+          
+          1) GET /api/products/:id/reviews (public)
+             - Returns {reviews:[{id, rating, comment, createdAt, clientName, clientPhoto}]} sorted by createdAt desc, limit 50.
+             - 404 'المنتج غير موجود' if product not found.
+          
+          2) POST /api/products/:id/reviews (auth required)
+             Validations:
+             - No session → 401 'غير مصرح'.
+             - Product not found → 404 'المنتج غير موجود'.
+             - rating must be integer 1..5 → 400 'التقييم يجب أن يكون بين 1 و 5 نجوم'.
+             - Vendor cannot review own product → 400 'لا يمكنك تقييم منتجك الخاص'.
+             - Must have purchased (Order with status in PAID/SHIPPED/DELIVERED and items.productId==id) → 403 'يجب شراء المنتج أولاً لتتمكن من تقييمه'.
+             - Duplicate review → 409 'لقد قمت بتقييم هذا المنتج مسبقاً'.
+             - comment: trim, maxlength 1000.
+             On success: Creates ProductReview, recomputes product.rating (aggregate avg) and product.reviewCount. Returns 200 with {success, review, product:{rating, reviewCount}}.
+          
+          3) GET /api/products/:id/my-review-status (auth optional)
+             - No session → 200 with {loggedIn: false, hasPurchased: false, alreadyReviewed: false, canReview: false}.
+             - With session → 200 with {loggedIn: true, isOwnProduct, hasPurchased, alreadyReviewed, canReview, myReview:{id, rating, comment, createdAt} | null}.
+             - Product not found → 404 'المنتج غير موجود'.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ PRODUCT REVIEWS BACKEND TESTING COMPLETE - All functionality working perfectly:
+          
+          🎯 COMPREHENSIVE TEST RESULTS (4/4 PASSED - 100% SUCCESS RATE):
+          
+          📋 GET /api/products/:id/reviews (public) ✅
+             • Valid product → 200 with reviews array (initially empty)
+             • Invalid product id → 404 'المنتج غير موجود'
+             • Public access working correctly (no authentication required)
+             • Response structure: {reviews: [{id, rating, comment, createdAt, clientName, clientPhoto}]}
+             • Reviews sorted by createdAt desc, limit 50 enforced
+          
+          📋 POST /api/products/:id/reviews (auth required) ✅ (10/10 tests passed)
+             • Authentication: No session → 401 'غير مصرح'
+             • Validation: Invalid product id → 404 'المنتج غير موجود'
+             • Rating validation: rating=0/6/3.5/'abc' → 400 'التقييم يجب أن يكون بين 1 و 5 نجوم'
+             • Business logic: Vendor reviewing own product → 400 'لا يمكنك تقييم منتجك الخاص'
+             • Purchase verification: Non-purchaser → 403 'يجب شراء المنتج أولاً لتتمكن من تقييمه'
+             • Happy path: Valid review submission → 200 with {success, review, product:{rating, reviewCount}}
+             • Duplicate prevention: Second review → 409 'لقد قمت بتقييم هذا المنتج مسبقاً'
+             • Rating aggregation: Multiple reviews calculate correct average (5+3)/2 = 4.0
+             • Order status validation: PAID/SHIPPED/DELIVERED accepted, PENDING/CANCELLED rejected
+             • Comment truncation: Long comments (>1000 chars) properly truncated
+          
+          📋 GET /api/products/:id/my-review-status (auth optional) ✅ (6/6 tests passed)
+             • No session → 200 {loggedIn: false, hasPurchased: false, alreadyReviewed: false, canReview: false}
+             • Invalid product id → 404 'المنتج غير موجود' (fixed endpoint to check product existence first)
+             • Non-purchaser → {loggedIn: true, hasPurchased: false, canReview: false}
+             • Purchaser without review → {loggedIn: true, hasPurchased: true, canReview: true, myReview: null}
+             • Reviewed purchaser → {loggedIn: true, alreadyReviewed: true, canReview: false, myReview: {id, rating, comment, createdAt}}
+             • Vendor viewing own product → {loggedIn: true, isOwnProduct: true, canReview: false}
+          
+          📋 REGRESSION TESTS ✅ (4/4 passed)
+             • GET /api/ → 200 'Majles API is running'
+             • GET /api/products → 200 with rating and reviewCount fields added to products
+             • POST /api/signup → 200 with user data
+             • GET /api/vendors → 200 with vendors array (vendor storefront still working)
+          
+          🔧 TECHNICAL IMPLEMENTATION VERIFIED:
+          ✅ NextAuth session authentication working correctly
+          ✅ MongoDB ProductReview model with unique compound index (productId, userId)
+          ✅ Product rating aggregation: average calculation with 2 decimal precision
+          ✅ Product reviewCount: accurate count of all reviews
+          ✅ Order purchase verification: status in ['PAID', 'SHIPPED', 'DELIVERED']
+          ✅ Arabic error messages for all validation cases
+          ✅ Comment length validation and truncation (max 1000 chars)
+          ✅ Database operations: ProductReview creation, Product rating updates
+          ✅ Response structure matches specification exactly
+          ✅ Public endpoint access (reviews list) without authentication
+          ✅ Vendor self-review prevention working correctly
+          ✅ Duplicate review prevention via unique index
+          
+          🧪 TESTING METHODOLOGY:
+          • Used pymongo for direct database setup with proper UUID format
+          • Created realistic test data: vendors, buyers, products, orders
+          • Tested all validation scenarios and edge cases
+          • Verified database state changes after operations
+          • Tested rating aggregation with multiple reviews
+          • Comprehensive authentication and authorization testing
+          
+          🎉 CONCLUSION: All Product Reviews endpoints are fully functional and production-ready. The system properly handles authentication, validation, business logic, Arabic localization, and database operations. All requirements from the review specification have been met and verified through comprehensive testing.
+
+  - task: "Product Reviews UI — rating stars on cards + full reviews section on product detail"
+    implemented: true
+    working: "NA"
+    file: "/app/components/ProductCard.jsx, /app/app/store/[id]/_ProductDetailClient.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          UI changes:
+          - ProductCard: Now displays star row + numeric rating + review count when reviewCount > 0.
+          - ProductDetailClient: 
+            * Rating header under product name (stars + 'X.X (N تقييم)' or 'لا توجد تقييمات بعد').
+            * New 'تقييمات العملاء' section below main info:
+              - For guests: Login link with callbackUrl.
+              - For vendors viewing own product: 'لا يمكنك تقييم منتجك الخاص'.
+              - For users who already reviewed: Green check + existing review display.
+              - For users who haven't purchased: Info card 'يمكنك تقييم هذا المنتج بعد شرائه'.
+              - For eligible users: Interactive star picker + textarea (1000 chars) + submit button.
+            * List of all reviews below form: star row, rating/5, comment, reviewer name + photo, Arabic date.
+            * Submit flow handles 401/400/403/409 errors gracefully with Arabic messages.
+
+  - agent: "main"
+    message: |
+      🎯 PRODUCT REVIEWS (Task ج ⭐) READY FOR TESTING
+      
+      Implemented the full product reviews system. Need backend testing of the three new endpoints.
+      
+      🧪 PLEASE TEST:
+      
+      1) GET /api/products/:id/reviews (public)
+         • Valid product → 200 with {reviews:[...]} sorted desc by createdAt
+         • Invalid product id → 404 'المنتج غير موجود'
+         • Response structure: {id, rating, comment, createdAt, clientName, clientPhoto}
+      
+      2) POST /api/products/:id/reviews (auth)
+         • No session → 401 'غير مصرح'
+         • Invalid product id → 404 'المنتج غير موجود'
+         • rating=0 or 6 or 3.5 or 'abc' → 400 'التقييم يجب أن يكون بين 1 و 5 نجوم'
+         • Vendor reviewing own product → 400 'لا يمكنك تقييم منتجك الخاص'
+         • Non-purchaser (no Order with PAID/SHIPPED/DELIVERED status containing this product) → 403 'يجب شراء المنتج أولاً لتتمكن من تقييمه'
+         • Happy path: rating=5, comment='ممتاز' → 200 with {success, review, product:{rating, reviewCount}}
+         • Duplicate review (same user same product) → 409 'لقد قمت بتقييم هذا المنتج مسبقاً'
+         • After success: product.rating and product.reviewCount recomputed in DB
+         • Multi-review aggregation: 2 different users, ratings 5 and 3 → product.rating should equal 4.0
+      
+      3) GET /api/products/:id/my-review-status (auth optional)
+         • No session → 200 {loggedIn: false, canReview: false, ...}
+         • With session + hasn't purchased → canReview=false, hasPurchased=false
+         • With session + purchased + no review yet → canReview=true, hasPurchased=true, alreadyReviewed=false
+         • With session + purchased + already reviewed → canReview=false, alreadyReviewed=true, myReview=object
+         • With session + is own product vendor → canReview=false, isOwnProduct=true
+         • Invalid product id → 404 'المنتج غير موجود'
+      
+      🧪 TEST SETUP (via pymongo):
+         • Create vendor user (role=VENDOR) + seed a product linked to them (Product with _id UUID, vendorId=vendor._id, isActive=true, stock=5).
+         • Create buyer user. Create a fake Order in DB (status='PAID', buyerId=buyer._id, items:[{productId:product._id, ...}]).
+         • Create a second buyer without any order (for negative tests).
+      
+      📋 REGRESSION:
+         • GET /api/products → 200 (now includes rating, reviewCount fields)
+         • GET /api/products/:id → 200
+      
+      Reference: Endpoints added in /app/app/api/[[...path]]/route.js around lines 2488-2710. ProductReview model in /app/lib/models.js.
+
+  - agent: "testing"
+    message: |
+      ✅ VENDOR STOREFRONT BACKEND TESTING COMPLETE — All 4 endpoints passed (8/8 tests, 100% success rate). Ready for next feature.
+
   - agent: "testing"
     message: |
       ✅ ORDER EMAIL NOTIFICATIONS TESTING COMPLETE - All functionality working perfectly:

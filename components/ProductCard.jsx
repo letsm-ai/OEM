@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useState } from 'react'
-import { ShoppingBag, Package, Plus, Check } from 'lucide-react'
+import { ShoppingBag, Package, Plus, Check, Star } from 'lucide-react'
 import { formatOMR, categoryEmoji, categoryLabel } from '@/lib/store'
 import { useCart } from '@/components/CartContext'
 
@@ -11,6 +11,8 @@ export default function ProductCard({ product }) {
   const [added, setAdded] = useState(false)
   const outOfStock = (product.stock || 0) <= 0
   const img = (product.images && product.images[0]) || ''
+  const rating = Number(product.rating || 0)
+  const reviewCount = Number(product.reviewCount || 0)
 
   const onAdd = (e) => {
     e.preventDefault()
@@ -72,6 +74,25 @@ export default function ProductCard({ product }) {
             ) : (
               product.vendorName
             )}
+          </div>
+        )}
+
+        {reviewCount > 0 && (
+          <div className="mt-1 flex items-center gap-1 text-[11px]">
+            <div className="flex items-center gap-0.5">
+              {[1, 2, 3, 4, 5].map((n) => (
+                <Star
+                  key={n}
+                  className={`h-3 w-3 ${
+                    n <= Math.round(rating)
+                      ? 'fill-[#C9A84C] text-[#C9A84C]'
+                      : 'text-gray-300'
+                  }`}
+                />
+              ))}
+            </div>
+            <span className="font-semibold text-gray-700">{rating.toFixed(1)}</span>
+            <span className="text-gray-400">({reviewCount})</span>
           </div>
         )}
 
