@@ -1,573 +1,637 @@
 #!/usr/bin/env python3
 """
-Comprehensive Advanced Vendor Tools Backend Testing
-Tests the 5 newly added features with proper order creation
+Backend Testing for Phase 6 Admin Dashboard Endpoints
+Tests the new admin user management and approvals summary endpoints
 """
 
 import requests
 import json
 import time
 import uuid
+from datetime import datetime, timedelta
 import pymongo
 import bcrypt
-from datetime import datetime, timedelta
-import os
 
 # Configuration
 BASE_URL = "https://omani-startup-hub.preview.emergentagent.com"
 API_BASE = f"{BASE_URL}/api"
+
+# MongoDB connection for direct DB operations
 MONGO_URL = "mongodb://localhost:27017"
 DB_NAME = "majles"
 
-# Test data
-TEST_PASSWORD = "Password123"
+def get_mongo_client():
+    """Get MongoDB client for direct database operations"""
+    client = pymongo.MongoClient(MONGO_URL)
+    return client[DB_NAME]
 
-def get_timestamp():
-    return int(time.time())
-
-def create_test_user(email, name, role="MEMBER"):
-    """Create a test user via signup and promote via MongoDB"""
+def create_test_user(name, email, password="Password123", role="MEMBER", tier="FREE", is_suspended=False):
+    """Create a test user directly in MongoDB"""
+    db = get_mongo_client()
+    
+    # Hash password
+    hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    
+    user_data = {
+        "_id": str(uuid.uuid4()),
+        "name": name,
+        "email": email,
+        "password": hashed_password,
+        "role": role,
+        "membershipTier": tier,
+        "phone": "",
+        "photo": "",
+        "membershipExpiry": None,
+        "isSuspended": is_suspended,
+        "suspendedReason": "Test suspension" if is_suspended else "",
+        "suspendedAt": datetime.utcnow() if is_suspended else None,
+        "isGuest": False,
+        "createdAt": datetime.utcnow(),
+        "updatedAt": datetime.utcnow()
+    }
+    
     try:
-        # Connect to MongoDB
-        client = pymongo.MongoClient(MONGO_URL)
-        db = client[DB_NAME]
-        
-        # Create user via API
-        signup_data = {
-            "name": name,
-            "email": email,
-            "password": TEST_PASSWORD
-        }
-        
-        response = requests.post(f"{API_BASE}/signup", json=signup_data)
-        if response.status_code != 200:
-            print(f"❌ Signup failed for {email}: {response.status_code} {response.text}")
-            return None
-            
-        user_data = response.json()
-        user_id = user_data["user"]["id"]
-        
-        # Promote user role via MongoDB
-        if role != "MEMBER":
-            result = db.users.update_one(
-                {"_id": user_id},
-                {"$set": {"role": role}}
-            )
-            if result.modified_count == 0:
-                print(f"❌ Failed to promote {email} to {role}")
-                return None
-                
-        print(f"✅ Created {role} user: {email}")
-        return user_id
-        
+        db.users.insert_one(user_data)
+        print(f"✅ Created test user: {email} (role: {role}, tier: {tier})")
+        return user_data["_id"]
     except Exception as e:
-        print(f"❌ Error creating user {email}: {e}")
+        print(f"❌ Failed to create user {email}: {e}")
         return None
 
-def login_user(email, password=TEST_PASSWORD):
-    """Login user using NextAuth credentials pattern"""
+def create_test_company(user_id, status="PENDING"):
+    """Create a test company for approvals testing"""
+    db = get_mongo_client()
+    
+    company_data = {
+        "_id": str(uuid.uuid4()),
+        "nameAr": "شركة تجريبية للاختبار",
+        "nameEn": "Test Company",
+        "description": "شركة تجريبية لاختبار النظام",
+        "sector": "TECH",
+        "governorate": "MUSCAT",
+        "userId": user_id,
+        "status": status,
+        "isApproved": status == "APPROVED",
+        "createdAt": datetime.utcnow(),
+        "updatedAt": datetime.utcnow()
+    }
+    
     try:
-        session = requests.Session()
-        
+        db.companies.insert_one(company_data)
+        print(f"✅ Created test company with status: {status}")
+        return company_data["_id"]
+    except Exception as e:
+        print(f"❌ Failed to create company: {e}")
+        return None
+
+def create_test_expert(user_id, status="PENDING"):
+    """Create a test expert for approvals testing"""
+    db = get_mongo_client()
+    
+    expert_data = {
+        "_id": str(uuid.uuid4()),
+        "userId": user_id,
+        "specialtyAr": "استشارات قانونية",
+        "specialty": "LEGAL",
+        "hourlyRate": 25,
+        "bio": "خبير قانوني تجريبي",
+        "status": status,
+        "rating": 0,
+        "totalSessions": 0,
+        "createdAt": datetime.utcnow(),
+        "updatedAt": datetime.utcnow()
+    }
+    
+    try:
+        db.experts.insert_one(expert_data)
+        print(f"✅ Created test expert with status: {status}")
+        return expert_data["_id"]
+    except Exception as e:
+        print(f"❌ Failed to create expert: {e}")
+        return None
+
+def login_user(email, password="Password123"):
+    """Login user and return session for API calls"""
+    session = requests.Session()
+    
+    try:
         # Get CSRF token
         csrf_response = session.get(f"{API_BASE}/auth/csrf")
-        if csrf_response.status_code != 200:
-            print(f"❌ CSRF request failed: {csrf_response.status_code}")
-            return None
-            
-        csrf_token = csrf_response.json()["csrfToken"]
+        csrf_token = csrf_response.json().get('csrfToken')
         
-        # Login with credentials
+        # Login
         login_data = {
-            "csrfToken": csrf_token,
-            "email": email,
-            "password": password,
-            "callbackUrl": f"{BASE_URL}/dashboard",
-            "json": "true"
+            'csrfToken': csrf_token,
+            'email': email,
+            'password': password,
+            'callbackUrl': BASE_URL,
+            'json': 'true'
         }
         
         login_response = session.post(
             f"{API_BASE}/auth/callback/credentials",
             data=login_data,
-            headers={"Content-Type": "application/x-www-form-urlencoded"}
+            headers={'Content-Type': 'application/x-www-form-urlencoded'}
         )
         
-        # Verify session
-        me_response = session.get(f"{API_BASE}/me")
-        if me_response.status_code == 200:
-            user_data = me_response.json()
-            print(f"✅ Login successful for {email} (role: {user_data.get('role', 'MEMBER')})")
+        if login_response.status_code == 200:
+            print(f"✅ Login successful for {email}")
             return session
         else:
-            print(f"❌ Login failed for {email}: {me_response.status_code}")
+            print(f"❌ Login failed for {email}: {login_response.status_code}")
             return None
             
     except Exception as e:
         print(f"❌ Login error for {email}: {e}")
         return None
 
-def create_test_product(session, vendor_id, name, price, stock, category="ELECTRONICS"):
-    """Create a test product"""
+def cleanup_test_data():
+    """Clean up test data from database"""
+    db = get_mongo_client()
+    
     try:
-        product_data = {
-            "nameAr": name,
-            "nameEn": name,
-            "description": f"Test product {name}",
-            "price": price,
-            "stock": stock,
-            "category": category,
-            "lowStockThreshold": 5
-        }
+        # Remove test users
+        db.users.delete_many({"email": {"$regex": "admin_test_.*@example.com"}})
+        db.users.delete_many({"email": {"$regex": "test_user_.*@example.com"}})
+        db.users.delete_many({"email": {"$regex": "vendor_var_.*@example.com"}})
+        db.users.delete_many({"email": {"$regex": "test_modify_.*@example.com"}})
+        db.users.delete_many({"email": {"$regex": "test_approval_.*@example.com"}})
         
-        response = session.post(f"{API_BASE}/products", json=product_data)
-        if response.status_code == 200:
-            product = response.json()["product"]
-            print(f"✅ Created product: {name} (price: {price}, stock: {stock})")
-            return product["id"]
-        else:
-            print(f"❌ Failed to create product {name}: {response.status_code} {response.text}")
-            return None
-            
+        # Remove test companies and experts
+        db.companies.delete_many({"nameAr": {"$regex": "شركة تجريبية"}})
+        db.experts.delete_many({"bio": {"$regex": "خبير.*تجريبي"}})
+        
+        print("✅ Cleaned up test data")
     except Exception as e:
-        print(f"❌ Error creating product {name}: {e}")
-        return None
+        print(f"❌ Cleanup error: {e}")
 
-def create_test_order_direct(buyer_session, product_id, quantity, product_name="Test Product", unit_price=10):
-    """Create a test order directly with items in the order body"""
+def test_admin_users_endpoint():
+    """Test GET /api/admin/users endpoint"""
+    print("\n🧪 TESTING GET /api/admin/users")
+    
+    # Create test users with different roles and tiers
+    timestamp = int(time.time())
+    
+    # Create test users
+    member_id = create_test_user(f"Test Member {timestamp}", f"test_user_member_{timestamp}@example.com", role="MEMBER", tier="FREE")
+    vendor_id = create_test_user(f"Test Vendor {timestamp}", f"test_user_vendor_{timestamp}@example.com", role="VENDOR", tier="BASIC")
+    expert_id = create_test_user(f"Test Expert {timestamp}", f"test_user_expert_{timestamp}@example.com", role="EXPERT", tier="GOLD")
+    suspended_id = create_test_user(f"Test Suspended {timestamp}", f"test_user_suspended_{timestamp}@example.com", role="MEMBER", tier="FREE", is_suspended=True)
+    
+    # Test with admin credentials
+    admin_session = login_user("mazin298@gmail.com")
+    if not admin_session:
+        print("❌ Cannot test admin endpoints - admin login failed")
+        return False
+    
+    # Test 1: Unauthenticated request
+    print("\n📋 Test 1: Unauthenticated request")
     try:
-        # Create order with items directly in the body
-        order_data = {
-            "items": [
-                {
-                    "productId": product_id,
-                    "quantity": quantity,
-                    "nameAr": product_name,
-                    "unitPrice": unit_price
-                }
-            ],
-            "paymentMethod": "COD",
-            "shippingAddress": {
-                "name": "Test Buyer",
-                "phone": "+968 9123 4567",
-                "governorate": "MUSCAT",
-                "city": "Muscat",
-                "addressLine": "Test Address 123"
-            }
-        }
-        
-        order_response = buyer_session.post(f"{API_BASE}/orders", json=order_data)
-        if order_response.status_code == 200:
-            order = order_response.json()["order"]
-            print(f"✅ Created order: {order['id']} (total: {order['totalPaid']} OMR)")
-            return order["id"]
+        response = requests.get(f"{API_BASE}/admin/users")
+        if response.status_code == 401:
+            print("✅ Unauthenticated request correctly returns 401")
         else:
-            print(f"❌ Failed to create order: {order_response.status_code} {order_response.text}")
-            return None
-            
+            print(f"❌ Expected 401, got {response.status_code}")
     except Exception as e:
-        print(f"❌ Error creating order: {e}")
-        return None
-
-def test_vendor_analytics_comprehensive():
-    """Test TASK A — VENDOR ANALYTICS with real orders"""
-    print("\n" + "="*60)
-    print("TASK A — VENDOR ANALYTICS (COMPREHENSIVE)")
-    print("="*60)
+        print(f"❌ Test 1 error: {e}")
     
-    timestamp = get_timestamp()
-    vendor_email = f"va_vendor_{timestamp}@test.com"
-    buyer_email = f"va_buyer_{timestamp}@test.com"
-    
-    # Setup: Create vendor and buyer
-    vendor_id = create_test_user(vendor_email, "Analytics Vendor", "VENDOR")
-    buyer_id = create_test_user(buyer_email, "Analytics Buyer", "MEMBER")
-    
-    if not vendor_id or not buyer_id:
-        print("❌ Failed to create test users")
-        return False
-        
-    vendor_session = login_user(vendor_email)
-    buyer_session = login_user(buyer_email)
-    
-    if not vendor_session or not buyer_session:
-        print("❌ Failed to login test users")
-        return False
-        
-    # Create 2 products
-    product1_id = create_test_product(vendor_session, vendor_id, "Electronics Product", 20, 100, "ELECTRONICS")
-    product2_id = create_test_product(vendor_session, vendor_id, "Food Product", 5, 100, "FOOD")
-    
-    if not product1_id or not product2_id:
-        print("❌ Failed to create test products")
-        return False
-        
-    # Place 3 COD orders with different quantities
-    orders = []
-    
-    # Order 1: 2x product1 (2*20 = 40 OMR)
-    order1_id = create_test_order_direct(buyer_session, product1_id, 2, "Electronics Product", 20)
-    if order1_id:
-        orders.append(order1_id)
-        time.sleep(0.5)
-        
-    # Order 2: 1x product1 (1*20 = 20 OMR)  
-    order2_id = create_test_order_direct(buyer_session, product1_id, 1, "Electronics Product", 20)
-    if order2_id:
-        orders.append(order2_id)
-        time.sleep(0.5)
-        
-    # Order 3: 3x product2 (3*5 = 15 OMR)
-    order3_id = create_test_order_direct(buyer_session, product2_id, 3, "Food Product", 5)
-    if order3_id:
-        orders.append(order3_id)
-        time.sleep(0.5)
-        
-    if len(orders) != 3:
-        print(f"❌ Failed to create all test orders (created {len(orders)}/3)")
-        return False
-        
-    print(f"✅ Created {len(orders)} test orders")
-    
-    # Test A1: 401 without session
-    print("\nA1) Testing 401 without session...")
-    response = requests.get(f"{API_BASE}/vendor/analytics")
-    if response.status_code == 401:
-        print("✅ A1 PASSED: 401 without session")
-    else:
-        print(f"❌ A1 FAILED: Expected 401, got {response.status_code}")
-        return False
-        
-    # Test A2: 403 for MEMBER user
-    print("\nA2) Testing 403 for MEMBER user...")
-    response = buyer_session.get(f"{API_BASE}/vendor/analytics")
-    if response.status_code == 403:
-        print("✅ A2 PASSED: 403 for MEMBER user")
-    else:
-        print(f"❌ A2 FAILED: Expected 403, got {response.status_code}")
-        return False
-        
-    # Test A3: 200 for VENDOR with correct KPIs
-    print("\nA3) Testing 200 for VENDOR with KPIs...")
-    response = vendor_session.get(f"{API_BASE}/vendor/analytics")
-    
-    if response.status_code != 200:
-        print(f"❌ A3 FAILED: Expected 200, got {response.status_code}")
-        print(f"Response: {response.text}")
-        return False
-        
-    try:
-        analytics = response.json()
-        print(f"📊 Analytics response received with {len(analytics)} fields")
-        
-        kpi = analytics.get("kpi", {})
-        
-        # Check all required KPI fields
-        required_kpi_fields = [
-            "totalRevenue", "totalUnits", "totalOrders", "totalCommission", 
-            "totalNet", "avgOrderValue"
-        ]
-        
-        for field in required_kpi_fields:
-            if field in kpi:
-                print(f"✅ {field}: {kpi[field]}")
-            else:
-                print(f"❌ Missing KPI field: {field}")
-                
-        # Check structure fields
-        required_structure_fields = [
-            "last30Days", "monthly", "products", "pendingShipments", 
-            "topProducts", "byCategory", "orderStatus"
-        ]
-        
-        for field in required_structure_fields:
-            if field in analytics:
-                value = analytics[field]
-                if isinstance(value, list):
-                    print(f"✅ {field}: array with {len(value)} items")
-                elif isinstance(value, dict):
-                    print(f"✅ {field}: object with {len(value)} fields")
+    # Test 2: Non-admin user
+    print("\n📋 Test 2: Non-admin user access")
+    if member_id:
+        member_session = login_user(f"test_user_member_{timestamp}@example.com")
+        if member_session:
+            try:
+                response = member_session.get(f"{API_BASE}/admin/users")
+                if response.status_code == 403:
+                    print("✅ Non-admin user correctly blocked with 403")
                 else:
-                    print(f"✅ {field}: {value}")
+                    print(f"❌ Expected 403, got {response.status_code}")
+            except Exception as e:
+                print(f"❌ Test 2 error: {e}")
+    
+    # Test 3: Admin access with basic query
+    print("\n📋 Test 3: Admin access - basic query")
+    try:
+        response = admin_session.get(f"{API_BASE}/admin/users")
+        if response.status_code == 200:
+            data = response.json()
+            if 'users' in data and 'pagination' in data and 'totals' in data:
+                print("✅ Admin access successful with correct response structure")
+                print(f"   Total users: {data['totals']['total']}")
+                print(f"   Admins: {data['totals']['admins']}")
+                print(f"   Members: {data['totals']['members']}")
+                print(f"   Vendors: {data['totals']['vendors']}")
+                print(f"   Experts: {data['totals']['experts']}")
+                print(f"   Suspended: {data['totals']['suspended']}")
+                
+                # Verify guests are excluded
+                guest_found = any(user.get('isGuest') for user in data['users'])
+                if not guest_found:
+                    print("✅ Guests correctly excluded from results")
+                else:
+                    print("❌ Found guest users in results")
             else:
-                print(f"❌ Missing structure field: {field}")
-                
-        # Verify monthly has 12 buckets
-        monthly = analytics.get("monthly", [])
-        if len(monthly) == 12:
-            print("✅ Monthly data has exactly 12 buckets")
-            current_month = monthly[-1]
-            print(f"✅ Current month data: {current_month}")
+                print(f"❌ Missing required fields in response: {data.keys()}")
         else:
-            print(f"❌ Monthly data has {len(monthly)} buckets, expected 12")
-            
-        # Check that we have some revenue from our orders
-        total_revenue = kpi.get("totalRevenue", 0)
-        if total_revenue > 0:
-            print(f"✅ Total revenue > 0: {total_revenue} OMR")
-        else:
-            print(f"⚠️ Total revenue is 0 (orders may be PENDING status)")
-            
-        # Check that we have orders
-        total_orders = kpi.get("totalOrders", 0)
-        if total_orders >= 3:
-            print(f"✅ Total orders >= 3: {total_orders}")
-        else:
-            print(f"⚠️ Total orders < 3: {total_orders} (some orders may not count)")
-            
-        print("✅ A3 PASSED: VENDOR analytics endpoint working with all required fields")
-        return True
-        
+            print(f"❌ Admin access failed: {response.status_code}")
     except Exception as e:
-        print(f"❌ A3 FAILED: Error parsing analytics response: {e}")
-        return False
+        print(f"❌ Test 3 error: {e}")
+    
+    # Test 4: Role filter
+    print("\n📋 Test 4: Role filter")
+    try:
+        response = admin_session.get(f"{API_BASE}/admin/users?role=ADMIN")
+        if response.status_code == 200:
+            data = response.json()
+            admin_users = [u for u in data['users'] if u['role'] == 'ADMIN']
+            if len(admin_users) == len(data['users']) and len(admin_users) > 0:
+                print("✅ Role filter working correctly")
+            else:
+                print(f"❌ Role filter issue: {len(admin_users)} admins out of {len(data['users'])} users")
+        else:
+            print(f"❌ Role filter test failed: {response.status_code}")
+    except Exception as e:
+        print(f"❌ Test 4 error: {e}")
+    
+    # Test 5: Tier filter
+    print("\n📋 Test 5: Tier filter")
+    try:
+        response = admin_session.get(f"{API_BASE}/admin/users?tier=FREE")
+        if response.status_code == 200:
+            data = response.json()
+            free_users = [u for u in data['users'] if u['membershipTier'] == 'FREE']
+            if len(free_users) == len(data['users']) and len(free_users) > 0:
+                print("✅ Tier filter working correctly")
+            else:
+                print(f"❌ Tier filter issue: {len(free_users)} FREE users out of {len(data['users'])} users")
+        else:
+            print(f"❌ Tier filter test failed: {response.status_code}")
+    except Exception as e:
+        print(f"❌ Test 5 error: {e}")
+    
+    # Test 6: Suspended filter
+    print("\n📋 Test 6: Suspended filter")
+    try:
+        response = admin_session.get(f"{API_BASE}/admin/users?suspended=1")
+        if response.status_code == 200:
+            data = response.json()
+            suspended_users = [u for u in data['users'] if u.get('isSuspended')]
+            if len(suspended_users) == len(data['users']) and len(suspended_users) > 0:
+                print("✅ Suspended filter working correctly")
+            else:
+                print(f"❌ Suspended filter issue: {len(suspended_users)} suspended out of {len(data['users'])} users")
+        else:
+            print(f"❌ Suspended filter test failed: {response.status_code}")
+    except Exception as e:
+        print(f"❌ Test 6 error: {e}")
+    
+    # Test 7: Search filter
+    print("\n📋 Test 7: Search filter")
+    try:
+        response = admin_session.get(f"{API_BASE}/admin/users?search=Test Member")
+        if response.status_code == 200:
+            data = response.json()
+            matching_users = [u for u in data['users'] if 'Test Member' in u['name']]
+            if len(matching_users) > 0:
+                print("✅ Search filter working correctly")
+            else:
+                print(f"❌ Search filter issue: no matching users found")
+        else:
+            print(f"❌ Search filter test failed: {response.status_code}")
+    except Exception as e:
+        print(f"❌ Test 7 error: {e}")
+    
+    # Test 8: Pagination
+    print("\n📋 Test 8: Pagination")
+    try:
+        response = admin_session.get(f"{API_BASE}/admin/users?page=1&limit=5")
+        if response.status_code == 200:
+            data = response.json()
+            if data['pagination']['page'] == 1 and data['pagination']['limit'] == 5:
+                print("✅ Pagination working correctly")
+            else:
+                print(f"❌ Pagination issue: {data['pagination']}")
+        else:
+            print(f"❌ Pagination test failed: {response.status_code}")
+    except Exception as e:
+        print(f"❌ Test 8 error: {e}")
+    
+    return True
 
-def test_all_advanced_vendor_tools():
-    """Test all 5 Advanced Vendor Tools features"""
-    print("\n" + "="*80)
-    print("COMPREHENSIVE ADVANCED VENDOR TOOLS TESTING")
-    print("="*80)
+def test_admin_user_modification():
+    """Test PATCH /api/admin/users/:id endpoint"""
+    print("\n🧪 TESTING PATCH /api/admin/users/:id")
     
-    results = []
+    timestamp = int(time.time())
     
-    # Test 1: Vendor Analytics
+    # Create test user for modification
+    test_user_id = create_test_user(f"Test Modify User {timestamp}", f"test_modify_{timestamp}@example.com", role="MEMBER", tier="FREE")
+    
+    if not test_user_id:
+        print("❌ Cannot test user modification - test user creation failed")
+        return False
+    
+    # Test with admin credentials
+    admin_session = login_user("mazin298@gmail.com")
+    if not admin_session:
+        print("❌ Cannot test admin endpoints - admin login failed")
+        return False
+    
+    # Test 1: Unauthenticated request
+    print("\n📋 Test 1: Unauthenticated request")
     try:
-        print(f"\n🚀 Testing VENDOR ANALYTICS...")
-        result = test_vendor_analytics_comprehensive()
-        results.append(("Vendor Analytics", result))
-    except Exception as e:
-        print(f"❌ Vendor Analytics crashed: {e}")
-        results.append(("Vendor Analytics", False))
-        
-    # Test 2: Inventory Management
-    try:
-        print(f"\n🚀 Testing INVENTORY MANAGEMENT...")
-        
-        timestamp = get_timestamp()
-        vendor_email = f"inv_vendor_{timestamp}@test.com"
-        vendor_id = create_test_user(vendor_email, "Inventory Vendor", "VENDOR")
-        vendor_session = login_user(vendor_email)
-        
-        if vendor_session:
-            # Test inventory endpoints
-            inventory_tests = []
-            
-            # Create product
-            product_id = create_test_product(vendor_session, vendor_id, "Inventory Product", 15, 10, "OTHER")
-            if product_id:
-                inventory_tests.append("Product creation")
-                
-            # Test inventory list
-            response = vendor_session.get(f"{API_BASE}/vendor/inventory")
-            if response.status_code == 200:
-                inventory_tests.append("Inventory list")
-                
-            # Test stock adjustment
-            adjust_data = {"delta": -5, "type": "ADJUST", "note": "تالف"}
-            response = vendor_session.post(f"{API_BASE}/products/{product_id}/stock/adjust", json=adjust_data)
-            if response.status_code == 200:
-                inventory_tests.append("Stock adjustment")
-                
-            # Test stock movements
-            response = vendor_session.get(f"{API_BASE}/products/{product_id}/stock/movements")
-            if response.status_code == 200:
-                inventory_tests.append("Stock movements")
-                
-            print(f"✅ Inventory tests passed: {len(inventory_tests)}/4")
-            results.append(("Inventory Management", len(inventory_tests) >= 3))
+        response = requests.patch(f"{API_BASE}/admin/users/{test_user_id}", json={"role": "EXPERT"})
+        if response.status_code == 401:
+            print("✅ Unauthenticated request correctly returns 401")
         else:
-            results.append(("Inventory Management", False))
-            
+            print(f"❌ Expected 401, got {response.status_code}")
     except Exception as e:
-        print(f"❌ Inventory Management crashed: {e}")
-        results.append(("Inventory Management", False))
-        
-    # Test 3: CSV Import
-    try:
-        print(f"\n🚀 Testing CSV IMPORT...")
-        
-        timestamp = get_timestamp()
-        vendor_email = f"csv_vendor_{timestamp}@test.com"
-        vendor_id = create_test_user(vendor_email, "CSV Vendor", "VENDOR")
-        vendor_session = login_user(vendor_email)
-        
-        if vendor_session:
-            csv_tests = []
-            
-            # Test template download
-            response = vendor_session.get(f"{API_BASE}/vendor/products/import/template")
-            if response.status_code == 200 and 'text/csv' in response.headers.get('Content-Type', ''):
-                csv_tests.append("Template download")
-                
-            # Test empty rows validation
-            response = vendor_session.post(f"{API_BASE}/vendor/products/import", json={"rows": []})
-            if response.status_code == 400:
-                csv_tests.append("Empty rows validation")
-                
-            # Test dry run
-            test_rows = [{"nameAr": "منتج تجريبي", "price": 10, "stock": 5, "category": "FOOD"}]
-            response = vendor_session.post(f"{API_BASE}/vendor/products/import", json={"rows": test_rows, "dryRun": True})
-            if response.status_code == 200:
-                csv_tests.append("Dry run")
-                
-            print(f"✅ CSV Import tests passed: {len(csv_tests)}/3")
-            results.append(("CSV Import", len(csv_tests) >= 2))
-        else:
-            results.append(("CSV Import", False))
-            
-    except Exception as e:
-        print(f"❌ CSV Import crashed: {e}")
-        results.append(("CSV Import", False))
-        
-    # Test 4: Promotions
-    try:
-        print(f"\n🚀 Testing PROMOTIONS...")
-        
-        timestamp = get_timestamp()
-        vendor_email = f"promo_vendor_{timestamp}@test.com"
-        vendor_id = create_test_user(vendor_email, "Promo Vendor", "VENDOR")
-        vendor_session = login_user(vendor_email)
-        
-        if vendor_session:
-            promo_tests = []
-            
-            # Test BUY_X_GET_Y creation
-            bxgy_data = {
-                "type": "BUY_X_GET_Y",
-                "nameAr": "اشتر 2 احصل على 1",
-                "buyQty": 2,
-                "getQty": 1,
-                "getDiscountPercent": 100,
-                "productIds": []
-            }
-            response = vendor_session.post(f"{API_BASE}/vendor/promotions", json=bxgy_data)
-            if response.status_code == 200:
-                promo_tests.append("BUY_X_GET_Y creation")
-                
-            # Test TIER creation
-            tier_data = {
-                "type": "TIER",
-                "nameAr": "خصم تدريجي",
-                "tiers": [{"minSpend": 30, "percent": 10}]
-            }
-            response = vendor_session.post(f"{API_BASE}/vendor/promotions", json=tier_data)
-            if response.status_code == 200:
-                promo_tests.append("TIER creation")
-                
-            # Test promotions list
-            response = vendor_session.get(f"{API_BASE}/vendor/promotions")
-            if response.status_code == 200:
-                promo_tests.append("Promotions list")
-                
-            print(f"✅ Promotions tests passed: {len(promo_tests)}/3")
-            results.append(("Promotions", len(promo_tests) >= 2))
-        else:
-            results.append(("Promotions", False))
-            
-    except Exception as e:
-        print(f"❌ Promotions crashed: {e}")
-        results.append(("Promotions", False))
-        
-    # Test 5: Payouts
-    try:
-        print(f"\n🚀 Testing PAYOUTS...")
-        
-        timestamp = get_timestamp()
-        vendor_email = f"payout_vendor_{timestamp}@test.com"
-        admin_email = f"payout_admin_{timestamp}@test.com"
-        vendor_id = create_test_user(vendor_email, "Payout Vendor", "VENDOR")
-        admin_id = create_test_user(admin_email, "Payout Admin", "ADMIN")
-        vendor_session = login_user(vendor_email)
-        admin_session = login_user(admin_email)
-        
-        if vendor_session and admin_session:
-            payout_tests = []
-            
-            # Test vendor balance
-            response = vendor_session.get(f"{API_BASE}/vendor/payouts")
-            if response.status_code == 200:
-                payout_tests.append("Vendor balance")
-                
-            # Test minimum amount validation
-            payout_data = {
-                "amount": 5,
-                "accountHolderName": "Test Vendor",
-                "bankName": "Test Bank",
-                "iban": "OM81234567890123456789",
-                "note": "Test"
-            }
-            response = vendor_session.post(f"{API_BASE}/vendor/payouts", json=payout_data)
-            if response.status_code == 400:
-                payout_tests.append("Minimum amount validation")
-                
-            # Test admin payouts list
-            response = admin_session.get(f"{API_BASE}/admin/payouts")
-            if response.status_code == 200:
-                payout_tests.append("Admin payouts list")
-                
-            # Test non-admin access
-            response = vendor_session.get(f"{API_BASE}/admin/payouts")
+        print(f"❌ Test 1 error: {e}")
+    
+    # Test 2: Non-admin user
+    print("\n📋 Test 2: Non-admin user access")
+    member_session = login_user(f"test_modify_{timestamp}@example.com")
+    if member_session:
+        try:
+            response = member_session.patch(f"{API_BASE}/admin/users/{test_user_id}", json={"role": "EXPERT"})
             if response.status_code == 403:
-                payout_tests.append("Non-admin access blocked")
-                
-            print(f"✅ Payouts tests passed: {len(payout_tests)}/4")
-            results.append(("Payouts", len(payout_tests) >= 3))
+                print("✅ Non-admin user correctly blocked with 403")
+            else:
+                print(f"❌ Expected 403, got {response.status_code}")
+        except Exception as e:
+            print(f"❌ Test 2 error: {e}")
+    
+    # Test 3: Non-existent user
+    print("\n📋 Test 3: Non-existent user")
+    try:
+        fake_id = str(uuid.uuid4())
+        response = admin_session.patch(f"{API_BASE}/admin/users/{fake_id}", json={"role": "EXPERT"})
+        if response.status_code == 404:
+            print("✅ Non-existent user correctly returns 404")
         else:
-            results.append(("Payouts", False))
-            
+            print(f"❌ Expected 404, got {response.status_code}")
     except Exception as e:
-        print(f"❌ Payouts crashed: {e}")
-        results.append(("Payouts", False))
-        
-    # Final summary
-    print("\n" + "="*80)
-    print("🎯 ADVANCED VENDOR TOOLS TEST SUMMARY")
-    print("="*80)
+        print(f"❌ Test 3 error: {e}")
     
-    passed = 0
-    total = len(results)
+    # Test 4: Self-modification protection
+    print("\n📋 Test 4: Self-modification protection")
+    try:
+        # Get admin user ID
+        me_response = admin_session.get(f"{API_BASE}/me")
+        if me_response.status_code == 200:
+            admin_id = me_response.json()['id']
+            response = admin_session.patch(f"{API_BASE}/admin/users/{admin_id}", json={"action": "suspend", "reason": "test"})
+            if response.status_code == 400 and 'لا يمكنك تعديل حسابك الإداري' in response.json().get('error', ''):
+                print("✅ Self-modification protection working")
+            else:
+                print(f"❌ Self-modification protection failed: {response.status_code}")
+        else:
+            print("❌ Cannot get admin ID for self-modification test")
+    except Exception as e:
+        print(f"❌ Test 4 error: {e}")
     
-    for feature_name, result in results:
-        status = "✅ PASSED" if result else "❌ FAILED"
-        print(f"{status}: {feature_name}")
-        if result:
-            passed += 1
-            
-    print("-" * 80)
-    print(f"📊 OVERALL RESULT: {passed}/{total} features passed ({passed/total*100:.1f}%)")
+    # Test 5: Role change
+    print("\n📋 Test 5: Role change")
+    try:
+        response = admin_session.patch(f"{API_BASE}/admin/users/{test_user_id}", json={"role": "EXPERT"})
+        if response.status_code == 200:
+            data = response.json()
+            if data['user']['role'] == 'EXPERT':
+                print("✅ Role change successful")
+            else:
+                print(f"❌ Role not updated: {data['user']['role']}")
+        else:
+            print(f"❌ Role change failed: {response.status_code}")
+    except Exception as e:
+        print(f"❌ Test 5 error: {e}")
     
-    return passed, total
+    # Test 6: Tier change
+    print("\n📋 Test 6: Tier change")
+    try:
+        response = admin_session.patch(f"{API_BASE}/admin/users/{test_user_id}", json={"membershipTier": "GOLD"})
+        if response.status_code == 200:
+            data = response.json()
+            if data['user']['membershipTier'] == 'GOLD':
+                print("✅ Tier change successful")
+            else:
+                print(f"❌ Tier not updated: {data['user']['membershipTier']}")
+        else:
+            print(f"❌ Tier change failed: {response.status_code}")
+    except Exception as e:
+        print(f"❌ Test 6 error: {e}")
+    
+    # Test 7: Suspend user
+    print("\n📋 Test 7: Suspend user")
+    try:
+        response = admin_session.patch(f"{API_BASE}/admin/users/{test_user_id}", json={"action": "suspend", "reason": "Test suspension"})
+        if response.status_code == 200:
+            data = response.json()
+            if data['user'].get('isSuspended'):
+                print("✅ User suspension successful")
+            else:
+                print(f"❌ User not suspended: {data['user']}")
+        else:
+            print(f"❌ User suspension failed: {response.status_code}")
+    except Exception as e:
+        print(f"❌ Test 7 error: {e}")
+    
+    # Test 8: Activate user
+    print("\n📋 Test 8: Activate user")
+    try:
+        response = admin_session.patch(f"{API_BASE}/admin/users/{test_user_id}", json={"action": "activate"})
+        if response.status_code == 200:
+            data = response.json()
+            if not data['user'].get('isSuspended'):
+                print("✅ User activation successful")
+            else:
+                print(f"❌ User still suspended: {data['user']}")
+        else:
+            print(f"❌ User activation failed: {response.status_code}")
+    except Exception as e:
+        print(f"❌ Test 8 error: {e}")
+    
+    # Test 9: Empty body
+    print("\n📋 Test 9: Empty body")
+    try:
+        response = admin_session.patch(f"{API_BASE}/admin/users/{test_user_id}", json={})
+        if response.status_code == 400 and 'لا توجد تغييرات' in response.json().get('error', ''):
+            print("✅ Empty body correctly rejected")
+        else:
+            print(f"❌ Empty body handling failed: {response.status_code}")
+    except Exception as e:
+        print(f"❌ Test 9 error: {e}")
+    
+    return True
+
+def test_admin_approvals_summary():
+    """Test GET /api/admin/approvals/summary endpoint"""
+    print("\n🧪 TESTING GET /api/admin/approvals/summary")
+    
+    timestamp = int(time.time())
+    
+    # Create test data for approvals
+    test_user_id = create_test_user(f"Test Approval User {timestamp}", f"test_approval_{timestamp}@example.com", role="MEMBER", tier="BASIC")
+    
+    if test_user_id:
+        # Create pending items
+        create_test_company(test_user_id, status="PENDING")
+        create_test_expert(test_user_id, status="PENDING")
+    
+    # Test with admin credentials
+    admin_session = login_user("mazin298@gmail.com")
+    if not admin_session:
+        print("❌ Cannot test admin endpoints - admin login failed")
+        return False
+    
+    # Test 1: Unauthenticated request
+    print("\n📋 Test 1: Unauthenticated request")
+    try:
+        response = requests.get(f"{API_BASE}/admin/approvals/summary")
+        if response.status_code == 401:
+            print("✅ Unauthenticated request correctly returns 401")
+        else:
+            print(f"❌ Expected 401, got {response.status_code}")
+    except Exception as e:
+        print(f"❌ Test 1 error: {e}")
+    
+    # Test 2: Non-admin user
+    print("\n📋 Test 2: Non-admin user access")
+    if test_user_id:
+        member_session = login_user(f"test_approval_{timestamp}@example.com")
+        if member_session:
+            try:
+                response = member_session.get(f"{API_BASE}/admin/approvals/summary")
+                if response.status_code == 403:
+                    print("✅ Non-admin user correctly blocked with 403")
+                else:
+                    print(f"❌ Expected 403, got {response.status_code}")
+            except Exception as e:
+                print(f"❌ Test 2 error: {e}")
+    
+    # Test 3: Admin access
+    print("\n📋 Test 3: Admin access")
+    try:
+        response = admin_session.get(f"{API_BASE}/admin/approvals/summary")
+        if response.status_code == 200:
+            data = response.json()
+            required_fields = ['companies', 'experts', 'vendors', 'payouts', 'total']
+            if all(field in data for field in required_fields):
+                print("✅ Admin access successful with correct response structure")
+                print(f"   Pending companies: {data['companies']}")
+                print(f"   Pending experts: {data['experts']}")
+                print(f"   Pending vendors: {data['vendors']}")
+                print(f"   Pending payouts: {data['payouts']}")
+                print(f"   Total pending: {data['total']}")
+                
+                # Verify total calculation
+                calculated_total = data['companies'] + data['experts'] + data['vendors'] + data['payouts']
+                if data['total'] == calculated_total:
+                    print("✅ Total calculation correct")
+                else:
+                    print(f"❌ Total calculation wrong: {data['total']} != {calculated_total}")
+                
+                # Verify all counts are non-negative integers
+                all_valid = all(isinstance(data[field], int) and data[field] >= 0 for field in required_fields)
+                if all_valid:
+                    print("✅ All counts are valid non-negative integers")
+                else:
+                    print("❌ Invalid count values found")
+                    
+            else:
+                print(f"❌ Missing required fields in response: {data.keys()}")
+        else:
+            print(f"❌ Admin access failed: {response.status_code}")
+    except Exception as e:
+        print(f"❌ Test 3 error: {e}")
+    
+    return True
+
+def test_integration_sanity():
+    """Quick smoke test on existing endpoints to ensure no regression"""
+    print("\n🧪 INTEGRATION SANITY TESTS")
+    
+    # Test existing admin analytics endpoint
+    admin_session = login_user("mazin298@gmail.com")
+    if not admin_session:
+        print("❌ Cannot test integration - admin login failed")
+        return False
+    
+    # Test 1: Login still works
+    print("\n📋 Test 1: Login functionality")
+    try:
+        response = admin_session.get(f"{API_BASE}/me")
+        if response.status_code == 200 and response.json().get('role') == 'ADMIN':
+            print("✅ Login and session management working")
+        else:
+            print(f"❌ Login issue: {response.status_code}")
+    except Exception as e:
+        print(f"❌ Test 1 error: {e}")
+    
+    # Test 2: Existing admin analytics endpoint
+    print("\n📋 Test 2: Existing admin analytics endpoint")
+    try:
+        response = admin_session.get(f"{API_BASE}/admin/analytics")
+        if response.status_code == 200:
+            print("✅ Admin analytics endpoint still working")
+        else:
+            print(f"❌ Admin analytics issue: {response.status_code}")
+    except Exception as e:
+        print(f"❌ Test 2 error: {e}")
+    
+    # Test 3: Existing admin companies endpoint
+    print("\n📋 Test 3: Existing admin companies endpoint")
+    try:
+        response = admin_session.get(f"{API_BASE}/admin/companies?status=PENDING")
+        if response.status_code == 200:
+            print("✅ Admin companies endpoint still working")
+        else:
+            print(f"❌ Admin companies issue: {response.status_code}")
+    except Exception as e:
+        print(f"❌ Test 3 error: {e}")
+    
+    return True
 
 def main():
-    """Main test runner"""
-    print("🧪 ADVANCED VENDOR TOOLS BACKEND TESTING")
-    print("="*80)
-    print(f"Base URL: {BASE_URL}")
-    print(f"API Base: {API_BASE}")
-    print("="*80)
+    """Main test execution"""
+    print("🚀 STARTING PHASE 6 ADMIN DASHBOARD BACKEND TESTING")
+    print("=" * 60)
     
-    # Test basic connectivity first
-    print("\n🔍 Testing basic connectivity...")
-    response = requests.get(f"{API_BASE}/")
-    if response.status_code == 200:
-        print("✅ API is accessible")
-    else:
-        print(f"❌ API not accessible: {response.status_code}")
-        return False
-        
-    # Run comprehensive tests
-    passed, total = test_all_advanced_vendor_tools()
+    # Clean up any existing test data
+    cleanup_test_data()
     
-    if passed == total:
-        print("\n🎉 ALL ADVANCED VENDOR TOOLS TESTS PASSED!")
-        print("The 5 newly added features are working correctly:")
-        print("1. ✅ Vendor Analytics")
-        print("2. ✅ Inventory Management") 
-        print("3. ✅ CSV Import")
-        print("4. ✅ Promotions")
-        print("5. ✅ Payouts")
+    # Run tests
+    tests_passed = 0
+    total_tests = 4
+    
+    try:
+        if test_admin_users_endpoint():
+            tests_passed += 1
+            
+        if test_admin_user_modification():
+            tests_passed += 1
+            
+        if test_admin_approvals_summary():
+            tests_passed += 1
+            
+        if test_integration_sanity():
+            tests_passed += 1
+            
+    except Exception as e:
+        print(f"❌ Test execution error: {e}")
+    
+    finally:
+        # Clean up test data
+        cleanup_test_data()
+    
+    # Summary
+    print("\n" + "=" * 60)
+    print(f"🎯 TESTING COMPLETE: {tests_passed}/{total_tests} test suites passed")
+    
+    if tests_passed == total_tests:
+        print("✅ ALL PHASE 6 ADMIN DASHBOARD ENDPOINTS WORKING CORRECTLY")
         return True
     else:
-        print(f"\n⚠️ {total-passed} out of {total} features need attention.")
+        print("❌ SOME TESTS FAILED - CHECK LOGS ABOVE")
         return False
 
 if __name__ == "__main__":

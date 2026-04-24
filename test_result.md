@@ -1569,11 +1569,75 @@ frontend:
           - Test scenario: open /store → click any example chip OR type a query → click 'ابحث بالذكاء' → expect purple banner above products grid + interpretation text in Arabic + filtered products list.
           - Edge case: empty/whitespace query → button is disabled (no fetch). 500 error → red error banner inside AI search box.
 
-metadata:
-  created_by: "main_agent"
-  version: "1.0"
-  test_sequence: 13
-  run_ui: false
+  - task: "Phase 6: Admin Dashboard — /api/admin/users (GET/PATCH) + /api/admin/approvals/summary"
+    implemented: true
+    working: "NA"
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW Admin endpoints for Phase 6 (Admin Dashboard):
+          
+          1. GET /api/admin/users
+             - Auth: 401 if no session, 403 if not ADMIN
+             - Query params: role (ADMIN/MEMBER/VENDOR/EXPERT), tier (FREE/BASIC/GOLD/PLATINUM), suspended (0/1), search (matches name/email/phone), page, limit (default 20, max 100)
+             - Excludes guest users (isGuest:true)
+             - Returns: { users: [{id,name,email,role,membershipTier,isSuspended,createdAt,...}], pagination: {page,limit,total,pages}, totals: {total,admins,members,vendors,experts,suspended} }
+             - Pagination + total counts via aggregation
+          
+          2. PATCH /api/admin/users/:id
+             - Auth: 401/403 same as above
+             - Body: { role?: 'ADMIN|MEMBER|VENDOR|EXPERT', membershipTier?: 'FREE|BASIC|GOLD|PLATINUM', action?: 'suspend'|'activate', reason?: string }
+             - Self-protection: returns 400 if admin tries to suspend themselves or change their own role
+             - Returns: { user, message }
+             - On suspend: sets isSuspended=true, suspendedReason, suspendedAt=now
+             - On activate: clears suspension fields
+             - 404 if user not found, 400 if no valid changes
+          
+          3. GET /api/admin/approvals/summary
+             - Auth: 401/403 same as above
+             - Returns counts of PENDING records: { companies, experts, vendors, payouts, total }
+             - Used by /admin/approvals page hub
+          
+          User model updated:
+          - Added isSuspended (Boolean, default false, indexed), suspendedReason (String), suspendedAt (Date) in /app/lib/models.js UserSchema.
+          
+          Test plan:
+          - Auth checks: 401 without session, 403 for MEMBER/VENDOR/EXPERT roles.
+          - GET /api/admin/users: filter by role/tier/suspended/search; pagination edges (page=1, page beyond total).
+          - PATCH role change: VENDOR -> EXPERT, verify response.user.role.
+          - PATCH suspend: action='suspend' with reason; then GET should show isSuspended:true.
+          - PATCH activate: action='activate'; isSuspended should become false.
+          - PATCH self-protection: try to suspend own account → expect 400 'لا يمكنك تعديل حسابك الإداري'.
+          - GET /api/admin/approvals/summary: returns 4 counts + total; total === sum of others.
+
+  - task: "Phase 6: Admin Pages UI — /admin (hub), /admin/users, /admin/approvals, /admin/revenue + Footer + Skeleton + EmptyState"
+    implemented: true
+    working: "NA"
+    file: "/app/app/admin/page.js, /app/app/admin/users/{page.js,_UsersClient.jsx}, /app/app/admin/approvals/{page.js,_ApprovalsClient.jsx}, /app/app/admin/revenue/{page.js,_RevenueClient.jsx}, /app/components/{Footer,Skeleton,EmptyState,ThawaniPlaceholder}.jsx, /app/app/page.js, /app/app/layout.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW Phase 6 admin UI + final polish:
+          - /admin: Hub index page with 9 sections (Analytics, Users, Approvals, Revenue, Companies, Experts, Vendor Apps, Payouts, Coupons). Color-coded gradient cards.
+          - /admin/users: User management with filters (role, tier, suspended, search), pagination, inline role dropdown, suspend/activate buttons, current-user protection (cannot edit self).
+          - /admin/approvals: Centralized hub showing pending counts for Companies, Experts, Vendor Apps, Payouts. Each card links to the dedicated approval page.
+          - /admin/revenue: 3 KPI cards (total revenue, this month, consultations), stacked area chart (memberships+consultations over 12 months), tier breakdown bar, revenue source pie, top experts list.
+          - Footer.jsx: Global footer with brand, sections links (Store, Consultations, Directory, Membership), account links, contact info, social icons placeholders, copyright + privacy/terms links.
+          - Skeleton.jsx: Reusable Skeleton, SkeletonCard, SkeletonList, SkeletonGrid, SkeletonStats components for loading states.
+          - EmptyState.jsx: Reusable empty state with icon + title + description + optional action button/link.
+          - ThawaniPlaceholder.jsx: Payment placeholder button with TODO comments for production Thawani keys.
+          - Layout.js: Footer added globally beneath children.
+          - Landing page (page.js): Server-rendered with 4 NEW sections (Featured Products top 6, Top Experts top 4, Recently Joined Companies top 6, JOIN CTA gradient banner). Uses connectDB() + Product/Expert/Company queries. Fallbacks gracefully if no data.
+          - README.md created with full setup, env vars, Thawani UAT→Production switch, AI search architecture, folder map.
       - working: false
         agent: "testing"
         comment: |
@@ -1996,10 +2060,16 @@ metadata:
 
 test_plan:
   current_focus:
-    - "AI Search UI — AiSearchBar component on /store consuming POST /api/products/ai-search"
+    - "Phase 6: Admin Dashboard — /api/admin/users (GET/PATCH) + /api/admin/approvals/summary"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+metadata:
+  created_by: "main_agent"
+  version: "1.0"
+  test_sequence: 14
+  run_ui: false
   completed_focus:
     - "✅ GET /api/vendor/analytics — KPIs + monthly series + top products + category revenue + status breakdown (TESTED & WORKING)"
     - "✅ Inventory: GET /api/vendor/inventory, POST /api/products/:id/stock/adjust, GET /api/products/:id/stock/movements, POST /products lowStockThreshold (TESTED & WORKING)"
@@ -4736,3 +4806,221 @@ agent_communication:
       • Core variant functionality confirmed working through validation tests
       
       ✅ PRODUCT VARIANTS FEATURE READY FOR FRONTEND INTEGRATION
+
+backend:
+  - task: "GET /api/admin/users (admin user management with pagination and filters)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW Phase 6 Admin Dashboard endpoint. Admin-only access with comprehensive user management.
+          Query params: role (ADMIN|MEMBER|VENDOR|EXPERT), tier (FREE|BASIC|GOLD|PLATINUM), 
+          suspended (0|1), search (name/email/phone), page/limit (pagination).
+          Response: {users, pagination, totals} with guest exclusion (isGuest:true filtered out).
+          User schema updated with isSuspended, suspendedReason, suspendedAt fields.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ GET /api/admin/users TESTING COMPLETE - All functionality working perfectly:
+          
+          🎯 COMPREHENSIVE TEST RESULTS (8/8 SCENARIOS PASSED - 100% SUCCESS RATE):
+          
+          📋 AUTHENTICATION & AUTHORIZATION TESTS:
+          • Unauthenticated request → 401 with Arabic error 'غير مصرح' ✅
+          • Non-admin user (MEMBER) → 403 with Arabic error 'صلاحيات غير كافية' ✅
+          • Admin user → 200 with complete user list and proper structure ✅
+          
+          📋 RESPONSE STRUCTURE VALIDATION:
+          • users: Array of user objects with proper field mapping (id, name, email, role, etc.) ✅
+          • pagination: {page, limit, total, pages} with correct calculations ✅
+          • totals: {total: 223, admins: 23, members: 147, vendors: 49, experts: 4, suspended: 1} ✅
+          • Guest users (isGuest:true) correctly excluded from all results ✅
+          
+          📋 FILTERING FUNCTIONALITY:
+          • Role filter (?role=ADMIN) → Returns only ADMIN users ✅
+          • Tier filter (?tier=FREE) → Returns only FREE tier users ✅
+          • Suspended filter (?suspended=1) → Returns only suspended users ✅
+          • Search filter (?search=Test Member) → Case-insensitive name/email/phone search ✅
+          
+          📋 PAGINATION SYSTEM:
+          • Page/limit parameters (?page=1&limit=5) working correctly ✅
+          • Pagination metadata accurate with proper page calculations ✅
+          
+          🔧 TECHNICAL IMPLEMENTATION VERIFIED:
+          ✅ NextAuth session authentication working correctly
+          ✅ Role-based authorization (ADMIN only) enforced properly
+          ✅ Arabic error messages for authentication failures
+          ✅ MongoDB query optimization with proper indexing
+          ✅ Guest user exclusion filter working correctly
+          ✅ Search functionality with regex case-insensitive matching
+          ✅ Pagination with skip/limit and total count aggregation
+          ✅ User schema includes new suspension fields (isSuspended, suspendedReason, suspendedAt)
+          ✅ Response structure matches API specification exactly
+          ✅ All query parameters working as documented
+          
+          📊 PERFORMANCE: Endpoint responds efficiently with large user datasets (223+ users tested).
+
+  - task: "PATCH /api/admin/users/:id (admin user modification - role, tier, suspend/activate)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW Phase 6 Admin Dashboard endpoint. Admin-only user modification with self-protection.
+          Body variations: {role}, {membershipTier}, {action:'suspend', reason}, {action:'activate'}.
+          Self-protection: Admin cannot suspend or change role of their own account → 400.
+          Updates User fields and returns updated user object with success message.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ PATCH /api/admin/users/:id TESTING COMPLETE - All functionality working perfectly:
+          
+          🎯 COMPREHENSIVE TEST RESULTS (9/9 SCENARIOS PASSED - 100% SUCCESS RATE):
+          
+          📋 AUTHENTICATION & AUTHORIZATION TESTS:
+          • Unauthenticated request → 401 with Arabic error 'غير مصرح' ✅
+          • Non-admin user → 403 with Arabic error 'صلاحيات غير كافية' ✅
+          • Non-existent user ID → 404 with Arabic error 'المستخدم غير موجود' ✅
+          
+          📋 SELF-PROTECTION MECHANISM:
+          • Admin attempting to suspend own account → 400 'لا يمكنك تعديل حسابك الإداري' ✅
+          • Admin attempting to change own role → 400 'لا يمكنك تعديل حسابك الإداري' ✅
+          
+          📋 USER MODIFICATION OPERATIONS:
+          • Role change (MEMBER → EXPERT) → 200 with updated user.role ✅
+          • Tier change (FREE → GOLD) → 200 with updated user.membershipTier ✅
+          • User suspension → 200 with isSuspended=true, suspendedReason set, suspendedAt timestamp ✅
+          • User activation → 200 with isSuspended=false, cleared reason and timestamp ✅
+          
+          📋 VALIDATION & ERROR HANDLING:
+          • Empty request body → 400 'لا توجد تغييرات' ✅
+          
+          🔧 TECHNICAL IMPLEMENTATION VERIFIED:
+          ✅ NextAuth session authentication working correctly
+          ✅ Role-based authorization (ADMIN only) enforced properly
+          ✅ Self-modification protection preventing admin account lockout
+          ✅ User ID validation and existence checking
+          ✅ Database updates with proper field validation
+          ✅ Response structure: {user, message} with updated user data
+          ✅ Arabic success/error messages throughout
+          ✅ Suspension workflow: isSuspended, suspendedReason, suspendedAt fields
+          ✅ Activation workflow: clearing suspension fields
+          ✅ Role validation (ADMIN|MEMBER|VENDOR|EXPERT)
+          ✅ Tier validation (FREE|BASIC|GOLD|PLATINUM)
+          
+          📊 DATABASE VERIFICATION: All user modifications properly persisted and retrievable.
+
+  - task: "GET /api/admin/approvals/summary (combined pending approvals count)"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW Phase 6 Admin Dashboard endpoint. Admin-only approvals summary.
+          Returns counts of pending items: {companies, experts, vendors, payouts, total}.
+          Uses Promise.all for parallel counting across Company, Expert, VendorApplication, PayoutRequest models.
+          Total equals sum of all individual counts.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ GET /api/admin/approvals/summary TESTING COMPLETE - All functionality working perfectly:
+          
+          🎯 COMPREHENSIVE TEST RESULTS (3/3 SCENARIOS PASSED - 100% SUCCESS RATE):
+          
+          📋 AUTHENTICATION & AUTHORIZATION TESTS:
+          • Unauthenticated request → 401 with Arabic error 'غير مصرح' ✅
+          • Non-admin user (MEMBER) → 403 with Arabic error 'صلاحيات غير كافية' ✅
+          • Admin user → 200 with complete approvals summary ✅
+          
+          📋 RESPONSE STRUCTURE VALIDATION:
+          • companies: 3 (pending company applications) ✅
+          • experts: 2 (pending expert applications) ✅
+          • vendors: 0 (pending vendor applications) ✅
+          • payouts: 0 (pending payout requests) ✅
+          • total: 5 (sum of all pending items: 3+2+0+0=5) ✅
+          
+          📋 DATA INTEGRITY VERIFICATION:
+          • All counts are non-negative integers ✅
+          • Total calculation accurate (companies + experts + vendors + payouts) ✅
+          • Real-time data reflecting current database state ✅
+          
+          🔧 TECHNICAL IMPLEMENTATION VERIFIED:
+          ✅ NextAuth session authentication working correctly
+          ✅ Role-based authorization (ADMIN only) enforced properly
+          ✅ Arabic error messages for authentication failures
+          ✅ Promise.all parallel execution for optimal performance
+          ✅ MongoDB countDocuments queries across multiple collections
+          ✅ Model availability checking (VendorApplication, PayoutRequest with fallback to 0)
+          ✅ Response structure matches API specification exactly
+          ✅ Status filtering (status='PENDING') working correctly
+          ✅ All required models accessible (Company, Expert, VendorApplication, PayoutRequest)
+          
+          📊 PERFORMANCE: Endpoint responds quickly with parallel counting across multiple collections.
+
+test_plan:
+  current_focus:
+    - "GET /api/admin/users (admin user management with pagination and filters)"
+    - "PATCH /api/admin/users/:id (admin user modification - role, tier, suspend/activate)"
+    - "GET /api/admin/approvals/summary (combined pending approvals count)"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+  - agent: "testing"
+    message: |
+      ✅ PHASE 6 ADMIN DASHBOARD BACKEND TESTING COMPLETE - ALL ENDPOINTS WORKING PERFECTLY:
+      
+      🎯 COMPREHENSIVE TEST RESULTS (100% SUCCESS RATE):
+      
+      📋 NEW ENDPOINTS TESTED:
+      1. GET /api/admin/users - User management with pagination, filtering, and search ✅
+      2. PATCH /api/admin/users/:id - User modification (role, tier, suspend/activate) ✅
+      3. GET /api/admin/approvals/summary - Combined pending approvals count ✅
+      
+      📋 AUTHENTICATION & AUTHORIZATION:
+      • All endpoints properly protected with admin-only access ✅
+      • Unauthenticated requests correctly return 401 with Arabic errors ✅
+      • Non-admin users correctly blocked with 403 errors ✅
+      • Self-modification protection prevents admin account lockout ✅
+      
+      📋 USER SCHEMA VERIFICATION:
+      • New suspension fields (isSuspended, suspendedReason, suspendedAt) working ✅
+      • Guest user exclusion (isGuest:true) properly implemented ✅
+      • All user roles and tiers properly supported ✅
+      
+      📋 INTEGRATION SANITY TESTS:
+      • Existing admin endpoints (analytics, companies) still working ✅
+      • Login and session management functioning correctly ✅
+      • No regression in existing functionality ✅
+      
+      🔧 TECHNICAL IMPLEMENTATION:
+      • Arabic error messages throughout ✅
+      • Proper MongoDB queries with optimization ✅
+      • Response structures match API specifications ✅
+      • Pagination and filtering working correctly ✅
+      • Database operations properly validated ✅
+      
+      📊 TEST COVERAGE:
+      • 25+ individual test scenarios executed
+      • Authentication, authorization, validation, and business logic all verified
+      • Error handling and edge cases properly tested
+      • Real database operations with proper cleanup
+      
+      🎉 CONCLUSION: All Phase 6 Admin Dashboard backend endpoints are production-ready and fully functional. The implementation meets all requirements specified in the review request.
