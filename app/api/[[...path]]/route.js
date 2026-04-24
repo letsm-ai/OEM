@@ -31,6 +31,8 @@ import {
   sendNewBookingNotifyExpert,
   sendAppointmentCancellationEmail,
   sendAppointmentReminderEmail,
+  sendOrderConfirmationEmail,
+  sendVendorNewOrderEmail,
 } from '@/lib/email'
 import { getPaymentProvider, isRealPayment } from '@/lib/payments'
 
@@ -2810,6 +2812,72 @@ async function handleRoute(request, { params }) {
         createdAt: new Date(),
         updatedAt: new Date(),
       })
+
+      // ---------- FIRE-AND-FORGET EMAIL NOTIFICATIONS ----------
+      // (Never block/raise on email errors — they're best-effort.)
+      ;(async () => {
+        try {
+          const orderObj = {
+            id: order._id,
+            items: resolvedItems,
+            subtotal: +subtotal.toFixed(3),
+            discountPercent,
+            discountAmount,
+            totalPaid,
+            shippingAddress: {
+              name: shipping.name,
+              phone: shipping.phone,
+              governorate: shipping.governorate,
+              city: shipping.city,
+              addressLine: shipping.addressLine,
+              notes: shipping.notes,
+            },
+          }
+          // 1) Buyer confirmation
+          if (buyer?.email) {
+            sendOrderConfirmationEmail({
+              to: buyer.email,
+              name: buyer.name,
+              order: orderObj,
+            }).catch((err) =>
+              console.error('[email] order confirmation failed:', err)
+            )
+          }
+          // 2) Per-vendor notification (only their items)
+          const byVendor = resolvedItems.reduce((acc, it) => {
+            acc[it.vendorId] = acc[it.vendorId] || []
+            acc[it.vendorId].push(it)
+            return acc
+          }, {})
+          const vendorIds = Object.keys(byVendor)
+          const vendors = await User.find({ _id: { $in: vendorIds } })
+            .select({ _id: 1, name: 1, email: 1 })
+            .lean()
+          for (const v of vendors) {
+            const vItems = byVendor[v._id] || []
+            const vSubtotal = vItems.reduce((s, it) => s + it.lineSubtotal, 0)
+            const vCommission = +(vSubtotal * (COMMISSION_PERCENT / 100)).toFixed(3)
+            const vNet = +(vSubtotal - vCommission).toFixed(3)
+            if (v.email) {
+              sendVendorNewOrderEmail({
+                to: v.email,
+                vendorName: v.name,
+                order: orderObj,
+                items: vItems,
+                buyerName: buyer?.name || '',
+                buyerEmail: buyer?.email || '',
+                vendorSubtotal: +vSubtotal.toFixed(3),
+                vendorCommission: vCommission,
+                vendorNet: vNet,
+              }).catch((err) =>
+                console.error('[email] vendor notify failed:', err)
+              )
+            }
+          }
+        } catch (emailErr) {
+          console.error('[email] order notification block failed:', emailErr)
+        }
+      })()
 
       return handleCORS(
         NextResponse.json({
