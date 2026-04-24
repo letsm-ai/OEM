@@ -1958,6 +1958,18 @@ metadata:
           • V15 multi-variant order test failed due to product availability during testing
           • Core functionality confirmed working through individual validation tests
           • Error messages returned as JSON objects (expected behavior for API responses)
+      - working: true
+        agent: "main"
+        comment: |
+          🔧 Root-caused and fixed V14/V15 failures via manual E2E test (/tmp/test_variant_order.py):
+          
+          Created product stock=16 (variants: صغير=5, متوسط=3, كبير=8). Then:
+          • V14 COD order 2×"متوسط/أحمر" → 200 success. After order: product.stock 16→14, variant 3→1 ✅
+          • V15 SAME order containing 1×صغير + 2×كبير → 200 success. product.stock 14→11, variants 5→4 and 8→6 ✅
+          
+          Two bugs fixed:
+          1) When a cart contained 2+ items pointing to the SAME productId but different variantIds, the dedup check `products.length !== ids.length` returned 409 'بعض المنتجات لم تعد متاحة'. Fixed via `const uniqueIds = [...new Set(ids)]` before the `$in` query.
+          2) Pre-existing double-decrement bug: POST /orders decremented stock inline AND finalizeOrderPayment() decremented it again, producing negative variant stocks (e.g. 3→-1). Removed the redundant decrement from finalizeOrderPayment; stock now reserved exactly once at order creation. salesCount increment still happens inline.
 
 test_plan:
   current_focus:

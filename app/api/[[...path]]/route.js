@@ -133,29 +133,11 @@ async function finalizeOrderPayment(order, buyer) {
 
     const items = fresh.items || []
 
-    // 1) Decrement stock + increment salesCount
-    for (const it of items) {
-      try {
-        if (it.variantId) {
-          await Product.updateOne(
-            { _id: it.productId, 'variants.id': it.variantId },
-            {
-              $inc: {
-                'variants.$.stock': -Math.abs(it.quantity || 1),
-                stock: -Math.abs(it.quantity || 1),
-                salesCount: Math.abs(it.quantity || 1),
-              },
-            }
-          )
-        } else {
-          await Product.findByIdAndUpdate(it.productId, {
-            $inc: { stock: -Math.abs(it.quantity || 1), salesCount: Math.abs(it.quantity || 1) },
-          })
-        }
-      } catch (e) {
-        console.error('[order] stock decrement failed:', e)
-      }
-    }
+    // 1) Stock is already decremented at order creation time.
+    //    finalizeOrderPayment is idempotent via paymentProcessedSideEffects,
+    //    but we intentionally DO NOT re-deduct stock here because inline decrement
+    //    on POST /orders already reserved it (both for COD and Thawani PENDING).
+    //    Double-decrement bug was causing negative stock values on variants.
 
     // 2) Coupon redemption
     if (fresh.couponCode && fresh.couponDiscount > 0) {
@@ -3563,11 +3545,12 @@ async function handleRoute(request, { params }) {
 
       // Fetch authoritative product prices + stocks server-side
       const ids = cartItems.map((it) => String(it.productId))
+      const uniqueIds = [...new Set(ids)]
       const products = await Product.find({
-        _id: { $in: ids },
+        _id: { $in: uniqueIds },
         isActive: true,
       })
-      if (products.length !== ids.length) {
+      if (products.length !== uniqueIds.length) {
         return handleCORS(
           NextResponse.json(
             { error: 'بعض المنتجات لم تعد متاحة' },
