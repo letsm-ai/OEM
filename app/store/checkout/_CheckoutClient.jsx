@@ -3,9 +3,9 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { CheckCircle2, CreditCard, Loader2, AlertTriangle, MapPin, Truck, Lock, Tag, X, Gift } from 'lucide-react'
+import { CheckCircle2, CreditCard, Loader2, AlertTriangle, MapPin, Truck, Lock, Tag, X, Gift, Banknote } from 'lucide-react'
 import { useCart } from '@/components/CartContext'
-import { computeCartTotals, formatOMR } from '@/lib/store'
+import { computeCartTotals, formatOMR, COD_EXTRA_FEE_OMR } from '@/lib/store'
 
 const GOVERNORATES = [
   'MUSCAT', 'DHOFAR', 'MUSANDAM', 'BURAIMI', 'DAKHILIYAH',
@@ -17,7 +17,7 @@ const GOV_LABELS = {
   BATINAH: 'الباطنة', DHAHIRAH: 'الظاهرة',
 }
 
-export default function CheckoutClient({ tier, user }) {
+export default function CheckoutClient({ tier, user, isLoggedIn = true }) {
   const router = useRouter()
   const { items, clear } = useCart()
   const totals = computeCartTotals({ items, tier })
@@ -33,6 +33,7 @@ export default function CheckoutClient({ tier, user }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(null)
+  const [guestEmail, setGuestEmail] = useState(user?.email || '')
 
   // Coupon state
   const [couponInput, setCouponInput] = useState('')
@@ -89,13 +90,20 @@ export default function CheckoutClient({ tier, user }) {
   }, [addr.governorate, amountForShipping])
 
   const couponDiscount = coupon ? coupon.couponDiscountAmount : 0
-  const finalTotal = +(amountForShipping + (shipping.fee || 0)).toFixed(3)
+  const [paymentMethod, setPaymentMethod] = useState('CARD') // 'CARD' (Thawani) or 'COD'
+  const codFee = paymentMethod === 'COD' ? COD_EXTRA_FEE_OMR : 0
+  const finalTotal = +(amountForShipping + (shipping.fee || 0) + codFee).toFixed(3)
 
   const submit = async (e) => {
     e.preventDefault()
     setError('')
     if (!addr.name || !addr.phone || !addr.addressLine) {
       return setError('الاسم والهاتف والعنوان حقول مطلوبة')
+    }
+    if (!isLoggedIn) {
+      if (!guestEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guestEmail)) {
+        return setError('البريد الإلكتروني مطلوب وصحيح للشراء كضيف')
+      }
     }
     if (items.length === 0) return setError('السلة فارغة')
     setLoading(true)
@@ -106,6 +114,10 @@ export default function CheckoutClient({ tier, user }) {
         items: items.map((it) => ({ productId: it.productId, quantity: it.quantity })),
         shippingAddress: addr,
         couponCode: coupon ? coupon.code : undefined,
+        paymentMethod: paymentMethod === 'COD' ? 'COD' : undefined,
+        guest: isLoggedIn ? undefined : {
+          name: addr.name, email: guestEmail, phone: addr.phone,
+        },
       }),
     })
     const data = await res.json().catch(() => ({}))
@@ -120,9 +132,9 @@ export default function CheckoutClient({ tier, user }) {
       window.location.href = data.redirectUrl
       return
     }
-    // MOCK flow: immediate success
+    // MOCK or COD flow: immediate success (COD shows "cash on delivery" banner)
     clear()
-    setSuccess(data.order)
+    setSuccess({ ...data.order, cod: data.cod === true })
   }
 
   if (success) {
@@ -130,13 +142,17 @@ export default function CheckoutClient({ tier, user }) {
       <div className="container mx-auto max-w-lg px-4 py-16 text-center">
         <CheckCircle2 className="mx-auto h-14 w-14 text-green-500" />
         <h1 className="mt-4 text-2xl font-bold text-[#1B3A6B]">تم تأكيد طلبك بنجاح!</h1>
-        <p className="mt-1 text-sm text-gray-600">سيتم التواصل معك من البائع لتنسيق الشحن.</p>
+        <p className="mt-1 text-sm text-gray-600">
+          {success.cod
+            ? '💵 طلبك بنظام الدفع عند الاستلام — سيتم التواصل معك قريباً لتنسيق التوصيل وتحصيل المبلغ.'
+            : 'سيتم التواصل معك من البائع لتنسيق الشحن.'}
+        </p>
         <div className="mt-5 rounded-xl border border-gray-200 bg-white p-4 text-right">
           <div className="text-sm"><b>رقم الطلب:</b> <span dir="ltr" className="text-xs text-gray-600">{success.id}</span></div>
-          <div className="text-sm"><b>المدفوع:</b> {formatOMR(success.totalPaid)} ر.ع</div>
+          <div className="text-sm"><b>{success.cod ? 'المطلوب عند التسليم:' : 'المدفوع:'}</b> {formatOMR(success.totalPaid)} ر.ع</div>
         </div>
         <div className="mt-5 flex justify-center gap-2">
-          <Link href="/dashboard" className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium">طلباتي</Link>
+          <Link href="/store/orders" className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium">طلباتي</Link>
           <Link href="/store" className="rounded-lg bg-[#1B3A6B] px-4 py-2 text-sm font-semibold text-white">مواصلة التسوّق</Link>
         </div>
       </div>
@@ -164,6 +180,25 @@ export default function CheckoutClient({ tier, user }) {
                 <Truck className="h-5 w-5 text-[#1B3A6B]" />
                 <h2 className="text-sm font-bold text-[#1B3A6B]">عنوان الشحن</h2>
               </div>
+              {!isLoggedIn && (
+                <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs">
+                  <div className="mb-2 font-bold text-amber-800">
+                    🛒 الشراء كضيف — <Link href="/login?callbackUrl=/store/checkout" className="text-[#1B3A6B] underline">أو سجّل الدخول</Link>
+                  </div>
+                  <Input
+                    label="البريد الإلكتروني *"
+                    type="email"
+                    value={guestEmail}
+                    onChange={setGuestEmail}
+                    required
+                    dir="ltr"
+                    placeholder="you@example.com"
+                  />
+                  <div className="mt-1 text-[10px] text-gray-500">
+                    سنرسل تأكيد الطلب وحالة الشحن إلى هذا البريد.
+                  </div>
+                </div>
+              )}
               <div className="grid gap-3 sm:grid-cols-2">
                 <Input label="الاسم الكامل" value={addr.name} onChange={(v) => setAddr({ ...addr, name: v })} required />
                 <Input label="الهاتف" value={addr.phone} onChange={(v) => setAddr({ ...addr, phone: v })} required dir="ltr" />
@@ -246,6 +281,13 @@ export default function CheckoutClient({ tier, user }) {
                 }
                 color={shipping.isFree ? 'text-green-600' : 'text-gray-700'}
               />
+              {paymentMethod === 'COD' && codFee > 0 && (
+                <SumRow
+                  label="رسوم الدفع عند الاستلام"
+                  value={`+ ${formatOMR(codFee)} ر.ع`}
+                  color="text-gray-700"
+                />
+              )}
               <SumRow
                 label="الإجمالي"
                 value={`${formatOMR(finalTotal)} ر.ع`}
@@ -322,6 +364,42 @@ export default function CheckoutClient({ tier, user }) {
                 {error}
               </div>
             )}
+
+            {/* Payment method selector */}
+            <div className="mt-4">
+              <div className="mb-2 text-xs font-bold text-[#1B3A6B]">طريقة الدفع</div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('CARD')}
+                  className={`flex flex-col items-center gap-1 rounded-xl border-2 p-3 text-xs font-semibold transition ${
+                    paymentMethod === 'CARD'
+                      ? 'border-[#1B3A6B] bg-[#1B3A6B]/5 text-[#1B3A6B]'
+                      : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'
+                  }`}
+                >
+                  <CreditCard className="h-5 w-5" />
+                  <span>بطاقة (Thawani)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('COD')}
+                  className={`flex flex-col items-center gap-1 rounded-xl border-2 p-3 text-xs font-semibold transition ${
+                    paymentMethod === 'COD'
+                      ? 'border-[#C9A84C] bg-[#C9A84C]/10 text-[#8a6f2d]'
+                      : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'
+                  }`}
+                >
+                  <Banknote className="h-5 w-5" />
+                  <span>الدفع عند الاستلام</span>
+                </button>
+              </div>
+              {paymentMethod === 'COD' && (
+                <div className="mt-2 rounded-lg bg-amber-50 p-2 text-[11px] text-amber-800">
+                  💵 سيتم تحصيل المبلغ نقداً من المندوب عند التوصيل. رسوم إضافية: {formatOMR(COD_EXTRA_FEE_OMR)} ر.ع.
+                </div>
+              )}
+            </div>
 
             <button
               type="submit"

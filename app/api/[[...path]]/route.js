@@ -4,7 +4,7 @@ import crypto from 'crypto'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { connectDB } from '@/lib/db'
-import { User, Membership, PasswordResetToken, Company, Expert, Availability, Appointment, VendorApplication, Product, ProductReview, Order, Coupon, CouponRedemption } from '@/lib/models'
+import { User, Membership, PasswordResetToken, Company, Expert, Availability, Appointment, VendorApplication, Product, ProductReview, Order, Coupon, CouponRedemption, Cart } from '@/lib/models'
 
 // ---- Extracted modular handlers ----
 import {
@@ -45,7 +45,7 @@ import {
   TIER_DISCOUNT,
 } from '@/lib/membership'
 import { SECTOR_KEYS, GOVERNORATE_KEYS } from '@/lib/directory'
-import { CATEGORY_KEYS, COMMISSION_PERCENT, TIER_DISCOUNT_PERCENT, computeShippingFee, FREE_SHIPPING_THRESHOLD, SHIPPING_FEES_OMR } from '@/lib/store'
+import { CATEGORY_KEYS, COMMISSION_PERCENT, TIER_DISCOUNT_PERCENT, computeShippingFee, FREE_SHIPPING_THRESHOLD, SHIPPING_FEES_OMR, COD_EXTRA_FEE_OMR } from '@/lib/store'
 import { slugify, uniqueVendorSlug } from '@/lib/slug'
 import {
   SPECIALTY_KEYS,
@@ -64,6 +64,7 @@ import {
   sendOrderConfirmationEmail,
   sendVendorNewOrderEmail,
   sendOrderStatusUpdateEmail,
+  sendAbandonedCartEmail,
 } from '@/lib/email'
 import { getPaymentProvider, isRealPayment } from '@/lib/payments'
 
@@ -1441,6 +1442,9 @@ async function handleRoute(request, { params }) {
     const productMyReviewStatusMatch = route.match(
       /^\/products\/([A-Za-z0-9-]+)\/my-review-status$/
     )
+    const productRelatedMatch = route.match(
+      /^\/products\/([A-Za-z0-9-]+)\/related$/
+    )
     const wishlistItemMatch = route.match(
       /^\/wishlist\/([A-Za-z0-9-]+)$/
     )
@@ -2713,6 +2717,78 @@ async function handleRoute(request, { params }) {
       return handleMyReviewStatus(productMyReviewStatusMatch[1])
     }
 
+    // ---- GET /products/:id/related (public — related products) ----
+    if (productRelatedMatch && method === 'GET') {
+      await connectDB()
+      const id = productRelatedMatch[1]
+      const p = await Product.findById(id).select({ _id: 1, vendorId: 1, category: 1 }).lean()
+      if (!p) {
+        return handleCORS(
+          NextResponse.json({ error: 'المنتج غير موجود' }, { status: 404 })
+        )
+      }
+      const limit = 8
+      // 1st pass: same category (exclude self)
+      let related = await Product.find({
+        _id: { $ne: id },
+        category: p.category,
+        isActive: true,
+        stock: { $gt: 0 },
+      })
+        .sort({ salesCount: -1, createdAt: -1 })
+        .limit(limit)
+        .lean()
+      // Fallback: if fewer than limit, fetch more from same vendor (any category)
+      if (related.length < limit) {
+        const existingIds = new Set(related.map((r) => r._id))
+        existingIds.add(id)
+        const fill = await Product.find({
+          _id: { $nin: [...existingIds] },
+          vendorId: p.vendorId,
+          isActive: true,
+          stock: { $gt: 0 },
+        })
+          .sort({ createdAt: -1 })
+          .limit(limit - related.length)
+          .lean()
+        related = [...related, ...fill]
+      }
+      // Final fallback: any active product with stock
+      if (related.length < limit) {
+        const existingIds = new Set(related.map((r) => r._id))
+        existingIds.add(id)
+        const fill = await Product.find({
+          _id: { $nin: [...existingIds] },
+          isActive: true,
+          stock: { $gt: 0 },
+        })
+          .sort({ salesCount: -1, createdAt: -1 })
+          .limit(limit - related.length)
+          .lean()
+        related = [...related, ...fill]
+      }
+      // Attach vendor slug/name for nice UI
+      const vendorIds = [...new Set(related.map((r) => r.vendorId))]
+      const vendors = await User.find({ _id: { $in: vendorIds } })
+        .select({ _id: 1, name: 1, vendorProfile: 1 })
+        .lean()
+      const vMap = Object.fromEntries(vendors.map((v) => [v._id, v]))
+      return handleCORS(
+        NextResponse.json({
+          products: related.map((r) => ({
+            id: r._id,
+            ...r,
+            _id: undefined,
+            vendorName:
+              vMap[r.vendorId]?.vendorProfile?.businessName ||
+              vMap[r.vendorId]?.name ||
+              'تاجر',
+            vendorSlug: vMap[r.vendorId]?.vendorProfile?.slug || '',
+          })),
+        })
+      )
+    }
+
     // ---- Wishlist (see /lib/api/wishlist.js) ----
     if (route === '/wishlist' && method === 'GET') {
       return handleWishlistList()
@@ -2723,6 +2799,133 @@ async function handleRoute(request, { params }) {
     if (wishlistItemMatch && method === 'DELETE') {
       return handleWishlistRemove(wishlistItemMatch[1])
     }
+
+
+    /* ============================================================
+       MARKETPLACE — CART SYNC (for abandoned-cart reminders)
+       ============================================================ */
+    // ---- POST /cart (auth) — upsert user's cart ----
+    if (route === '/cart' && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const body = await request.json().catch(() => ({}))
+      const rawItems = Array.isArray(body?.items) ? body.items : []
+      const items = rawItems.slice(0, 100).map((it) => ({
+        productId: String(it.productId || ''),
+        quantity: Math.max(1, Math.min(99, parseInt(it.quantity || 1, 10))),
+        nameAr: String(it.nameAr || '').slice(0, 100),
+        unitPrice: Number(it.unitPrice || 0),
+        image: String(it.image || '').slice(0, 2000),
+      })).filter((it) => it.productId)
+      await Cart.findOneAndUpdate(
+        { userId: session.user.id },
+        {
+          $set: {
+            items,
+            updatedAt: new Date(),
+            // Reset reminder counters on activity
+            lastReminderSentAt: null,
+            reminderEmailsSent: 0,
+          },
+        },
+        { upsert: true, new: true }
+      )
+      return handleCORS(NextResponse.json({ success: true, count: items.length }))
+    }
+
+    // ---- GET /cart (auth) — fetch saved cart ----
+    if (route === '/cart' && method === 'GET') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ items: [] })
+        )
+      }
+      await connectDB()
+      const c = await Cart.findOne({ userId: session.user.id }).lean()
+      return handleCORS(NextResponse.json({ items: c?.items || [] }))
+    }
+
+    // ---- DELETE /cart (auth) — clear cart (after order success) ----
+    if (route === '/cart' && method === 'DELETE') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ success: true })
+        )
+      }
+      await connectDB()
+      await Cart.findOneAndUpdate(
+        { userId: session.user.id },
+        { $set: { items: [], updatedAt: new Date() } },
+        { upsert: true }
+      )
+      return handleCORS(NextResponse.json({ success: true }))
+    }
+
+    /* ============================================================
+       CRON — ABANDONED CART REMINDER EMAILS
+       ============================================================ */
+    // ---- POST /cron/abandoned-carts (requires X-CRON-KEY header OR ADMIN) ----
+    if (route === '/cron/abandoned-carts' && method === 'POST') {
+      // Auth: either cron key header or ADMIN session
+      const cronKey = request.headers.get('x-cron-key') || ''
+      const expectedKey = process.env.CRON_SECRET_KEY || ''
+      let authorized = false
+      if (expectedKey && cronKey === expectedKey) {
+        authorized = true
+      } else {
+        const session = await getServerSession(authOptions)
+        if (session?.user?.role === 'ADMIN') authorized = true
+      }
+      if (!authorized) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      // Find carts with items, updated 24..72 hours ago, and reminderEmailsSent < 1
+      const now = Date.now()
+      const minAge = new Date(now - 24 * 60 * 60 * 1000) // >= 24h old
+      const maxAge = new Date(now - 72 * 60 * 60 * 1000) // <= 72h old
+      const candidates = await Cart.find({
+        'items.0': { $exists: true }, // at least 1 item
+        updatedAt: { $lte: minAge, $gte: maxAge },
+        reminderEmailsSent: { $lt: 1 },
+      }).limit(100).lean()
+
+      let sent = 0
+      for (const c of candidates) {
+        try {
+          const user = await User.findById(c.userId).select({ _id:1, name:1, email:1 }).lean()
+          if (!user?.email) continue
+          await sendAbandonedCartEmail({
+            to: user.email,
+            name: user.name,
+            items: c.items,
+          })
+          await Cart.findOneAndUpdate(
+            { _id: c._id },
+            {
+              $set: { lastReminderSentAt: new Date() },
+              $inc: { reminderEmailsSent: 1 },
+            }
+          )
+          sent++
+        } catch (e) {
+          console.error('[cron abandoned-cart] failed for', c._id, e)
+        }
+      }
+      return handleCORS(
+        NextResponse.json({ success: true, candidates: candidates.length, sent })
+      )
+    }
+
 
 
 
@@ -3242,14 +3445,67 @@ async function handleRoute(request, { params }) {
        ============================================================ */
     // ---- POST /orders (create order from cart items) ----
     if (route === '/orders' && method === 'POST') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'يجب تسجيل الدخول لإتمام الطلب' }, { status: 401 })
-        )
-      }
+      let session = await getServerSession(authOptions)
       await connectDB()
       const body = await request.json().catch(() => ({}))
+
+      // Guest checkout support: if no session, require guest info to auto-create a user.
+      let buyerId = session?.user?.id
+      let isGuest = false
+      if (!session?.user) {
+        const guest = body?.guest || {}
+        const gEmail = String(guest.email || '').trim().toLowerCase()
+        const gName = String(guest.name || '').trim()
+        const gPhone = String(guest.phone || '').trim()
+        if (!gEmail || !gName) {
+          return handleCORS(
+            NextResponse.json(
+              { error: 'للشراء كضيف، الاسم والبريد الإلكتروني مطلوبان' },
+              { status: 400 }
+            )
+          )
+        }
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(gEmail)) {
+          return handleCORS(
+            NextResponse.json({ error: 'صيغة البريد الإلكتروني غير صحيحة' }, { status: 400 })
+          )
+        }
+        // Find existing user by email; if exists and has a password, block (they should login)
+        let existingUser = await User.findOne({ email: gEmail })
+        if (existingUser && existingUser.password && !existingUser.isGuest) {
+          return handleCORS(
+            NextResponse.json(
+              { error: 'هذا البريد مسجّل مسبقاً، يُرجى تسجيل الدخول لإتمام الطلب' },
+              { status: 409 }
+            )
+          )
+        }
+        if (existingUser) {
+          // Reuse existing guest user
+          buyerId = existingUser._id
+          if (gName && !existingUser.name) existingUser.name = gName
+          if (gPhone && !existingUser.phone) existingUser.phone = gPhone
+          await existingUser.save()
+        } else {
+          // Create a guest user (no password — they can recover via reset-password later)
+          const guestUser = await User.create({
+            name: gName,
+            email: gEmail,
+            password: '', // empty — can't log in via credentials
+            phone: gPhone,
+            role: 'MEMBER',
+            membershipTier: 'FREE',
+            isGuest: true,
+          })
+          buyerId = guestUser._id
+        }
+        isGuest = true
+      }
+      if (!session?.user) {
+        // For guest orders, create a shim session with the guest's buyerId
+        session = { user: { id: buyerId, role: 'MEMBER' } }
+      }
+
       const cartItems = Array.isArray(body?.items) ? body.items : []
       if (cartItems.length === 0) {
         return handleCORS(
@@ -3338,7 +3594,11 @@ async function handleRoute(request, { params }) {
       const afterCoupon = Math.max(0, +(afterTier - couponDiscount).toFixed(3))
       // ----- Shipping fee (based on governorate) -----
       const shippingFee = computeShippingFee(shipping.governorate, afterCoupon)
-      const totalPaid = Math.max(0, +(afterCoupon + shippingFee).toFixed(3))
+      // ----- Payment method branching -----
+      const paymentMethod = String(body?.paymentMethod || '').toUpperCase() // 'COD' or empty (→ THAWANI/MOCK)
+      const isCOD = paymentMethod === 'COD'
+      const codFee = isCOD ? COD_EXTRA_FEE_OMR : 0
+      const totalPaid = Math.max(0, +(afterCoupon + shippingFee + codFee).toFixed(3))
 
       // Decrement stock + salesCount atomically per product
       for (const it of resolvedItems) {
@@ -3369,15 +3629,31 @@ async function handleRoute(request, { params }) {
           addressLine: String(shipping.addressLine || '').slice(0, 300),
           notes: String(shipping.notes || '').slice(0, 300),
         },
-        // Provider branch: THAWANI creates order as PENDING (user will pay next),
-        // MOCK marks it PAID immediately (legacy flow).
-        status: isThawaniEnabled() ? 'PENDING' : 'PAID',
-        paymentProvider: isThawaniEnabled() ? 'THAWANI' : 'MOCK',
-        paymentStatus: isThawaniEnabled() ? 'PENDING' : 'PAID',
-        paymentId: isThawaniEnabled() ? '' : 'mock_' + Date.now(),
+        // Provider branch: COD = instant PAID (cash will be collected on delivery);
+        // Thawani = PENDING until payment confirmation; MOCK = PAID (legacy).
+        status: isCOD ? 'PAID' : isThawaniEnabled() ? 'PENDING' : 'PAID',
+        paymentProvider: isCOD
+          ? 'COD'
+          : isThawaniEnabled()
+            ? 'THAWANI'
+            : 'MOCK',
+        paymentStatus: isCOD ? 'PENDING' : isThawaniEnabled() ? 'PENDING' : 'PAID',
+        paymentId: isCOD ? 'cod_' + Date.now() : (isThawaniEnabled() ? '' : 'mock_' + Date.now()),
         createdAt: new Date(),
         updatedAt: new Date(),
       })
+
+      // ===== BRANCH: COD (Cash on Delivery) — skip Thawani, mark paid =====
+      if (isCOD) {
+        await finalizeOrderPayment(order, buyer)
+        return handleCORS(
+          NextResponse.json({
+            success: true,
+            cod: true,
+            order: { id: order._id, ...order.toObject(), _id: undefined },
+          })
+        )
+      }
 
       // ===== BRANCH: Thawani flow =====
       if (isThawaniEnabled()) {

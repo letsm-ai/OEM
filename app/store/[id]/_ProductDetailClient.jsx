@@ -4,10 +4,11 @@ import Link from 'next/link'
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
-import { ShoppingCart, Minus, Plus, ChevronRight, CheckCircle2, Package, Tag, Store as StoreIcon, ArrowLeft, Star, MessageSquare, Lock, Heart } from 'lucide-react'
+import { ShoppingCart, Minus, Plus, ChevronRight, CheckCircle2, Package, Tag, Store as StoreIcon, ArrowLeft, Star, MessageSquare, Lock, Heart, Sparkles } from 'lucide-react'
 import { formatOMR, categoryEmoji, categoryLabel } from '@/lib/store'
 import { useCart } from '@/components/CartContext'
 import { useWishlist } from '@/components/WishlistContext'
+import ProductCard from '@/components/ProductCard'
 
 function StarRow({ value = 0, size = 'h-4 w-4', interactive = false, onChange }) {
   return (
@@ -64,17 +65,22 @@ export default function ProductDetailClient({ product }) {
   const [submitMsg, setSubmitMsg] = useState('')
   const [submitErr, setSubmitErr] = useState('')
 
+  // Related products
+  const [related, setRelated] = useState([])
+
   useEffect(() => {
     let ignore = false
     ;(async () => {
       try {
-        const [r1, r2] = await Promise.all([
+        const [r1, r2, r3] = await Promise.all([
           fetch(`/api/products/${product.id}/reviews`).then((r) => r.json()),
           fetch(`/api/products/${product.id}/my-review-status`).then((r) => r.json()),
+          fetch(`/api/products/${product.id}/related`).then((r) => r.json()),
         ])
         if (ignore) return
         setReviews(r1?.reviews || [])
         setMyStatus(r2 || null)
+        setRelated(r3?.products || [])
       } catch (e) {
         /* noop */
       } finally {
@@ -418,6 +424,24 @@ export default function ProductDetailClient({ product }) {
             </div>
           )}
         </div>
+
+        {/* ====================== Related Products ====================== */}
+        {related.length > 0 && (
+          <div className="mt-6 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+            <div className="mb-5 flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-[#C9A84C]" />
+              <h2 className="text-lg font-extrabold text-[#1B3A6B]">قد يعجبك أيضاً</h2>
+              <span className="rounded-full bg-[#C9A84C]/20 px-2.5 py-0.5 text-xs font-semibold text-[#8a6f2d]">
+                {related.length}
+              </span>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {related.map((r) => (
+                <ProductCard key={r.id} product={r} />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
