@@ -2620,45 +2620,84 @@ async function handleRoute(request, { params }) {
       if (query.length > 200) {
         return handleCORS(NextResponse.json({ error: 'الاستعلام طويل جداً (الحد الأقصى 200 حرف)' }, { status: 400 }))
       }
-      // Spawn the python helper, pass JSON via stdin
-      const { spawn } = await import('node:child_process')
-      const result = await new Promise((resolve) => {
-        // Use the venv Python to ensure emergentintegrations is available
-        const pyBin = '/root/.venv/bin/python3'
-        const proc = spawn(pyBin, ['/app/lib/ai_search.py'], {
-          env: { ...process.env, EMERGENT_LLM_KEY: process.env.EMERGENT_LLM_KEY || '' },
-        })
-        let stdout = ''
-        let stderr = ''
-        proc.stdout.on('data', (d) => { stdout += d.toString() })
-        proc.stderr.on('data', (d) => { stderr += d.toString() })
-        const timer = setTimeout(() => {
-          try { proc.kill('SIGKILL') } catch (_) {}
-          resolve({ ok: false, error: 'انتهت مهلة البحث الذكي' })
-        }, 25000)
-        proc.on('close', (code) => {
-          clearTimeout(timer)
-          if (code !== 0) {
-            console.error('[ai-search] exit', code, 'stderr:', stderr.slice(0, 500))
-            try {
-              const j = JSON.parse(stdout || '{}')
-              if (j?.error) return resolve({ ok: false, error: j.error })
-            } catch (_) {}
-            return resolve({ ok: false, error: 'فشل البحث الذكي' })
-          }
-          try {
-            resolve({ ok: true, data: JSON.parse(stdout) })
-          } catch (e) {
-            resolve({ ok: false, error: 'استجابة غير صالحة' })
-          }
-        })
-        proc.stdin.write(JSON.stringify({ query }))
-        proc.stdin.end()
-      })
-      if (!result.ok) {
-        return handleCORS(NextResponse.json({ error: result.error }, { status: 500 }))
+
+      // ---- In-memory cache (5 min TTL) on filter inference to save tokens ----
+      const cacheKey = query.toLowerCase().replace(/\s+/g, ' ').trim()
+      const now = Date.now()
+      if (!global.__aiSearchCache) global.__aiSearchCache = new Map()
+      const cache = global.__aiSearchCache
+      // Evict expired entries to keep map small
+      if (cache.size > 200) {
+        for (const [k, v] of cache) {
+          if (now - v.t > 5 * 60 * 1000) cache.delete(k)
+          if (cache.size <= 100) break
+        }
       }
-      const filters = result.data?.filters || {}
+
+      // ---- Build catalog context (real categories + popular tags) ----
+      // Only categories that actually have active products
+      const catsAgg = await Product.distinct('category', { isActive: true })
+      const allowedCategories = (catsAgg || []).filter(Boolean)
+      // Top 30 popular tags from active products
+      const tagsAgg = await Product.aggregate([
+        { $match: { isActive: true, tags: { $exists: true, $ne: [] } } },
+        { $unwind: '$tags' },
+        { $group: { _id: '$tags', count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 30 },
+      ])
+      const allowedTags = (tagsAgg || []).map((t) => String(t._id || '').toLowerCase()).filter(Boolean)
+
+      let filters
+      const cached = cache.get(cacheKey)
+      if (cached && now - cached.t < 5 * 60 * 1000) {
+        filters = cached.filters
+      } else {
+        // Spawn the python helper, pass JSON via stdin
+        const { spawn } = await import('node:child_process')
+        const result = await new Promise((resolve) => {
+          const pyBin = '/root/.venv/bin/python3'
+          const proc = spawn(pyBin, ['/app/lib/ai_search.py'], {
+            env: { ...process.env, EMERGENT_LLM_KEY: process.env.EMERGENT_LLM_KEY || '' },
+          })
+          let stdout = ''
+          let stderr = ''
+          proc.stdout.on('data', (d) => { stdout += d.toString() })
+          proc.stderr.on('data', (d) => { stderr += d.toString() })
+          const timer = setTimeout(() => {
+            try { proc.kill('SIGKILL') } catch (_) {}
+            resolve({ ok: false, error: 'انتهت مهلة البحث الذكي' })
+          }, 25000)
+          proc.on('close', (code) => {
+            clearTimeout(timer)
+            if (code !== 0) {
+              console.error('[ai-search] exit', code, 'stderr:', stderr.slice(0, 500))
+              try {
+                const j = JSON.parse(stdout || '{}')
+                if (j?.error) return resolve({ ok: false, error: j.error })
+              } catch (_) {}
+              return resolve({ ok: false, error: 'فشل البحث الذكي' })
+            }
+            try {
+              resolve({ ok: true, data: JSON.parse(stdout) })
+            } catch (e) {
+              resolve({ ok: false, error: 'استجابة غير صالحة' })
+            }
+          })
+          proc.stdin.write(JSON.stringify({
+            query,
+            categories: allowedCategories,
+            tags: allowedTags,
+          }))
+          proc.stdin.end()
+        })
+        if (!result.ok) {
+          return handleCORS(NextResponse.json({ error: result.error }, { status: 500 }))
+        }
+        filters = result.data?.filters || {}
+        cache.set(cacheKey, { filters, t: now })
+      }
+
       // Build mongo query from filters
       const q = { isActive: true }
       if (filters.category) q.category = filters.category
@@ -2684,6 +2723,7 @@ async function handleRoute(request, { params }) {
           query,
           filters,
           interpretation_ar: filters.interpretation_ar || '',
+          cached: !!cached,
           products: products.map((p) => ({ id: p._id, ...p, _id: undefined })),
           count: products.length,
         })

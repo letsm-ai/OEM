@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """
 AI search helper — converts natural-language Arabic/English queries into
-structured filters for product search.
+structured filters constrained to the actual catalog (categories + tags
+provided by Next.js via stdin).
 
-Usage (called from Next.js via child_process):
-    echo '{"query":"هدية لأبي بميزانية 20 ريال"}' | python3 ai_search.py
+Input JSON (stdin):
+    {
+      "query": "هدية لأبي بميزانية 20 ريال",
+      "categories": ["FOOD","FASHION","ELECTRONICS",...],
+      "tags": ["honey","gift","silver",...]   # popular tags from DB
+    }
 
-Outputs JSON to stdout:
-    {"filters": {"category": "OTHER", "tags": ["gift"], "maxPrice": 20, ...},
-     "interpretation_ar": "بحثت لك عن هدية ضمن ميزانية 20 ر.ع"}
+Output JSON (stdout):
+    {"filters": {...}, "raw_query": "..."}
 
 Requires env: EMERGENT_LLM_KEY
 """
@@ -30,7 +34,7 @@ def fail(reason: str, code: int = 1):
     sys.exit(code)
 
 
-async def run_async(query: str):
+async def run_async(query: str, allowed_categories, allowed_tags):
     try:
         from emergentintegrations.llm.chat import LlmChat, UserMessage
     except Exception as e:
@@ -40,30 +44,29 @@ async def run_async(query: str):
     if not api_key:
         fail("EMERGENT_LLM_KEY not set")
 
+    # Build a tight system prompt using ONLY values that exist in the catalog
+    cats_str = ", ".join(allowed_categories) if allowed_categories else "OTHER"
+    tags_str = ", ".join(allowed_tags[:40]) if allowed_tags else "(لا يوجد)"
+
     system_msg = (
-        "أنت محرك بحث ذكي لمتجر إلكتروني عماني (مجلس رواد الأعمال العماني).\n"
-        "مهمتك: قراءة استعلام المستخدم باللغة العربية أو الإنجليزية واستخراج فلاتر بحث منظّمة.\n"
-        "أرجع JSON فقط بالشكل التالي بدون أي نص إضافي:\n"
-        "{\n"
-        '  "category": "FOOD" | "FASHION" | "ELECTRONICS" | "OFFICE" | "HANDICRAFT" | "DIGITAL" | "OTHER" | "",\n'
-        '  "tags": ["..."] (حتى 5 وسوم بالعربي أو الإنجليزي بدون #),\n'
-        '  "minPrice": رقم أو null,\n'
-        '  "maxPrice": رقم أو null,\n'
-        '  "minRating": 0|3|4 (افتراضي 0),\n'
-        '  "search": "نص بحث حر مختصر (يفضل عربي)",\n'
-        '  "interpretation_ar": "جملة قصيرة تشرح ما فهمته (للعرض للمستخدم)"\n'
-        "}\n\n"
-        "أمثلة على الفئات: عسل/تمر/قهوة → FOOD، دشداشة/عبايا → FASHION، ساعة ذكية/سماعات → ELECTRONICS، فضة/فخار/سدو/لبان → HANDICRAFT.\n"
-        "إذا ذكر المستخدم 'هدية' أضف 'gift' في tags. إذا قال 'عضوي' أضف 'organic' أو 'عضوي'.\n"
-        "الميزانية: 'بـ 20 ر.ع' أو 'تحت 50 ريال' = maxPrice. 'فوق 100' = minPrice.\n"
-        "إذا الاستعلام عام جداً، اترك الحقول فارغة وأرجع interpretation_ar مناسب."
+        "أنت محلل بحث لمتجر عماني. حوّل استعلام المستخدم إلى JSON فقط (بدون شرح).\n"
+        f"الفئات المتاحة فقط: {cats_str}\n"
+        f"الوسوم المتاحة فقط: {tags_str}\n"
+        "اختر الفئة والوسوم من القوائم أعلاه فقط — لا تخترع قيماً جديدة. "
+        "إذا لم تطابق أي قيمة، اتركها فارغة.\n"
+        "أرجع JSON بهذا الشكل بالضبط:\n"
+        '{"category":"<من القائمة أو فارغ>","tags":["..."],'
+        '"minPrice":null|number,"maxPrice":null|number,'
+        '"minRating":0|3|4,"search":"كلمات مفتاحية مختصرة",'
+        '"interpretation_ar":"جملة قصيرة"}\n'
+        "ميزانية: 'بـ 20' أو 'تحت 50' → maxPrice. 'فوق 100' → minPrice."
     )
 
     chat = LlmChat(
         api_key=api_key,
         session_id=f"ai-search-{uuid.uuid4().hex[:8]}",
         system_message=system_msg,
-    ).with_model("anthropic", "claude-sonnet-4-20250514")
+    ).with_model("openai", "gpt-4o-mini").with_params(max_tokens=220)
 
     user_msg = UserMessage(text=query)
     try:
@@ -74,9 +77,7 @@ async def run_async(query: str):
     text = (resp or "").strip()
     # Strip code fences if present
     if text.startswith("```"):
-        # extract content between first and last ```
         lines = text.split("\n")
-        # remove first ``` line and last ``` line
         if lines[0].startswith("```"):
             lines = lines[1:]
         if lines and lines[-1].startswith("```"):
@@ -85,8 +86,7 @@ async def run_async(query: str):
 
     try:
         parsed = json.loads(text)
-    except Exception as e:
-        # Attempt to find JSON within text
+    except Exception:
         import re
         m = re.search(r"\{.*\}", text, re.S)
         if m:
@@ -97,7 +97,10 @@ async def run_async(query: str):
         else:
             fail(f"llm returned non-json: {text[:200]}")
 
-    # Sanitize / coerce fields
+    # Sanitize / coerce + ENFORCE that returned values exist in our site data
+    allowed_cat_set = set(c.upper() for c in allowed_categories) if allowed_categories else set(VALID_CATEGORIES)
+    allowed_tag_set = set(t.lower() for t in allowed_tags) if allowed_tags else set()
+
     out = {
         "category": "",
         "tags": [],
@@ -108,15 +111,22 @@ async def run_async(query: str):
         "interpretation_ar": "",
     }
     cat = str(parsed.get("category") or "").strip().upper()
-    if cat in VALID_CATEGORIES:
+    if cat in allowed_cat_set:
         out["category"] = cat
+
     raw_tags = parsed.get("tags") or []
     if isinstance(raw_tags, list):
-        out["tags"] = [
-            str(t).strip().replace("#", "").lower().replace(" ", "-")[:30]
-            for t in raw_tags[:5]
-            if str(t).strip()
-        ]
+        cleaned = []
+        for t in raw_tags[:5]:
+            tt = str(t).strip().replace("#", "").lower().replace(" ", "-")[:30]
+            if not tt:
+                continue
+            # Only keep tags that exist in the catalog (when we have a list)
+            if allowed_tag_set and tt not in allowed_tag_set:
+                continue
+            cleaned.append(tt)
+        out["tags"] = cleaned
+
     for k in ("minPrice", "maxPrice"):
         v = parsed.get(k)
         if isinstance(v, (int, float)) and v >= 0:
@@ -147,7 +157,15 @@ def main():
         fail("empty query")
     if len(query) > 200:
         query = query[:200]
-    asyncio.run(run_async(query))
+
+    cats = data.get("categories") or VALID_CATEGORIES
+    if not isinstance(cats, list):
+        cats = VALID_CATEGORIES
+    tags = data.get("tags") or []
+    if not isinstance(tags, list):
+        tags = []
+
+    asyncio.run(run_async(query, cats, tags))
 
 
 if __name__ == "__main__":
