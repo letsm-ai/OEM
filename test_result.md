@@ -1546,10 +1546,33 @@ frontend:
           Must NOT break authenticated flow (regression test with logged-in user still required).
           Test: Should go through the same cart/shipping/coupon/shipping-fee/COD/THAWANI/MOCK branches.
 
+  - task: "AI Search UI — AiSearchBar component on /store consuming POST /api/products/ai-search"
+    implemented: true
+    working: "NA"
+    file: "/app/app/store/_StoreClient.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW AI Semantic Search UI on /store page.
+          - Added AiSearchBar component (purple/indigo gradient card, Sparkles icon).
+          - Input (maxLength=200), submit button, loading state with Loader2 spinner.
+          - 5 quick example chips: 'أحذية رياضية أقل من 50 ريال', 'هدايا للأطفال', 'منتجات عسل عماني طبيعي', 'ملابس صيفية مريحة', 'إكسسوارات هاتف بتقييم ممتاز'.
+          - Calls POST /api/products/ai-search with { query }.
+          - On success, sets aiResults state which triggers a banner showing: count, original query, interpretation_ar.
+          - When aiResults is set, the regular product grid is replaced with AI-filtered products grid; if 0 results shows empty state with Sparkles icon.
+          - Banner has X button to clear aiResults and return to normal browsing. Also clears via 'مسح' button on the search bar header.
+          - Verified: API endpoint responds 200 with valid filters JSON (already tested earlier in backend phase).
+          - Test scenario: open /store → click any example chip OR type a query → click 'ابحث بالذكاء' → expect purple banner above products grid + interpretation text in Arabic + filtered products list.
+          - Edge case: empty/whitespace query → button is disabled (no fetch). 500 error → red error banner inside AI search box.
+
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 12
+  test_sequence: 13
   run_ui: false
       - working: false
         agent: "testing"
@@ -1972,7 +1995,8 @@ metadata:
           2) Pre-existing double-decrement bug: POST /orders decremented stock inline AND finalizeOrderPayment() decremented it again, producing negative variant stocks (e.g. 3→-1). Removed the redundant decrement from finalizeOrderPayment; stock now reserved exactly once at order creation. salesCount increment still happens inline.
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "AI Search UI — AiSearchBar component on /store consuming POST /api/products/ai-search"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
