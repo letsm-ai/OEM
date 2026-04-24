@@ -18,13 +18,34 @@ export default async function StorePage({ searchParams }) {
   const search = (params.search || '').toString().trim()
   const category = CATEGORY_KEYS.includes(params.category) ? params.category : ''
   const sort = SORT_MAP[params.sort] ? params.sort : 'newest'
+  const tagsParam = (params.tags || '').toString().trim()
+  const minPrice = params.minPrice ? Number(params.minPrice) : null
+  const maxPrice = params.maxPrice ? Number(params.maxPrice) : null
+  const minRating = params.minRating ? Number(params.minRating) : null
+  const freeShipping = params.freeShipping === '1'
 
   await connectDB()
   const q = { isActive: true }
   if (category) q.category = category
   if (search) {
     const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
-    q.$or = [{ nameAr: rx }, { nameEn: rx }, { description: rx }]
+    q.$or = [{ nameAr: rx }, { nameEn: rx }, { description: rx }, { tags: rx }]
+  }
+  if (tagsParam) {
+    const list = tagsParam.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean)
+    if (list.length > 0) q.tags = { $in: list }
+  }
+  if (Number.isFinite(minPrice) || Number.isFinite(maxPrice)) {
+    q.price = {}
+    if (Number.isFinite(minPrice)) q.price.$gte = minPrice
+    if (Number.isFinite(maxPrice)) q.price.$lte = maxPrice
+  }
+  if (Number.isFinite(minRating) && minRating > 0) {
+    q.rating = { $gte: minRating }
+  }
+  if (freeShipping) {
+    const { FREE_SHIPPING_THRESHOLD } = await import('@/lib/store')
+    q.price = { ...(q.price || {}), $gte: FREE_SHIPPING_THRESHOLD }
   }
   const products = await Product.find(q).sort(SORT_MAP[sort]).limit(200).lean()
   const vendorIds = Array.from(new Set(products.map((p) => p.vendorId)))

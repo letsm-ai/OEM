@@ -282,6 +282,24 @@ export default function ProductDetailClient({ product }) {
               </div>
             )}
 
+            {/* Tags */}
+            {Array.isArray(product.tags) && product.tags.length > 0 && (
+              <div className="mt-4">
+                <h2 className="mb-1.5 text-sm font-bold text-[#1B3A6B]">العلامات</h2>
+                <div className="flex flex-wrap gap-1.5">
+                  {product.tags.map((t) => (
+                    <Link
+                      key={t}
+                      href={`/store?tags=${encodeURIComponent(t)}`}
+                      className="inline-flex items-center rounded-full bg-[#C9A84C]/20 px-2.5 py-0.5 text-[11px] font-semibold text-[#1B3A6B] hover:bg-[#C9A84C]/30"
+                    >
+                      #{t}
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Variants selector (خيارات المنتج) */}
             {hasVariants && (
               <div className="mt-4">

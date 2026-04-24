@@ -1,9 +1,9 @@
 'use client'
 
 import { useRouter, useSearchParams } from 'next/navigation'
-import { Suspense, useMemo } from 'react'
+import { Suspense, useMemo, useState, useEffect } from 'react'
 import Link from 'next/link'
-import { Search, ShoppingBag, ShoppingCart, Store as StoreIcon, Heart, Package } from 'lucide-react'
+import { Search, ShoppingBag, ShoppingCart, Store as StoreIcon, Heart, Package, SlidersHorizontal, X, Star } from 'lucide-react'
 import { PRODUCT_CATEGORIES, categoryLabel, categoryEmoji } from '@/lib/store'
 import ProductCard from '@/components/ProductCard'
 import { useCart } from '@/components/CartContext'
@@ -25,6 +25,20 @@ function StoreInner({ initialProducts }) {
   const category = sp.get('category') || ''
   const search = sp.get('search') || ''
   const sort = sp.get('sort') || 'newest'
+  const tags = sp.get('tags') || ''
+  const minPrice = sp.get('minPrice') || ''
+  const maxPrice = sp.get('maxPrice') || ''
+  const minRating = sp.get('minRating') || ''
+  const freeShipping = sp.get('freeShipping') === '1'
+
+  const [showFilters, setShowFilters] = useState(false)
+  const [popularTags, setPopularTags] = useState([])
+  useEffect(() => {
+    fetch('/api/tags/popular?limit=15')
+      .then((r) => r.json())
+      .then((d) => setPopularTags(d?.tags || []))
+      .catch(() => {})
+  }, [])
 
   const setParam = (key, value) => {
     const p = new URLSearchParams(sp.toString())
@@ -32,6 +46,22 @@ function StoreInner({ initialProducts }) {
     else p.delete(key)
     router.push(`/store?${p.toString()}`)
   }
+
+  const toggleTag = (t) => {
+    const current = tags.split(',').map((x) => x.trim()).filter(Boolean)
+    let next
+    if (current.includes(t)) next = current.filter((x) => x !== t)
+    else next = [...current, t]
+    setParam('tags', next.join(','))
+  }
+
+  const clearAllFilters = () => {
+    router.push('/store')
+  }
+
+  const activeFilterCount = [
+    category, search, tags, minPrice, maxPrice, minRating, freeShipping ? '1' : ''
+  ].filter(Boolean).length
 
   const onSearch = (e) => {
     e.preventDefault()
@@ -91,7 +121,7 @@ function StoreInner({ initialProducts }) {
           </Link>
         </div>
 
-        {/* Search + Sort */}
+        {/* Search + Sort + Filters toggle */}
         <div className="mb-4 flex flex-wrap items-center gap-2 rounded-2xl border border-gray-200 bg-white p-3 shadow-sm">
           <form onSubmit={onSearch} className="flex flex-1 items-center gap-2">
             <Search className="h-4 w-4 text-gray-400" />
@@ -102,6 +132,15 @@ function StoreInner({ initialProducts }) {
               className="flex-1 bg-transparent text-sm outline-none"
             />
           </form>
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${activeFilterCount > 0 ? 'border-[#C9A84C] bg-[#C9A84C]/15 text-[#1B3A6B]' : 'border-gray-300 bg-white text-gray-700'}`}
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5" /> فلاتر
+            {activeFilterCount > 0 && (
+              <span className="ms-1 rounded-full bg-[#1B3A6B] px-1.5 text-[10px] font-bold text-white">{activeFilterCount}</span>
+            )}
+          </button>
           <select
             value={sort}
             onChange={(e) => setParam('sort', e.target.value === 'newest' ? '' : e.target.value)}
@@ -113,6 +152,77 @@ function StoreInner({ initialProducts }) {
             <option value="price_desc">السعر: مرتفع → منخفض</option>
           </select>
         </div>
+
+        {/* Advanced Filters (collapsible) */}
+        {showFilters && (
+          <div className="mb-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="text-sm font-bold text-[#1B3A6B]">الفلاتر المتقدمة</div>
+              {activeFilterCount > 0 && (
+                <button onClick={clearAllFilters} className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[11px] font-semibold text-red-700 hover:bg-red-100">
+                  <X className="h-3 w-3" /> مسح الكل
+                </button>
+              )}
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div>
+                <label className="mb-1 block text-[11px] font-semibold text-gray-700">نطاق السعر (ر.ع)</label>
+                <div className="flex items-center gap-1">
+                  <input type="number" min="0" step="0.5" defaultValue={minPrice} onBlur={(e) => setParam('minPrice', e.target.value)} placeholder="من" className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-xs outline-none focus:border-[#1B3A6B]" />
+                  <span className="text-gray-400">—</span>
+                  <input type="number" min="0" step="0.5" defaultValue={maxPrice} onBlur={(e) => setParam('maxPrice', e.target.value)} placeholder="إلى" className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-xs outline-none focus:border-[#1B3A6B]" />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] font-semibold text-gray-700">التقييم</label>
+                <div className="flex gap-1">
+                  {[0, 3, 4].map((r) => (
+                    <button
+                      key={r}
+                      onClick={() => setParam('minRating', String(minRating) === String(r) ? '' : String(r))}
+                      className={`inline-flex items-center gap-0.5 rounded-md border px-2 py-1 text-[11px] font-semibold transition ${Number(minRating) === r ? 'border-[#C9A84C] bg-[#C9A84C]/15 text-[#1B3A6B]' : 'border-gray-300 bg-white text-gray-600'}`}
+                    >
+                      {r === 0 ? 'الكل' : (<><Star className="h-3 w-3 fill-[#C9A84C] text-[#C9A84C]" /> {r}+</>)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] font-semibold text-gray-700">الشحن</label>
+                <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-gray-300 bg-white px-2 py-1.5 text-[11px] font-semibold text-gray-700 hover:bg-gray-50">
+                  <input
+                    type="checkbox"
+                    checked={freeShipping}
+                    onChange={(e) => setParam('freeShipping', e.target.checked ? '1' : '')}
+                    className="h-3.5 w-3.5 accent-[#C9A84C]"
+                  />
+                  🚚 شحن مجاني (≥30 ر.ع)
+                </label>
+              </div>
+            </div>
+            {/* Popular tags cloud */}
+            {popularTags.length > 0 && (
+              <div className="mt-3 border-t border-gray-100 pt-3">
+                <div className="mb-1.5 text-[11px] font-semibold text-gray-700">العلامات الأكثر شيوعاً</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {popularTags.map((t) => {
+                    const active = tags.split(',').map((x) => x.trim()).includes(t.tag)
+                    return (
+                      <button
+                        key={t.tag}
+                        onClick={() => toggleTag(t.tag)}
+                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold transition ${active ? 'border-[#C9A84C] bg-[#C9A84C] text-[#1B3A6B]' : 'border-gray-300 bg-white text-gray-700 hover:border-[#1B3A6B]'}`}
+                      >
+                        #{t.tag}
+                        <span className="text-[9px] opacity-60">({t.count})</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Categories */}
         <div className="mb-5 flex flex-wrap gap-2">

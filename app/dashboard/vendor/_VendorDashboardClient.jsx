@@ -1582,6 +1582,7 @@ function ProductFormModal({ product, onClose, onSaved }) {
     category: product?.category || 'OTHER',
     stock: product?.stock ?? 0,
     lowStockThreshold: product?.lowStockThreshold ?? 5,
+    tags: Array.isArray(product?.tags) ? [...product.tags] : [],
     images: product?.images || [],
     hasVariants: !!product?.hasVariants,
     variants: Array.isArray(product?.variants) ? product.variants : [],
@@ -1663,6 +1664,7 @@ function ProductFormModal({ product, onClose, onSaved }) {
       ...form,
       price,
       lowStockThreshold: parseInt(form.lowStockThreshold, 10) || 0,
+      tags: form.tags || [],
       variants: form.hasVariants ? form.variants.map((v) => ({
         id: v.id,
         name: String(v.name || '').trim(),
@@ -1712,6 +1714,21 @@ function ProductFormModal({ product, onClose, onSaved }) {
               <input type="number" min="0" value={form.lowStockThreshold} onChange={(e) => setForm({ ...form, lowStockThreshold: e.target.value })} className="input" />
               <div className="mt-0.5 text-[10px] text-gray-500">سيظهر تنبيه عند وصول المخزون لهذا الرقم أو أقل</div>
             </F>
+          </div>
+          {/* Tags */}
+          <div className="rounded-xl border border-gray-200 bg-white p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <div>
+                <div className="text-sm font-bold text-[#1B3A6B]">العلامات (Tags)</div>
+                <div className="text-[11px] text-gray-500">
+                  أضف كلمات مفتاحية (حتى 15) لتسهيل البحث. مثال: عضوي، هدية، صنع-يدوي
+                </div>
+              </div>
+            </div>
+            <TagsInput tags={form.tags} onChange={(tags) => setForm({ ...form, tags })} />
+          </div>
+
+          <div className="hidden">{/* keep spacing */}</div>
             <F label="الفئة">
               <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className="input">
                 {PRODUCT_CATEGORIES.map((c) => (
@@ -1828,6 +1845,45 @@ function ProductFormModal({ product, onClose, onSaved }) {
 }
 function F({ label, children }) {
   return <label className="block"><span className="mb-1 block text-xs font-medium text-gray-700">{label}</span>{children}</label>
+}
+
+function TagsInput({ tags, onChange }) {
+  const [input, setInput] = useState('')
+  const add = (raw) => {
+    const t = String(raw || '').trim().replace(/^#+/, '').toLowerCase().replace(/\s+/g, '-')
+    if (!t || tags.includes(t) || tags.length >= 15) return
+    onChange([...tags, t])
+  }
+  const onKey = (e) => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault()
+      add(input)
+      setInput('')
+    } else if (e.key === 'Backspace' && input === '' && tags.length > 0) {
+      onChange(tags.slice(0, -1))
+    }
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-gray-300 bg-white p-2">
+      {tags.map((t) => (
+        <span key={t} className="inline-flex items-center gap-1 rounded-full bg-[#C9A84C]/20 px-2 py-0.5 text-[11px] font-semibold text-[#1B3A6B]">
+          #{t}
+          <button type="button" onClick={() => onChange(tags.filter((x) => x !== t))} className="rounded-full p-0.5 hover:bg-red-100 hover:text-red-600">
+            <X className="h-3 w-3" />
+          </button>
+        </span>
+      ))}
+      <input
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        onKeyDown={onKey}
+        onBlur={() => { if (input) { add(input); setInput('') } }}
+        placeholder={tags.length >= 15 ? 'الحد الأقصى 15 علامة' : 'اكتب علامة واضغط Enter أو ،'}
+        disabled={tags.length >= 15}
+        className="min-w-[120px] flex-1 bg-transparent px-1 py-0.5 text-xs outline-none placeholder:text-gray-400"
+      />
+    </div>
+  )
 }
 
 /* --------------- ORDERS --------------- */

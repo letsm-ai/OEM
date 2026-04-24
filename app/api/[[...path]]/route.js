@@ -51,6 +51,7 @@ import { sanitizeVariants, findVariant } from '@/lib/variants'
 import { recordStockMovement, isLowStock, lowStockVariants } from '@/lib/inventory'
 import { applyAllPromotions } from '@/lib/promotions'
 import { computeVendorBalance, MIN_PAYOUT_AMOUNT } from '@/lib/payouts'
+import { normalizeTags } from '@/lib/tags'
 import {
   SPECIALTY_KEYS,
   specialtyLabel,
@@ -2608,11 +2609,35 @@ async function handleRoute(request, { params }) {
        MARKETPLACE — PRODUCTS
        ============================================================ */
     // ---- GET /products (public list of active products) ----
+    // ---- GET /tags/popular (public — trending tags for store) ----
+    if (route === '/tags/popular' && method === 'GET') {
+      await connectDB()
+      const url = new URL(request.url)
+      const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 1), 100)
+      const agg = await Product.aggregate([
+        { $match: { isActive: true, tags: { $exists: true, $ne: [] } } },
+        { $unwind: '$tags' },
+        { $group: { _id: '$tags', count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: limit },
+      ])
+      return handleCORS(
+        NextResponse.json({
+          tags: agg.map((t) => ({ tag: t._id, count: t.count })),
+        })
+      )
+    }
+
     if (route === '/products' && method === 'GET') {
       const url = new URL(request.url)
       const q = (url.searchParams.get('search') || '').trim()
       const category = url.searchParams.get('category') || ''
       const sort = (url.searchParams.get('sort') || 'newest').toLowerCase()
+      const tagsParam = (url.searchParams.get('tags') || '').trim()
+      const minPriceParam = url.searchParams.get('minPrice')
+      const maxPriceParam = url.searchParams.get('maxPrice')
+      const minRatingParam = url.searchParams.get('minRating')
+      const freeShippingParam = url.searchParams.get('freeShipping') === '1'
       const limit = Math.min(
         Math.max(parseInt(url.searchParams.get('limit') || '100', 10) || 100, 1),
         500
@@ -2624,7 +2649,29 @@ async function handleRoute(request, { params }) {
       }
       if (q) {
         const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
-        query.$or = [{ nameAr: rx }, { nameEn: rx }, { description: rx }]
+        query.$or = [{ nameAr: rx }, { nameEn: rx }, { description: rx }, { tags: rx }]
+      }
+      // Tag filter (comma separated → match ANY)
+      if (tagsParam) {
+        const list = tagsParam.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean)
+        if (list.length > 0) query.tags = { $in: list }
+      }
+      // Price range
+      const minPrice = minPriceParam ? Number(minPriceParam) : null
+      const maxPrice = maxPriceParam ? Number(maxPriceParam) : null
+      if (Number.isFinite(minPrice) || Number.isFinite(maxPrice)) {
+        query.price = {}
+        if (Number.isFinite(minPrice)) query.price.$gte = minPrice
+        if (Number.isFinite(maxPrice)) query.price.$lte = maxPrice
+      }
+      // Min rating
+      const minRating = minRatingParam ? Number(minRatingParam) : null
+      if (Number.isFinite(minRating) && minRating > 0) {
+        query.rating = { $gte: minRating }
+      }
+      // Free shipping hint — price >= FREE_SHIPPING_THRESHOLD
+      if (freeShippingParam) {
+        query.price = { ...(query.price || {}), $gte: FREE_SHIPPING_THRESHOLD }
       }
       const sortMap = {
         newest: { createdAt: -1 },
@@ -2982,6 +3029,7 @@ async function handleRoute(request, { params }) {
         : []
       const stock = Math.max(0, parseInt(body?.stock || 0, 10) || 0)
       const lowStockThreshold = Math.max(0, parseInt(body?.lowStockThreshold ?? 5, 10) || 0)
+      const tags = normalizeTags(body?.tags)
       // Variants (optional)
       const vres = sanitizeVariants(body?.variants)
       if (!vres.ok) {
@@ -3000,6 +3048,7 @@ async function handleRoute(request, { params }) {
         // If variants exist, stock is the sum across variants; otherwise use the plain stock input.
         stock: vres.hasVariants ? vres.aggregatedStock : stock,
         lowStockThreshold,
+        tags,
         hasVariants: vres.hasVariants,
         variants: vres.variants,
         isActive: true,
@@ -3107,6 +3156,9 @@ async function handleRoute(request, { params }) {
       if (body.isActive !== undefined) product.isActive = !!body.isActive
       if (body.lowStockThreshold !== undefined) {
         product.lowStockThreshold = Math.max(0, parseInt(body.lowStockThreshold, 10) || 0)
+      }
+      if (body.tags !== undefined) {
+        product.tags = normalizeTags(body.tags)
       }
       // Variants (if provided, replace whole array)
       if (body.variants !== undefined) {
