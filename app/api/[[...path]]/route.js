@@ -3172,6 +3172,261 @@ async function handleRoute(request, { params }) {
       )
     }
 
+    // ---- GET /vendor/analytics (vendor KPIs + time series for charts) ----
+    if (route === '/vendor/analytics' && method === 'GET') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const user = await User.findById(session.user.id).lean()
+      if (!user || (user.role !== 'VENDOR' && user.role !== 'ADMIN')) {
+        return handleCORS(
+          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
+        )
+      }
+
+      const vendorId = session.user.id
+      const now = new Date()
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+      const startOfMonth12 = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11, 1)
+      )
+
+      // Orders that count as "revenue": PAID/SHIPPED/DELIVERED (exclude PENDING/CANCELLED/FAILED)
+      const revenueStatuses = ['PAID', 'SHIPPED', 'DELIVERED']
+
+      // Product counts (independent — no Order needed)
+      const [productsTotal, productsActive, productsLowStock] = await Promise.all([
+        Product.countDocuments({ vendorId }),
+        Product.countDocuments({ vendorId, isActive: true }),
+        Product.countDocuments({ vendorId, isActive: true, stock: { $lte: 5 } }),
+      ])
+
+      // Big aggregation: unwind items and compute per-vendor lines
+      const [
+        kpiAgg,
+        last30Agg,
+        monthlyAgg,
+        topProductsAgg,
+        byCategoryAgg,
+        statusAgg,
+      ] = await Promise.all([
+        // KPIs across revenue statuses
+        Order.aggregate([
+          { $match: { status: { $in: revenueStatuses } } },
+          { $unwind: '$items' },
+          { $match: { 'items.vendorId': vendorId } },
+          {
+            $group: {
+              _id: '$_id',
+              subtotal: { $sum: '$items.lineSubtotal' },
+              units: { $sum: '$items.quantity' },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              totalRevenue: { $sum: '$subtotal' },
+              totalUnits: { $sum: '$units' },
+              totalOrders: { $sum: 1 },
+            },
+          },
+        ]),
+        // Last 30 days
+        Order.aggregate([
+          {
+            $match: {
+              status: { $in: revenueStatuses },
+              createdAt: { $gte: thirtyDaysAgo },
+            },
+          },
+          { $unwind: '$items' },
+          { $match: { 'items.vendorId': vendorId } },
+          {
+            $group: {
+              _id: '$_id',
+              subtotal: { $sum: '$items.lineSubtotal' },
+              units: { $sum: '$items.quantity' },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              revenue: { $sum: '$subtotal' },
+              units: { $sum: '$units' },
+              orders: { $sum: 1 },
+            },
+          },
+        ]),
+        // Monthly time series (last 12 months)
+        Order.aggregate([
+          {
+            $match: {
+              status: { $in: revenueStatuses },
+              createdAt: { $gte: startOfMonth12 },
+            },
+          },
+          { $unwind: '$items' },
+          { $match: { 'items.vendorId': vendorId } },
+          {
+            $group: {
+              _id: {
+                orderId: '$_id',
+                y: { $year: '$createdAt' },
+                m: { $month: '$createdAt' },
+              },
+              subtotal: { $sum: '$items.lineSubtotal' },
+              units: { $sum: '$items.quantity' },
+            },
+          },
+          {
+            $group: {
+              _id: { y: '$_id.y', m: '$_id.m' },
+              revenue: { $sum: '$subtotal' },
+              orders: { $sum: 1 },
+              units: { $sum: '$units' },
+            },
+          },
+        ]),
+        // Top 5 products by units sold
+        Order.aggregate([
+          { $match: { status: { $in: revenueStatuses } } },
+          { $unwind: '$items' },
+          { $match: { 'items.vendorId': vendorId } },
+          {
+            $group: {
+              _id: '$items.productId',
+              nameAr: { $first: '$items.nameAr' },
+              units: { $sum: '$items.quantity' },
+              revenue: { $sum: '$items.lineSubtotal' },
+            },
+          },
+          { $sort: { units: -1 } },
+          { $limit: 5 },
+        ]),
+        // Revenue by category (join via products)
+        Order.aggregate([
+          { $match: { status: { $in: revenueStatuses } } },
+          { $unwind: '$items' },
+          { $match: { 'items.vendorId': vendorId } },
+          {
+            $lookup: {
+              from: 'products',
+              localField: 'items.productId',
+              foreignField: '_id',
+              as: 'prod',
+            },
+          },
+          { $unwind: { path: '$prod', preserveNullAndEmptyArrays: true } },
+          {
+            $group: {
+              _id: { $ifNull: ['$prod.category', 'OTHER'] },
+              revenue: { $sum: '$items.lineSubtotal' },
+              units: { $sum: '$items.quantity' },
+            },
+          },
+        ]),
+        // Status breakdown (all orders containing this vendor, any status)
+        Order.aggregate([
+          { $unwind: '$items' },
+          { $match: { 'items.vendorId': vendorId } },
+          {
+            $group: {
+              _id: { orderId: '$_id', status: '$status' },
+            },
+          },
+          {
+            $group: {
+              _id: '$_id.status',
+              count: { $sum: 1 },
+            },
+          },
+        ]),
+      ])
+
+      // Build monthly array (12 buckets) — fill gaps
+      const monthlyMap = new Map()
+      for (const x of monthlyAgg) {
+        const key = `${x._id.y}-${String(x._id.m).padStart(2, '0')}`
+        monthlyMap.set(key, {
+          revenue: +(x.revenue || 0).toFixed(3),
+          orders: x.orders || 0,
+          units: x.units || 0,
+        })
+      }
+      const monthlyArr = []
+      for (let i = 11; i >= 0; i--) {
+        const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1))
+        const y = d.getUTCFullYear()
+        const m = d.getUTCMonth() + 1
+        const key = `${y}-${String(m).padStart(2, '0')}`
+        const v = monthlyMap.get(key) || { revenue: 0, orders: 0, units: 0 }
+        monthlyArr.push({ key, year: y, month: m, ...v })
+      }
+
+      const kpi = kpiAgg[0] || { totalRevenue: 0, totalUnits: 0, totalOrders: 0 }
+      const l30 = last30Agg[0] || { revenue: 0, units: 0, orders: 0 }
+      const commissionPercent = COMMISSION_PERCENT
+      const totalCommission = +(kpi.totalRevenue * (commissionPercent / 100)).toFixed(3)
+      const totalNet = +(kpi.totalRevenue - totalCommission).toFixed(3)
+      const avgOrderValue = kpi.totalOrders > 0 ? +(kpi.totalRevenue / kpi.totalOrders).toFixed(3) : 0
+
+      // Pending shipments: PAID orders (not yet SHIPPED/DELIVERED) containing vendor items
+      const pendingShipmentsAgg = await Order.aggregate([
+        { $match: { status: 'PAID' } },
+        { $unwind: '$items' },
+        { $match: { 'items.vendorId': vendorId } },
+        { $group: { _id: '$_id' } },
+        { $count: 'count' },
+      ])
+      const pendingShipments = pendingShipmentsAgg[0]?.count || 0
+
+      return handleCORS(
+        NextResponse.json({
+          generatedAt: now.toISOString(),
+          kpi: {
+            totalRevenue: +(kpi.totalRevenue || 0).toFixed(3),
+            totalUnits: kpi.totalUnits || 0,
+            totalOrders: kpi.totalOrders || 0,
+            totalCommission,
+            totalNet,
+            commissionPercent,
+            avgOrderValue,
+          },
+          last30Days: {
+            revenue: +(l30.revenue || 0).toFixed(3),
+            orders: l30.orders || 0,
+            units: l30.units || 0,
+          },
+          products: {
+            total: productsTotal,
+            active: productsActive,
+            lowStock: productsLowStock,
+          },
+          pendingShipments,
+          monthly: monthlyArr,
+          topProducts: topProductsAgg.map((x) => ({
+            id: x._id,
+            nameAr: x.nameAr || 'منتج',
+            units: x.units,
+            revenue: +(x.revenue || 0).toFixed(3),
+          })),
+          byCategory: byCategoryAgg.map((x) => ({
+            category: x._id || 'OTHER',
+            revenue: +(x.revenue || 0).toFixed(3),
+            units: x.units || 0,
+          })),
+          orderStatus: statusAgg.map((x) => ({
+            status: x._id,
+            count: x.count,
+          })),
+        })
+      )
+    }
+
     /* ============================================================
        VENDOR STOREFRONT (public)
        ============================================================ */

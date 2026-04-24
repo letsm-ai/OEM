@@ -3,6 +3,10 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import {
+  AreaChart, Area, BarChart, Bar,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+} from 'recharts'
+import {
   Package,
   ShoppingCart,
   Wallet,
@@ -22,6 +26,9 @@ import {
   ExternalLink,
   Copy,
   Check,
+  TrendingUp,
+  BarChart3,
+  Tag,
 } from 'lucide-react'
 import {
   PRODUCT_CATEGORIES,
@@ -34,7 +41,7 @@ import {
 } from '@/lib/store'
 
 export default function VendorDashboardClient() {
-  const [tab, setTab] = useState('products')
+  const [tab, setTab] = useState('analytics')
   return (
     <div className="bg-[#F8F9FA] py-6">
       <div className="container mx-auto max-w-6xl px-4">
@@ -43,13 +50,15 @@ export default function VendorDashboardClient() {
           <h1 className="text-2xl font-extrabold text-[#1B3A6B] md:text-3xl">لوحة البائع</h1>
         </div>
 
-        <div className="mb-5 flex gap-1 rounded-xl border border-gray-200 bg-white p-1 shadow-sm">
+        <div className="mb-5 flex gap-1 rounded-xl border border-gray-200 bg-white p-1 shadow-sm overflow-x-auto">
+          <TabBtn active={tab === 'analytics'} onClick={() => setTab('analytics')} icon={<BarChart3 className="h-4 w-4" />} label="التحليلات" />
           <TabBtn active={tab === 'products'} onClick={() => setTab('products')} icon={<Package className="h-4 w-4" />} label="منتجاتي" />
           <TabBtn active={tab === 'orders'} onClick={() => setTab('orders')} icon={<ShoppingCart className="h-4 w-4" />} label="الطلبات" />
           <TabBtn active={tab === 'earnings'} onClick={() => setTab('earnings')} icon={<Wallet className="h-4 w-4" />} label="الأرباح" />
           <TabBtn active={tab === 'profile'} onClick={() => setTab('profile')} icon={<SettingsIcon className="h-4 w-4" />} label="بروفايل المتجر" />
         </div>
 
+        {tab === 'analytics' && <AnalyticsTab />}
         {tab === 'products' && <ProductsTab />}
         {tab === 'orders' && <OrdersTab />}
         {tab === 'earnings' && <EarningsTab />}
@@ -70,6 +79,232 @@ function TabBtn({ active, onClick, icon, label }) {
       {icon}
       {label}
     </button>
+  )
+}
+
+/* --------------- ANALYTICS (vendor) --------------- */
+function AnalyticsTab() {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const res = await fetch('/api/vendor/analytics')
+        const d = await res.json()
+        if (!res.ok) {
+          setError(d?.error || 'تعذّر تحميل التحليلات')
+        } else {
+          setData(d)
+        }
+      } catch (e) {
+        setError('تعذّر الاتصال')
+      } finally {
+        setLoading(false)
+      }
+    })()
+  }, [])
+
+  if (loading) return (
+    <div className="flex items-center justify-center py-16">
+      <Loader2 className="h-6 w-6 animate-spin text-[#1B3A6B]" />
+    </div>
+  )
+  if (error) return (
+    <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+      <AlertCircle className="inline-block h-4 w-4" /> {error}
+    </div>
+  )
+  if (!data) return null
+
+  const monthLabels = data.monthly.map((m) => {
+    const names = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر']
+    return { ...m, label: names[m.month - 1] }
+  })
+
+  const statusColors = {
+    PENDING:'#9CA3AF', PAID:'#3B82F6', SHIPPED:'#F59E0B',
+    DELIVERED:'#10B981', CANCELLED:'#EF4444', FAILED:'#DC2626',
+  }
+  const statusArabic = {
+    PENDING:'قيد الانتظار', PAID:'مدفوع', SHIPPED:'تم الشحن',
+    DELIVERED:'تم التسليم', CANCELLED:'ملغي', FAILED:'فاشل',
+  }
+
+  return (
+    <AnalyticsBody data={data} monthLabels={monthLabels} statusColors={statusColors} statusArabic={statusArabic} />
+  )
+}
+
+function AnalyticsBody({ data, monthLabels, statusColors, statusArabic }) {
+  return (
+    <div className="space-y-5">
+      {/* KPI row */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          label="إجمالي الإيرادات"
+          value={`${formatOMR(data.kpi.totalRevenue)} ر.ع`}
+          color="from-[#1B3A6B] to-[#152c52]"
+          icon={<TrendingUp className="h-5 w-5" />}
+        />
+        <StatCard
+          label="صافي الأرباح (بعد العمولة)"
+          value={`${formatOMR(data.kpi.totalNet)} ر.ع`}
+          color="from-green-600 to-green-800"
+          icon={<Wallet className="h-5 w-5" />}
+        />
+        <StatCard
+          label="إجمالي الطلبات"
+          value={String(data.kpi.totalOrders)}
+          color="from-[#C9A84C] to-[#a8892f]"
+          icon={<ShoppingCart className="h-5 w-5" />}
+        />
+        <StatCard
+          label="متوسط قيمة الطلب"
+          value={`${formatOMR(data.kpi.avgOrderValue)} ر.ع`}
+          color="from-purple-600 to-purple-800"
+          icon={<BarChart3 className="h-5 w-5" />}
+        />
+      </div>
+
+      {/* Secondary KPIs */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <MiniCard label="آخر 30 يوماً" value={`${formatOMR(data.last30Days.revenue)} ر.ع`} sub={`${data.last30Days.orders} طلب`} />
+        <MiniCard label="إجمالي القطع المباعة" value={String(data.kpi.totalUnits)} sub="قطعة" />
+        <MiniCard label="منتجات نشطة" value={`${data.products.active}/${data.products.total}`} sub={data.products.lowStock > 0 ? `${data.products.lowStock} انخفاض مخزون` : 'كل المخزون مستقر'} warn={data.products.lowStock > 0} />
+        <MiniCard label="طلبات بانتظار الشحن" value={String(data.pendingShipments)} sub="PAID لم تُشحن" warn={data.pendingShipments > 0} />
+      </div>
+
+      {/* Revenue + orders time series (AreaChart) */}
+      <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+        <h3 className="mb-3 text-base font-bold text-[#1B3A6B]">الإيرادات الشهرية</h3>
+        <RevenueChart data={monthLabels} />
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        {/* Top products */}
+        <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+          <h3 className="mb-3 text-base font-bold text-[#1B3A6B]">أفضل المنتجات</h3>
+          {data.topProducts.length === 0 ? (
+            <div className="py-6 text-center text-sm text-gray-500">لا توجد مبيعات بعد</div>
+          ) : (
+            <ul className="space-y-2">
+              {data.topProducts.map((p, i) => (
+                <li key={p.id} className="flex items-center justify-between rounded-lg border border-gray-100 bg-gray-50 p-2.5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-[#C9A84C] text-xs font-extrabold text-[#1B3A6B]">{i + 1}</span>
+                    <span className="truncate text-sm font-semibold text-gray-800">{p.nameAr}</span>
+                  </div>
+                  <div className="flex-shrink-0 text-end">
+                    <div className="text-sm font-extrabold text-[#1B3A6B]">{formatOMR(p.revenue)} ر.ع</div>
+                    <div className="text-[10px] text-gray-500">{p.units} قطعة</div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {/* Order status breakdown */}
+        <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+          <h3 className="mb-3 text-base font-bold text-[#1B3A6B]">توزيع حالات الطلبات</h3>
+          {data.orderStatus.length === 0 ? (
+            <div className="py-6 text-center text-sm text-gray-500">لا توجد طلبات بعد</div>
+          ) : (
+            <div className="space-y-2">
+              {data.orderStatus.map((s) => (
+                <div key={s.status} className="flex items-center gap-3">
+                  <div className="w-28 text-xs font-semibold" style={{ color: statusColors[s.status] || '#6B7280' }}>
+                    {statusArabic[s.status] || s.status}
+                  </div>
+                  <div className="flex-1 rounded-full bg-gray-100 overflow-hidden">
+                    <div
+                      className="h-2.5 rounded-full transition-all"
+                      style={{
+                        width: `${Math.min(100, (s.count / Math.max(...data.orderStatus.map(x => x.count), 1)) * 100)}%`,
+                        backgroundColor: statusColors[s.status] || '#6B7280',
+                      }}
+                    />
+                  </div>
+                  <div className="w-10 text-end text-sm font-bold text-gray-800">{s.count}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* By Category */}
+      <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+        <h3 className="mb-3 text-base font-bold text-[#1B3A6B]">الإيرادات حسب الفئة</h3>
+        {data.byCategory.length === 0 ? (
+          <div className="py-6 text-center text-sm text-gray-500">لا توجد بيانات</div>
+        ) : (
+          <CategoryChart data={data.byCategory} />
+        )}
+      </div>
+
+      <div className="text-center text-[11px] text-gray-400">
+        تم التحديث: {new Date(data.generatedAt).toLocaleString('ar-OM')}
+      </div>
+    </div>
+  )
+}
+
+function MiniCard({ label, value, sub, warn }) {
+  return (
+    <div className={`rounded-2xl border p-4 ${warn ? 'border-amber-200 bg-amber-50' : 'border-gray-200 bg-white'}`}>
+      <div className="text-[11px] text-gray-500">{label}</div>
+      <div className={`mt-1 text-xl font-extrabold ${warn ? 'text-amber-800' : 'text-[#1B3A6B]'}`}>{value}</div>
+      <div className={`mt-0.5 text-[10px] ${warn ? 'text-amber-700' : 'text-gray-400'}`}>{sub}</div>
+    </div>
+  )
+}
+
+function RevenueChart({ data }) {
+  return (
+    <div style={{ width: '100%', height: 260, direction: 'ltr' }}>
+      <ResponsiveContainer>
+        <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+          <defs>
+            <linearGradient id="rev" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="#C9A84C" stopOpacity={0.6} />
+              <stop offset="95%" stopColor="#C9A84C" stopOpacity={0.05} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+          <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+          <YAxis tick={{ fontSize: 11 }} />
+          <Tooltip
+            formatter={(v, name) => name === 'revenue' ? [`${v} ر.ع`, 'الإيراد'] : [v, 'الطلبات']}
+            contentStyle={{ direction: 'rtl', fontFamily: 'Cairo' }}
+          />
+          <Area type="monotone" dataKey="revenue" stroke="#C9A84C" strokeWidth={2} fill="url(#rev)" />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+function CategoryChart({ data }) {
+  const catAr = { FOOD:'غذائية', FASHION:'ملابس', ELECTRONICS:'إلكترونيات', OFFICE:'مكتبية', HANDICRAFT:'يدوية', DIGITAL:'رقمية', OTHER:'أخرى' }
+  const rows = data.map((x) => ({ ...x, label: catAr[x.category] || x.category }))
+  return (
+    <div style={{ width: '100%', height: 240, direction: 'ltr' }}>
+      <ResponsiveContainer>
+        <BarChart data={rows} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+          <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+          <YAxis tick={{ fontSize: 11 }} />
+          <Tooltip
+            formatter={(v) => [`${v} ر.ع`, 'الإيراد']}
+            contentStyle={{ direction: 'rtl', fontFamily: 'Cairo' }}
+          />
+          <Bar dataKey="revenue" fill="#1B3A6B" radius={[6, 6, 0, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
   )
 }
 
