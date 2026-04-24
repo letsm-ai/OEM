@@ -2609,7 +2609,88 @@ async function handleRoute(request, { params }) {
        MARKETPLACE — PRODUCTS
        ============================================================ */
     // ---- GET /products (public list of active products) ----
-    // ---- GET /tags/popular (public — trending tags for store) ----
+    // ---- POST /products/ai-search (AI-powered semantic search) ----
+    if (route === '/products/ai-search' && method === 'POST') {
+      await connectDB()
+      const body = await request.json().catch(() => ({}))
+      const query = String(body?.query || '').trim()
+      if (!query) {
+        return handleCORS(NextResponse.json({ error: 'استعلام البحث فارغ' }, { status: 400 }))
+      }
+      if (query.length > 200) {
+        return handleCORS(NextResponse.json({ error: 'الاستعلام طويل جداً (الحد الأقصى 200 حرف)' }, { status: 400 }))
+      }
+      // Spawn the python helper, pass JSON via stdin
+      const { spawn } = await import('node:child_process')
+      const result = await new Promise((resolve) => {
+        // Use the venv Python to ensure emergentintegrations is available
+        const pyBin = '/root/.venv/bin/python3'
+        const proc = spawn(pyBin, ['/app/lib/ai_search.py'], {
+          env: { ...process.env, EMERGENT_LLM_KEY: process.env.EMERGENT_LLM_KEY || '' },
+        })
+        let stdout = ''
+        let stderr = ''
+        proc.stdout.on('data', (d) => { stdout += d.toString() })
+        proc.stderr.on('data', (d) => { stderr += d.toString() })
+        const timer = setTimeout(() => {
+          try { proc.kill('SIGKILL') } catch (_) {}
+          resolve({ ok: false, error: 'انتهت مهلة البحث الذكي' })
+        }, 25000)
+        proc.on('close', (code) => {
+          clearTimeout(timer)
+          if (code !== 0) {
+            console.error('[ai-search] exit', code, 'stderr:', stderr.slice(0, 500))
+            try {
+              const j = JSON.parse(stdout || '{}')
+              if (j?.error) return resolve({ ok: false, error: j.error })
+            } catch (_) {}
+            return resolve({ ok: false, error: 'فشل البحث الذكي' })
+          }
+          try {
+            resolve({ ok: true, data: JSON.parse(stdout) })
+          } catch (e) {
+            resolve({ ok: false, error: 'استجابة غير صالحة' })
+          }
+        })
+        proc.stdin.write(JSON.stringify({ query }))
+        proc.stdin.end()
+      })
+      if (!result.ok) {
+        return handleCORS(NextResponse.json({ error: result.error }, { status: 500 }))
+      }
+      const filters = result.data?.filters || {}
+      // Build mongo query from filters
+      const q = { isActive: true }
+      if (filters.category) q.category = filters.category
+      if (Array.isArray(filters.tags) && filters.tags.length > 0) {
+        q.tags = { $in: filters.tags }
+      }
+      if (filters.search) {
+        const rx = new RegExp(filters.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+        q.$or = [{ nameAr: rx }, { nameEn: rx }, { description: rx }, { tags: rx }]
+      }
+      const priceFilter = {}
+      if (typeof filters.minPrice === 'number') priceFilter.$gte = filters.minPrice
+      if (typeof filters.maxPrice === 'number') priceFilter.$lte = filters.maxPrice
+      if (Object.keys(priceFilter).length > 0) q.price = priceFilter
+      if (filters.minRating > 0) q.rating = { $gte: filters.minRating }
+
+      const products = await Product.find(q)
+        .sort({ rating: -1, salesCount: -1 })
+        .limit(40)
+        .lean()
+      return handleCORS(
+        NextResponse.json({
+          query,
+          filters,
+          interpretation_ar: filters.interpretation_ar || '',
+          products: products.map((p) => ({ id: p._id, ...p, _id: undefined })),
+          count: products.length,
+        })
+      )
+    }
+
+
     if (route === '/tags/popular' && method === 'GET') {
       await connectDB()
       const url = new URL(request.url)
@@ -2632,6 +2713,7 @@ async function handleRoute(request, { params }) {
       const url = new URL(request.url)
       const q = (url.searchParams.get('search') || '').trim()
       const category = url.searchParams.get('category') || ''
+      const subcategory = (url.searchParams.get('subcategory') || '').trim()
       const sort = (url.searchParams.get('sort') || 'newest').toLowerCase()
       const tagsParam = (url.searchParams.get('tags') || '').trim()
       const minPriceParam = url.searchParams.get('minPrice')
@@ -2646,6 +2728,9 @@ async function handleRoute(request, { params }) {
       const query = { isActive: true }
       if (category && CATEGORY_KEYS.includes(category)) {
         query.category = category
+      }
+      if (subcategory) {
+        query.subcategory = subcategory
       }
       if (q) {
         const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
@@ -3030,6 +3115,7 @@ async function handleRoute(request, { params }) {
       const stock = Math.max(0, parseInt(body?.stock || 0, 10) || 0)
       const lowStockThreshold = Math.max(0, parseInt(body?.lowStockThreshold ?? 5, 10) || 0)
       const tags = normalizeTags(body?.tags)
+      const subcategory = String(body?.subcategory || '').trim().slice(0, 40)
       // Variants (optional)
       const vres = sanitizeVariants(body?.variants)
       if (!vres.ok) {
@@ -3044,6 +3130,7 @@ async function handleRoute(request, { params }) {
         description: String(body?.description || '').slice(0, 3000),
         price: +price.toFixed(3),
         category,
+        subcategory,
         images,
         // If variants exist, stock is the sum across variants; otherwise use the plain stock input.
         stock: vres.hasVariants ? vres.aggregatedStock : stock,
@@ -3159,6 +3246,9 @@ async function handleRoute(request, { params }) {
       }
       if (body.tags !== undefined) {
         product.tags = normalizeTags(body.tags)
+      }
+      if (body.subcategory !== undefined) {
+        product.subcategory = String(body.subcategory || '').trim().slice(0, 40)
       }
       // Variants (if provided, replace whole array)
       if (body.variants !== undefined) {

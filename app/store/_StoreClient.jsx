@@ -4,7 +4,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { Suspense, useMemo, useState, useEffect } from 'react'
 import Link from 'next/link'
 import { Search, ShoppingBag, ShoppingCart, Store as StoreIcon, Heart, Package, SlidersHorizontal, X, Star } from 'lucide-react'
-import { PRODUCT_CATEGORIES, categoryLabel, categoryEmoji } from '@/lib/store'
+import { PRODUCT_CATEGORIES, categoryLabel, categoryEmoji, SUBCATEGORIES } from '@/lib/store'
 import ProductCard from '@/components/ProductCard'
 import { useCart } from '@/components/CartContext'
 import { useWishlist } from '@/components/WishlistContext'
@@ -23,6 +23,7 @@ function StoreInner({ initialProducts }) {
   const { totals } = useCart()
   const { count: favCount } = useWishlist()
   const category = sp.get('category') || ''
+  const subcategory = sp.get('subcategory') || ''
   const search = sp.get('search') || ''
   const sort = sp.get('sort') || 'newest'
   const tags = sp.get('tags') || ''
@@ -44,6 +45,8 @@ function StoreInner({ initialProducts }) {
     const p = new URLSearchParams(sp.toString())
     if (value) p.set(key, value)
     else p.delete(key)
+    // When changing category, drop the subcategory
+    if (key === 'category') p.delete('subcategory')
     router.push(`/store?${p.toString()}`)
   }
 
@@ -120,6 +123,9 @@ function StoreInner({ initialProducts }) {
             <StoreIcon className="h-3.5 w-3.5" /> البائعون
           </Link>
         </div>
+
+        {/* AI Search Bar (powered by LLM) */}
+        <AiSearchBar />
 
         {/* Search + Sort + Filters toggle */}
         <div className="mb-4 flex flex-wrap items-center gap-2 rounded-2xl border border-gray-200 bg-white p-3 shadow-sm">
@@ -242,6 +248,27 @@ function StoreInner({ initialProducts }) {
             />
           ))}
         </div>
+
+        {/* Subcategories (when a category is selected) */}
+        {category && SUBCATEGORIES[category] && SUBCATEGORIES[category].length > 0 && (
+          <div className="mb-5 -mt-2 flex flex-wrap gap-1.5">
+            <button
+              onClick={() => setParam('subcategory', '')}
+              className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${!subcategory ? 'border-[#1B3A6B] bg-[#1B3A6B] text-white' : 'border-gray-200 bg-white text-gray-600 hover:border-[#1B3A6B] hover:text-[#1B3A6B]'}`}
+            >
+              الكل
+            </button>
+            {SUBCATEGORIES[category].map((s) => (
+              <button
+                key={s.key}
+                onClick={() => setParam('subcategory', s.key)}
+                className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${subcategory === s.key ? 'border-[#C9A84C] bg-[#C9A84C]/15 text-[#1B3A6B]' : 'border-gray-200 bg-white text-gray-600 hover:border-[#C9A84C] hover:text-[#1B3A6B]'}`}
+              >
+                {s.labelAr}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Grid */}
         {initialProducts.length === 0 ? (

@@ -17,6 +17,7 @@ export default async function StorePage({ searchParams }) {
   const params = searchParams || {}
   const search = (params.search || '').toString().trim()
   const category = CATEGORY_KEYS.includes(params.category) ? params.category : ''
+  const subcategory = (params.subcategory || '').toString().trim()
   const sort = SORT_MAP[params.sort] ? params.sort : 'newest'
   const tagsParam = (params.tags || '').toString().trim()
   const minPrice = params.minPrice ? Number(params.minPrice) : null
@@ -27,6 +28,7 @@ export default async function StorePage({ searchParams }) {
   await connectDB()
   const q = { isActive: true }
   if (category) q.category = category
+  if (subcategory) q.subcategory = subcategory
   if (search) {
     const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
     q.$or = [{ nameAr: rx }, { nameEn: rx }, { description: rx }, { tags: rx }]

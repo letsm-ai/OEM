@@ -36,6 +36,7 @@ import {
 } from 'lucide-react'
 import {
   PRODUCT_CATEGORIES,
+  SUBCATEGORIES,
   formatOMR,
   categoryLabel,
   categoryEmoji,
@@ -1580,6 +1581,7 @@ function ProductFormModal({ product, onClose, onSaved }) {
     description: product?.description || '',
     price: product?.price ?? '',
     category: product?.category || 'OTHER',
+    subcategory: product?.subcategory || '',
     stock: product?.stock ?? 0,
     lowStockThreshold: product?.lowStockThreshold ?? 5,
     tags: Array.isArray(product?.tags) ? [...product.tags] : [],
@@ -1730,9 +1732,17 @@ function ProductFormModal({ product, onClose, onSaved }) {
 
           <div className="hidden">{/* keep spacing */}</div>
             <F label="الفئة">
-              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className="input">
+              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value, subcategory: '' })} className="input">
                 {PRODUCT_CATEGORIES.map((c) => (
                   <option key={c.key} value={c.key}>{c.emoji} {c.label}</option>
+                ))}
+              </select>
+            </F>
+            <F label="التصنيف الفرعي">
+              <select value={form.subcategory} onChange={(e) => setForm({ ...form, subcategory: e.target.value })} className="input">
+                <option value="">— لا شيء —</option>
+                {(SUBCATEGORIES[form.category] || []).map((s) => (
+                  <option key={s.key} value={s.key}>{s.labelAr}</option>
                 ))}
               </select>
             </F>
