@@ -66,7 +66,7 @@ async def run_async(query: str, allowed_categories, allowed_tags):
         api_key=api_key,
         session_id=f"ai-search-{uuid.uuid4().hex[:8]}",
         system_message=system_msg,
-    ).with_model("openai", "gpt-4o-mini").with_params(max_tokens=220)
+    ).with_model("gemini", "gemini-2.0-flash").with_params(max_tokens=220)
 
     user_msg = UserMessage(text=query)
     try:
