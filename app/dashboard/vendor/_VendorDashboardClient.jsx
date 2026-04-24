@@ -18,6 +18,10 @@ import {
   X,
   Upload,
   ImageIcon,
+  Settings as SettingsIcon,
+  ExternalLink,
+  Copy,
+  Check,
 } from 'lucide-react'
 import {
   PRODUCT_CATEGORIES,
@@ -43,11 +47,13 @@ export default function VendorDashboardClient() {
           <TabBtn active={tab === 'products'} onClick={() => setTab('products')} icon={<Package className="h-4 w-4" />} label="منتجاتي" />
           <TabBtn active={tab === 'orders'} onClick={() => setTab('orders')} icon={<ShoppingCart className="h-4 w-4" />} label="الطلبات" />
           <TabBtn active={tab === 'earnings'} onClick={() => setTab('earnings')} icon={<Wallet className="h-4 w-4" />} label="الأرباح" />
+          <TabBtn active={tab === 'profile'} onClick={() => setTab('profile')} icon={<SettingsIcon className="h-4 w-4" />} label="بروفايل المتجر" />
         </div>
 
         {tab === 'products' && <ProductsTab />}
         {tab === 'orders' && <OrdersTab />}
         {tab === 'earnings' && <EarningsTab />}
+        {tab === 'profile' && <ProfileTab />}
       </div>
     </div>
   )
@@ -429,6 +435,222 @@ function StatCard({ label, value, color, icon }) {
         <span className="text-[11px] opacity-80">{label}</span>
       </div>
       <div className="mt-3 text-2xl font-extrabold">{value}</div>
+    </div>
+  )
+}
+
+/* --------------- PROFILE --------------- */
+function ProfileTab() {
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState(null)
+  const [copied, setCopied] = useState(false)
+  const [f, setF] = useState({
+    slug: '',
+    businessName: '',
+    tagline: '',
+    bio: '',
+    banner: '',
+    logo: '',
+    phone: '',
+    whatsapp: '',
+    instagram: '',
+    website: '',
+    governorate: '',
+    city: '',
+    address: '',
+  })
+
+  useEffect(() => {
+    fetch('/api/vendor/profile')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.profile) setF({ ...f, ...d.profile })
+        setLoading(false)
+      })
+  }, [])
+
+  const onImage = async (e, field, maxDim = 1200, quality = 0.85) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    const dataUrl = await new Promise((res, rej) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const img = new Image()
+        img.onload = () => {
+          const scale = Math.min(1, maxDim / Math.max(img.width, img.height))
+          const c = document.createElement('canvas')
+          c.width = img.width * scale
+          c.height = img.height * scale
+          c.getContext('2d').drawImage(img, 0, 0, c.width, c.height)
+          res(c.toDataURL('image/jpeg', quality))
+        }
+        img.onerror = rej
+        img.src = reader.result
+      }
+      reader.onerror = rej
+      reader.readAsDataURL(file)
+    })
+    setF((x) => ({ ...x, [field]: dataUrl }))
+  }
+
+  const save = async () => {
+    setSaving(true)
+    setMsg(null)
+    const res = await fetch('/api/vendor/profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(f),
+    })
+    const d = await res.json().catch(() => ({}))
+    setSaving(false)
+    if (!res.ok) return setMsg({ type: 'error', text: d.error || 'خطأ' })
+    setF((x) => ({ ...x, slug: d.profile?.slug || x.slug }))
+    setMsg({ type: 'success', text: 'تم حفظ البروفايل بنجاح' })
+  }
+
+  const storeUrl = f.slug
+    ? `${typeof window !== 'undefined' ? window.location.origin : ''}/store/vendor/${encodeURIComponent(f.slug)}`
+    : ''
+  const copyLink = async () => {
+    if (!storeUrl) return
+    try { await navigator.clipboard.writeText(storeUrl); setCopied(true); setTimeout(() => setCopied(false), 1500) } catch {}
+  }
+
+  if (loading)
+    return <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-[#1B3A6B]" /></div>
+
+  return (
+    <div className="space-y-5">
+      {/* Public URL */}
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[#C9A84C]/40 bg-gradient-to-bl from-[#FEF9E7] to-white p-4">
+        <div className="min-w-0 flex-1">
+          <div className="text-[11px] font-semibold text-[#8a6f2d]">رابط متجرك العام</div>
+          <div dir="ltr" className="mt-1 truncate font-mono text-sm text-[#1B3A6B]">{storeUrl || '—'}</div>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          <button onClick={copyLink} className="inline-flex items-center gap-1 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-gray-50">
+            {copied ? <><Check className="h-3 w-3 text-green-600" /> تم النسخ</> : <><Copy className="h-3 w-3" /> نسخ</>}
+          </button>
+          {f.slug && (
+            <a href={storeUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg bg-[#1B3A6B] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#152c52]">
+              <ExternalLink className="h-3 w-3" /> فتح المتجر
+            </a>
+          )}
+        </div>
+      </div>
+
+      {/* Banner + logo */}
+      <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+        <div
+          className="relative h-36 w-full bg-gradient-to-bl from-[#1B3A6B] to-[#C9A84C] md:h-44"
+          style={f.banner ? { backgroundImage: `url(${f.banner})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}
+        >
+          <label className="absolute bottom-3 left-3 inline-flex cursor-pointer items-center gap-1 rounded-full bg-black/50 px-3 py-1.5 text-xs font-semibold text-white hover:bg-black/65">
+            <Upload className="h-3.5 w-3.5" /> بانر المتجر
+            <input type="file" accept="image/*" className="hidden" onChange={(e) => onImage(e, 'banner', 1600, 0.82)} />
+          </label>
+          {f.banner && (
+            <button onClick={() => setF({ ...f, banner: '' })} className="absolute bottom-3 left-32 inline-flex items-center gap-1 rounded-full bg-black/50 px-3 py-1.5 text-xs font-semibold text-white hover:bg-black/65">
+              <X className="h-3 w-3" /> إزالة
+            </button>
+          )}
+        </div>
+        <div className="-mt-12 flex flex-wrap items-end gap-4 px-5 pb-5 md:px-7">
+          <div className="flex h-24 w-24 flex-shrink-0 items-center justify-center overflow-hidden rounded-2xl border-4 border-white bg-[#F8F9FA] shadow-md">
+            {f.logo ? (
+              <img src={f.logo} alt="" className="h-full w-full object-cover" />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center bg-gradient-to-bl from-[#1B3A6B] to-[#C9A84C] text-3xl font-extrabold text-white">{(f.businessName || '؟').charAt(0)}</div>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-1.5 pt-14 md:pt-16">
+            <label className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-gray-50">
+              <Upload className="h-3.5 w-3.5" /> تحميل شعار
+              <input type="file" accept="image/*" className="hidden" onChange={(e) => onImage(e, 'logo', 512, 0.9)} />
+            </label>
+            {f.logo && (
+              <button onClick={() => setF({ ...f, logo: '' })} className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50">
+                <X className="h-3 w-3" /> إزالة الشعار
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Fields */}
+      <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+        <h3 className="mb-4 text-sm font-bold text-[#1B3A6B]">معلومات المتجر</h3>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <F label="اسم المتجر *">
+            <input value={f.businessName} onChange={(e) => setF({ ...f, businessName: e.target.value })} className="input" />
+          </F>
+          <F label="الرابط المخصص" hint="3-60 حرفاً، بالإنجليزية أو العربية">
+            <input dir="ltr" value={f.slug} onChange={(e) => setF({ ...f, slug: e.target.value })} className="input text-right font-mono" />
+          </F>
+          <div className="sm:col-span-2">
+            <F label="شعار قصير (Tagline)" hint="سطر قصير يصف متجرك">
+              <input value={f.tagline} onChange={(e) => setF({ ...f, tagline: e.target.value })} className="input" />
+            </F>
+          </div>
+          <div className="sm:col-span-2">
+            <F label="نبذة عن المتجر">
+              <textarea rows={4} value={f.bio} onChange={(e) => setF({ ...f, bio: e.target.value })} className="input resize-none" />
+            </F>
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+        <h3 className="mb-4 text-sm font-bold text-[#1B3A6B]">التواصل والموقع</h3>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <F label="هاتف">
+            <input dir="ltr" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} className="input text-right" />
+          </F>
+          <F label="واتساب">
+            <input dir="ltr" value={f.whatsapp} onChange={(e) => setF({ ...f, whatsapp: e.target.value })} className="input text-right" />
+          </F>
+          <F label="انستجرام (username)">
+            <input dir="ltr" value={f.instagram} onChange={(e) => setF({ ...f, instagram: e.target.value })} className="input text-right" />
+          </F>
+          <F label="الموقع الإلكتروني">
+            <input dir="ltr" value={f.website} onChange={(e) => setF({ ...f, website: e.target.value })} className="input text-right" />
+          </F>
+          <F label="المحافظة">
+            <select value={f.governorate} onChange={(e) => setF({ ...f, governorate: e.target.value })} className="input">
+              <option value="">اختر</option>
+              {['MUSCAT','DHOFAR','MUSANDAM','BURAIMI','DAKHILIYAH','SHARQIYAH','WUSTA','BATINAH','DHAHIRAH'].map((g) => (
+                <option key={g} value={g}>{ {MUSCAT:'مسقط',DHOFAR:'ظفار',MUSANDAM:'مسندم',BURAIMI:'البريمي',DAKHILIYAH:'الداخلية',SHARQIYAH:'الشرقية',WUSTA:'الوسطى',BATINAH:'الباطنة',DHAHIRAH:'الظاهرة'}[g] }</option>
+              ))}
+            </select>
+          </F>
+          <F label="المدينة">
+            <input value={f.city} onChange={(e) => setF({ ...f, city: e.target.value })} className="input" />
+          </F>
+          <div className="sm:col-span-2">
+            <F label="العنوان">
+              <input value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} className="input" />
+            </F>
+          </div>
+        </div>
+      </section>
+
+      {msg && (
+        <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm ${msg.type === 'success' ? 'border-green-200 bg-green-50 text-green-800' : 'border-red-200 bg-red-50 text-red-800'}`}>
+          {msg.type === 'success' ? <CheckCircle2 className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
+          {msg.text}
+        </div>
+      )}
+
+      <div className="flex justify-end">
+        <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-[#1B3A6B] px-6 py-2.5 text-sm font-bold text-white hover:bg-[#152c52] disabled:opacity-50">
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+          حفظ التغييرات
+        </button>
+      </div>
+
+      <style jsx>{`.input{width:100%;border:1px solid #D1D5DB;border-radius:8px;padding:8px 12px;font-size:14px;outline:none}.input:focus{border-color:#1B3A6B;box-shadow:0 0 0 3px rgba(27,58,107,0.1)}`}</style>
     </div>
   )
 }

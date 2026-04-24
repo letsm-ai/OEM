@@ -56,7 +56,22 @@ export default function ProductCard({ product }) {
         {product.vendorName && (
           <div className="mt-0.5 truncate text-[11px] text-gray-500">
             <Package className="me-1 inline-block h-3 w-3" />
-            {product.vendorName}
+            {product.vendorSlug ? (
+              <span
+                role="link"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  window.location.href = `/store/vendor/${encodeURIComponent(product.vendorSlug)}`
+                }}
+                className="cursor-pointer hover:text-[#1B3A6B] hover:underline"
+              >
+                {product.vendorName}
+              </span>
+            ) : (
+              product.vendorName
+            )}
           </div>
         )}
 

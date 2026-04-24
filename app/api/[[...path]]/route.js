@@ -17,6 +17,7 @@ import {
 } from '@/lib/membership'
 import { SECTOR_KEYS, GOVERNORATE_KEYS } from '@/lib/directory'
 import { CATEGORY_KEYS, COMMISSION_PERCENT, TIER_DISCOUNT_PERCENT } from '@/lib/store'
+import { slugify, uniqueVendorSlug } from '@/lib/slug'
 import {
   SPECIALTY_KEYS,
   specialtyLabel,
@@ -1270,6 +1271,10 @@ async function handleRoute(request, { params }) {
     const adminVendorAppActionMatch = route.match(
       /^\/admin\/vendor-applications\/([A-Za-z0-9-]+)\/(approve|reject)$/
     )
+    // Vendor storefront: /vendors/:slug (slug may contain arabic + hyphens)
+    const vendorBySlugMatch = route.match(
+      /^\/vendors\/([^/]+?)$/
+    )
 
     // ---- GET /experts (public, APPROVED only) ----
     if (route === '/experts' && method === 'GET') {
@@ -2378,9 +2383,32 @@ async function handleRoute(request, { params }) {
       app.updatedAt = new Date()
       await app.save()
       if (action === 'approve') {
-        await User.findByIdAndUpdate(app.userId, {
-          $set: { role: 'VENDOR', updatedAt: new Date() },
-        })
+        // Ensure the approved user has a vendor profile with a unique slug.
+        const approvedUser = await User.findById(app.userId)
+        if (approvedUser) {
+          const existingSlug = approvedUser.vendorProfile?.slug
+          let slug = existingSlug
+          if (!slug) {
+            slug = await uniqueVendorSlug(User, app.businessName, approvedUser._id)
+          }
+          approvedUser.role = 'VENDOR'
+          approvedUser.vendorProfile = {
+            slug,
+            businessName: app.businessName || approvedUser.name,
+            tagline: approvedUser.vendorProfile?.tagline || '',
+            bio: approvedUser.vendorProfile?.bio || app.businessDescription || '',
+            banner: approvedUser.vendorProfile?.banner || '',
+            logo: approvedUser.vendorProfile?.logo || approvedUser.photo || '',
+            phone: approvedUser.vendorProfile?.phone || app.phone || approvedUser.phone || '',
+            whatsapp: approvedUser.vendorProfile?.whatsapp || '',
+            instagram: approvedUser.vendorProfile?.instagram || '',
+            website: approvedUser.vendorProfile?.website || '',
+            governorate: approvedUser.vendorProfile?.governorate || '',
+            city: approvedUser.vendorProfile?.city || '',
+            address: approvedUser.vendorProfile?.address || '',
+          }
+          await approvedUser.save()
+        }
       }
       return handleCORS(
         NextResponse.json({
@@ -2429,9 +2457,18 @@ async function handleRoute(request, { params }) {
         _id: { $in: vendorIds },
         role: { $in: ['VENDOR', 'ADMIN'] },
       })
-        .select({ _id: 1, name: 1 })
+        .select({ _id: 1, name: 1, vendorProfile: 1 })
         .lean()
-      const vendorMap = Object.fromEntries(vendors.map((v) => [v._id, v.name]))
+      const vendorMap = Object.fromEntries(
+        vendors.map((v) => [
+          v._id,
+          {
+            name: v.vendorProfile?.businessName || v.name,
+            slug: v.vendorProfile?.slug || '',
+            logo: v.vendorProfile?.logo || '',
+          },
+        ])
+      )
       return handleCORS(
         NextResponse.json({
           products: products
@@ -2440,7 +2477,9 @@ async function handleRoute(request, { params }) {
               id: p._id,
               ...p,
               _id: undefined,
-              vendorName: vendorMap[p.vendorId] || 'تاجر',
+              vendorName: vendorMap[p.vendorId]?.name || 'تاجر',
+              vendorSlug: vendorMap[p.vendorId]?.slug || '',
+              vendorLogo: vendorMap[p.vendorId]?.logo || '',
             })),
         })
       )
@@ -2457,7 +2496,7 @@ async function handleRoute(request, { params }) {
         )
       }
       const vendor = await User.findById(p.vendorId)
-        .select({ _id: 1, name: 1, email: 1, role: 1 })
+        .select({ _id: 1, name: 1, email: 1, role: 1, vendorProfile: 1 })
         .lean()
       return handleCORS(
         NextResponse.json({
@@ -2466,7 +2505,14 @@ async function handleRoute(request, { params }) {
             ...p,
             _id: undefined,
             vendor: vendor
-              ? { id: vendor._id, name: vendor.name, role: vendor.role }
+              ? {
+                  id: vendor._id,
+                  name: vendor.vendorProfile?.businessName || vendor.name,
+                  slug: vendor.vendorProfile?.slug || '',
+                  logo: vendor.vendorProfile?.logo || '',
+                  tagline: vendor.vendorProfile?.tagline || '',
+                  role: vendor.role,
+                }
               : null,
           },
         })
@@ -2691,6 +2737,276 @@ async function handleRoute(request, { params }) {
             ...p,
             _id: undefined,
           })),
+        })
+      )
+    }
+
+    /* ============================================================
+       VENDOR STOREFRONT (public)
+       ============================================================ */
+    // ---- GET /vendors (public list of approved vendors) ----
+    if (route === '/vendors' && method === 'GET') {
+      await connectDB()
+      const vendors = await User.find({
+        role: { $in: ['VENDOR', 'ADMIN'] },
+        'vendorProfile.slug': { $ne: '' },
+      })
+        .select({
+          _id: 1,
+          name: 1,
+          vendorProfile: 1,
+          createdAt: 1,
+        })
+        .sort({ createdAt: -1 })
+        .limit(200)
+        .lean()
+      // Product counts per vendor
+      const ids = vendors.map((v) => v._id)
+      const counts = await Product.aggregate([
+        { $match: { vendorId: { $in: ids }, isActive: true } },
+        { $group: { _id: '$vendorId', count: { $sum: 1 } } },
+      ])
+      const countMap = Object.fromEntries(counts.map((c) => [c._id, c.count]))
+      return handleCORS(
+        NextResponse.json({
+          vendors: vendors
+            .filter((v) => (countMap[v._id] || 0) > 0)
+            .map((v) => ({
+              id: v._id,
+              name: v.name,
+              slug: v.vendorProfile?.slug || '',
+              businessName: v.vendorProfile?.businessName || v.name,
+              tagline: v.vendorProfile?.tagline || '',
+              logo: v.vendorProfile?.logo || '',
+              banner: v.vendorProfile?.banner || '',
+              governorate: v.vendorProfile?.governorate || '',
+              city: v.vendorProfile?.city || '',
+              productCount: countMap[v._id] || 0,
+            })),
+        })
+      )
+    }
+
+    // ---- GET /vendors/:slug (public vendor storefront) ----
+    if (vendorBySlugMatch && method === 'GET') {
+      await connectDB()
+      const slug = decodeURIComponent(vendorBySlugMatch[1])
+      const vendor = await User.findOne({
+        'vendorProfile.slug': slug,
+        role: { $in: ['VENDOR', 'ADMIN'] },
+      })
+        .select({
+          _id: 1,
+          name: 1,
+          vendorProfile: 1,
+          createdAt: 1,
+          membershipTier: 1,
+        })
+        .lean()
+      if (!vendor) {
+        return handleCORS(
+          NextResponse.json({ error: 'المتجر غير موجود' }, { status: 404 })
+        )
+      }
+      const products = await Product.find({
+        vendorId: vendor._id,
+        isActive: true,
+      })
+        .sort({ createdAt: -1 })
+        .limit(200)
+        .lean()
+      return handleCORS(
+        NextResponse.json({
+          vendor: {
+            id: vendor._id,
+            name: vendor.name,
+            slug: vendor.vendorProfile?.slug,
+            businessName: vendor.vendorProfile?.businessName || vendor.name,
+            tagline: vendor.vendorProfile?.tagline || '',
+            bio: vendor.vendorProfile?.bio || '',
+            banner: vendor.vendorProfile?.banner || '',
+            logo: vendor.vendorProfile?.logo || '',
+            phone: vendor.vendorProfile?.phone || '',
+            whatsapp: vendor.vendorProfile?.whatsapp || '',
+            instagram: vendor.vendorProfile?.instagram || '',
+            website: vendor.vendorProfile?.website || '',
+            governorate: vendor.vendorProfile?.governorate || '',
+            city: vendor.vendorProfile?.city || '',
+            address: vendor.vendorProfile?.address || '',
+            membershipTier: vendor.membershipTier,
+            memberSince: vendor.createdAt,
+          },
+          products: products.map((p) => ({
+            id: p._id,
+            ...p,
+            _id: undefined,
+            vendorName: vendor.name,
+          })),
+        })
+      )
+    }
+
+    // ---- GET /vendor/profile (my profile, for editing) ----
+    if (route === '/vendor/profile' && method === 'GET') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const user = await User.findById(session.user.id).lean()
+      if (user?.role !== 'VENDOR' && user?.role !== 'ADMIN') {
+        return handleCORS(
+          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
+        )
+      }
+      return handleCORS(
+        NextResponse.json({
+          profile: {
+            id: user._id,
+            name: user.name,
+            email: user.email,
+            slug: user.vendorProfile?.slug || '',
+            businessName: user.vendorProfile?.businessName || user.name,
+            tagline: user.vendorProfile?.tagline || '',
+            bio: user.vendorProfile?.bio || '',
+            banner: user.vendorProfile?.banner || '',
+            logo: user.vendorProfile?.logo || '',
+            phone: user.vendorProfile?.phone || '',
+            whatsapp: user.vendorProfile?.whatsapp || '',
+            instagram: user.vendorProfile?.instagram || '',
+            website: user.vendorProfile?.website || '',
+            governorate: user.vendorProfile?.governorate || '',
+            city: user.vendorProfile?.city || '',
+            address: user.vendorProfile?.address || '',
+          },
+        })
+      )
+    }
+
+    // ---- PUT /vendor/profile (edit my vendor profile) ----
+    if (route === '/vendor/profile' && method === 'PUT') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const user = await User.findById(session.user.id)
+      if (!user) {
+        return handleCORS(
+          NextResponse.json({ error: 'المستخدم غير موجود' }, { status: 404 })
+        )
+      }
+      if (user.role !== 'VENDOR' && user.role !== 'ADMIN') {
+        return handleCORS(
+          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
+        )
+      }
+      const body = await request.json().catch(() => ({}))
+      const prof = user.vendorProfile || {}
+
+      // Text fields with length caps
+      const strFields = {
+        businessName: 80,
+        tagline: 160,
+        bio: 3000,
+        phone: 30,
+        whatsapp: 30,
+        instagram: 80,
+        website: 200,
+        governorate: 40,
+        city: 60,
+        address: 300,
+      }
+      for (const [key, cap] of Object.entries(strFields)) {
+        if (body[key] !== undefined) {
+          prof[key] = String(body[key] || '').trim().slice(0, cap)
+        }
+      }
+      if (prof.businessName && prof.businessName.length < 2) {
+        return handleCORS(
+          NextResponse.json({ error: 'اسم المتجر قصير جداً' }, { status: 400 })
+        )
+      }
+
+      // Image fields (base64 data URL)
+      for (const f of ['banner', 'logo']) {
+        if (body[f] !== undefined) {
+          const v = body[f]
+          if (v === '' || v === null) {
+            prof[f] = ''
+          } else if (
+            typeof v === 'string' &&
+            /^data:image\/(png|jpe?g|webp|gif);base64,/.test(v) &&
+            v.length <= 3_000_000
+          ) {
+            prof[f] = v
+          } else {
+            return handleCORS(
+              NextResponse.json(
+                { error: 'صيغة/حجم الصورة غير مدعوم' },
+                { status: 400 }
+              )
+            )
+          }
+        }
+      }
+
+      // Custom slug (optional). Validate uniqueness if provided.
+      if (body.slug !== undefined) {
+        const desired = slugify(body.slug)
+        if (!desired) {
+          return handleCORS(
+            NextResponse.json(
+              { error: 'الرابط غير صالح' },
+              { status: 400 }
+            )
+          )
+        }
+        if (desired.length < 3 || desired.length > 60) {
+          return handleCORS(
+            NextResponse.json(
+              { error: 'الرابط يجب أن يكون بين 3 و 60 حرفاً' },
+              { status: 400 }
+            )
+          )
+        }
+        if (desired !== prof.slug) {
+          const collision = await User.findOne({
+            'vendorProfile.slug': desired,
+            _id: { $ne: user._id },
+          }).lean()
+          if (collision) {
+            return handleCORS(
+              NextResponse.json(
+                { error: 'هذا الرابط مستخدم، جرّب اسماً آخر' },
+                { status: 409 }
+              )
+            )
+          }
+          prof.slug = desired
+        }
+      }
+
+      // If somehow slug is empty, synthesize one
+      if (!prof.slug) {
+        prof.slug = await uniqueVendorSlug(
+          User,
+          prof.businessName || user.name,
+          user._id
+        )
+      }
+
+      user.vendorProfile = prof
+      user.updatedAt = new Date()
+      await user.save()
+      return handleCORS(
+        NextResponse.json({
+          success: true,
+          profile: { ...prof, id: user._id, name: user.name, email: user.email },
         })
       )
     }
