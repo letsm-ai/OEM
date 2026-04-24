@@ -167,14 +167,3 @@ function CategoryPill({ active, onClick, label, emoji }) {
     </button>
   )
 }
-l border px-3.5 py-1.5 text-xs font-semibold transition ${
-        active
-          ? 'border-[#1B3A6B] bg-[#1B3A6B] text-white'
-          : 'border-gray-200 bg-white text-gray-700 hover:border-[#1B3A6B] hover:text-[#1B3A6B]'
-      }`}
-    >
-      <span className="text-sm">{emoji}</span>
-      {label}
-    </button>
-  )
-}
