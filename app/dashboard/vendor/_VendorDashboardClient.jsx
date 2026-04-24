@@ -59,6 +59,7 @@ export default function VendorDashboardClient() {
           <TabBtn active={tab === 'products'} onClick={() => setTab('products')} icon={<Package className="h-4 w-4" />} label="منتجاتي" />
           <TabBtn active={tab === 'inventory'} onClick={() => setTab('inventory')} icon={<Warehouse className="h-4 w-4" />} label="المخزون" />
           <TabBtn active={tab === 'promotions'} onClick={() => setTab('promotions')} icon={<Tag className="h-4 w-4" />} label="العروض" />
+          <TabBtn active={tab === 'payouts'} onClick={() => setTab('payouts')} icon={<Wallet className="h-4 w-4" />} label="السحب" />
           <TabBtn active={tab === 'orders'} onClick={() => setTab('orders')} icon={<ShoppingCart className="h-4 w-4" />} label="الطلبات" />
           <TabBtn active={tab === 'earnings'} onClick={() => setTab('earnings')} icon={<Wallet className="h-4 w-4" />} label="الأرباح" />
           <TabBtn active={tab === 'profile'} onClick={() => setTab('profile')} icon={<SettingsIcon className="h-4 w-4" />} label="بروفايل المتجر" />
@@ -68,6 +69,7 @@ export default function VendorDashboardClient() {
         {tab === 'products' && <ProductsTab />}
         {tab === 'inventory' && <InventoryTab />}
         {tab === 'promotions' && <PromotionsTab />}
+        {tab === 'payouts' && <PayoutsTab />}
         {tab === 'orders' && <OrdersTab />}
         {tab === 'earnings' && <EarningsTab />}
         {tab === 'profile' && <ProfileTab />}
@@ -87,6 +89,216 @@ function TabBtn({ active, onClick, icon, label }) {
       {icon}
       {label}
     </button>
+  )
+}
+
+/* --------------- PAYOUTS (vendor) --------------- */
+function PayoutsTab() {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [requestOpen, setRequestOpen] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const r = await fetch('/api/vendor/payouts')
+      const d = await r.json()
+      if (r.ok) setData(d)
+      else setError(d?.error || 'خطأ')
+    } catch (e) {
+      setError('تعذّر الاتصال')
+    } finally {
+      setLoading(false)
+    }
+  }
+  useEffect(() => { load() }, [])
+
+  if (loading) return <div className="flex items-center justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-[#1B3A6B]" /></div>
+  if (error) return <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800"><AlertCircle className="inline-block h-4 w-4" /> {error}</div>
+  if (!data) return null
+
+  const b = data.balance
+  const canRequest = b.availableBalance >= b.minPayoutAmount
+
+  const statusLabels = {
+    PENDING: { label:'قيد المراجعة', color:'bg-amber-100 text-amber-800' },
+    APPROVED: { label:'موافق عليه', color:'bg-blue-100 text-blue-800' },
+    PAID: { label:'تم التحويل', color:'bg-green-100 text-green-800' },
+    REJECTED: { label:'مرفوض', color:'bg-red-100 text-red-800' },
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Balance overview */}
+      <div className="rounded-2xl bg-gradient-to-bl from-[#1B3A6B] to-[#152c52] p-5 text-white shadow-md">
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="text-xs opacity-80">الرصيد المتاح للسحب</div>
+            <div className="mt-1 text-4xl font-extrabold">{formatOMR(b.availableBalance)} <span className="text-lg opacity-80">ر.ع</span></div>
+            <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] opacity-90">
+              <div>إيراد الطلبات المكتملة: <b>{formatOMR(b.eligibleRevenue)}</b></div>
+              <div>العمولة ({b.commissionPercent}%): <b>-{formatOMR(b.commission)}</b></div>
+              <div>قيد الانتظار: <b>{formatOMR(b.pendingOut)}</b></div>
+              <div>تم تحويله سابقاً: <b>{formatOMR(b.committedOut)}</b></div>
+            </div>
+          </div>
+          <button
+            onClick={() => setRequestOpen(true)}
+            disabled={!canRequest}
+            className="rounded-lg bg-[#C9A84C] px-4 py-2 text-sm font-extrabold text-[#1B3A6B] hover:bg-[#b89440] disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            طلب سحب
+          </button>
+        </div>
+        {!canRequest && (
+          <div className="mt-2 rounded-md bg-white/10 px-2 py-1 text-[11px]">
+            الحد الأدنى للسحب: {b.minPayoutAmount} ر.ع. {b.deliveredOrderCount === 0 ? 'لا توجد طلبات مكتملة بعد.' : ''}
+          </div>
+        )}
+      </div>
+
+      {/* Requests history */}
+      <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+        <h3 className="mb-3 text-sm font-bold text-[#1B3A6B]">طلبات السحب السابقة</h3>
+        {data.requests.length === 0 ? (
+          <div className="py-8 text-center text-sm text-gray-500">لم تقدّم أي طلب سحب بعد</div>
+        ) : (
+          <div className="space-y-2">
+            {data.requests.map((r) => {
+              const s = statusLabels[r.status] || { label: r.status, color: 'bg-gray-100 text-gray-700' }
+              return (
+                <div key={r.id} className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-gray-100 bg-gray-50 p-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${s.color}`}>{s.label}</span>
+                      <span className="text-lg font-extrabold text-[#1B3A6B]">{formatOMR(r.amountRequested)} ر.ع</span>
+                    </div>
+                    <div className="mt-1 text-[11px] text-gray-500">
+                      {r.bankDetails?.bankName} · IBAN: <span dir="ltr">{r.bankDetails?.iban}</span>
+                    </div>
+                    {r.status === 'REJECTED' && r.rejectionReason && (
+                      <div className="mt-1 rounded-md bg-red-50 px-2 py-1 text-[11px] text-red-800">
+                        سبب الرفض: {r.rejectionReason}
+                      </div>
+                    )}
+                    {r.status === 'PAID' && r.transferReference && (
+                      <div className="mt-1 rounded-md bg-green-50 px-2 py-1 text-[11px] text-green-800">
+                        مرجع التحويل: <span dir="ltr" className="font-bold">{r.transferReference}</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex-shrink-0 text-end text-[10px] text-gray-400">
+                    طُلب: {new Date(r.requestedAt).toLocaleDateString('ar-OM')}
+                    {r.processedAt && <div>معالَج: {new Date(r.processedAt).toLocaleDateString('ar-OM')}</div>}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {requestOpen && (
+        <PayoutRequestModal
+          balance={b}
+          onClose={() => setRequestOpen(false)}
+          onDone={() => { setRequestOpen(false); load() }}
+        />
+      )}
+    </div>
+  )
+}
+
+function PayoutRequestModal({ balance, onClose, onDone }) {
+  const [form, setForm] = useState({
+    amount: balance.availableBalance,
+    accountHolderName: '',
+    bankName: '',
+    iban: '',
+    note: '',
+  })
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
+    const res = await fetch('/api/vendor/payouts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        amount: Number(form.amount),
+        bankDetails: {
+          accountHolderName: form.accountHolderName.trim(),
+          bankName: form.bankName.trim(),
+          iban: form.iban.replace(/\s+/g, '').toUpperCase(),
+          note: form.note,
+        },
+      }),
+    })
+    const d = await res.json().catch(() => ({}))
+    setLoading(false)
+    if (!res.ok) return setError(d?.error || 'خطأ')
+    onDone()
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4">
+      <form onSubmit={submit} className="mt-10 w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-base font-bold text-[#1B3A6B]">طلب سحب رصيد</h3>
+          <button type="button" onClick={onClose} className="rounded-md p-1 hover:bg-gray-100"><X className="h-5 w-5" /></button>
+        </div>
+        <div className="mb-3 rounded-lg border border-gray-200 bg-gray-50 p-2">
+          <div className="text-[11px] text-gray-500">الرصيد المتاح</div>
+          <div className="text-xl font-extrabold text-[#1B3A6B]">{formatOMR(balance.availableBalance)} ر.ع</div>
+          <div className="text-[10px] text-gray-500">الحد الأدنى: {balance.minPayoutAmount} ر.ع</div>
+        </div>
+        <div className="grid gap-3">
+          <div className="grid gap-1">
+            <label className="text-xs font-semibold">المبلغ المطلوب (ر.ع) *</label>
+            <input required type="number" step="0.01" min={balance.minPayoutAmount} max={balance.availableBalance}
+              value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-[#1B3A6B]" />
+          </div>
+          <div className="grid gap-1">
+            <label className="text-xs font-semibold">اسم صاحب الحساب *</label>
+            <input required value={form.accountHolderName} onChange={(e) => setForm({ ...form, accountHolderName: e.target.value })}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-[#1B3A6B]" />
+          </div>
+          <div className="grid gap-1">
+            <label className="text-xs font-semibold">اسم البنك *</label>
+            <input required value={form.bankName} onChange={(e) => setForm({ ...form, bankName: e.target.value })}
+              placeholder="مثال: بنك مسقط، البنك الوطني العماني"
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-[#1B3A6B]" />
+          </div>
+          <div className="grid gap-1">
+            <label className="text-xs font-semibold">رقم IBAN * <span className="text-[10px] text-gray-400">(يبدأ بـ OM، 22 خانة)</span></label>
+            <input required dir="ltr" value={form.iban} onChange={(e) => setForm({ ...form, iban: e.target.value.toUpperCase() })}
+              placeholder="OMxx xxxx xxxx xxxx xxxx xx"
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono outline-none focus:border-[#1B3A6B]" />
+          </div>
+          <div className="grid gap-1">
+            <label className="text-xs font-semibold">ملاحظة (اختياري)</label>
+            <textarea rows={2} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value.slice(0, 300) })}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-[#1B3A6B]" />
+          </div>
+        </div>
+        {error && (
+          <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-800">
+            <AlertCircle className="inline-block h-3.5 w-3.5" /> {error}
+          </div>
+        )}
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold hover:bg-gray-50">إلغاء</button>
+          <button type="submit" disabled={loading} className="inline-flex items-center gap-1 rounded-lg bg-[#C9A84C] px-4 py-2 text-sm font-bold text-[#1B3A6B] hover:bg-[#b89440] disabled:opacity-50">
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />} إرسال الطلب
+          </button>
+        </div>
+      </form>
+    </div>
   )
 }
 

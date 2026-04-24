@@ -4,7 +4,7 @@ import crypto from 'crypto'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { connectDB } from '@/lib/db'
-import { User, Membership, PasswordResetToken, Company, Expert, Availability, Appointment, VendorApplication, Product, ProductReview, Order, Coupon, CouponRedemption, Cart, StockMovement, Promotion } from '@/lib/models'
+import { User, Membership, PasswordResetToken, Company, Expert, Availability, Appointment, VendorApplication, Product, ProductReview, Order, Coupon, CouponRedemption, Cart, StockMovement, Promotion, PayoutRequest } from '@/lib/models'
 
 // ---- Extracted modular handlers ----
 import {
@@ -50,6 +50,7 @@ import { slugify, uniqueVendorSlug } from '@/lib/slug'
 import { sanitizeVariants, findVariant } from '@/lib/variants'
 import { recordStockMovement, isLowStock, lowStockVariants } from '@/lib/inventory'
 import { applyAllPromotions } from '@/lib/promotions'
+import { computeVendorBalance, MIN_PAYOUT_AMOUNT } from '@/lib/payouts'
 import {
   SPECIALTY_KEYS,
   specialtyLabel,
@@ -3462,6 +3463,201 @@ async function handleRoute(request, { params }) {
             status: x._id,
             count: x.count,
           })),
+        })
+      )
+    }
+
+    /* ============================================================
+       PAYOUTS (نظام المدفوعات للبائع)
+       ============================================================ */
+
+    // ---- GET /vendor/payouts (balance + list of requests) ----
+    if (route === '/vendor/payouts' && method === 'GET') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
+      }
+      await connectDB()
+      const dbUser = await User.findById(session.user.id).lean()
+      if (!dbUser || (dbUser.role !== 'VENDOR' && dbUser.role !== 'ADMIN')) {
+        return handleCORS(
+          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
+        )
+      }
+      const balance = await computeVendorBalance(session.user.id)
+      const requests = await PayoutRequest.find({ vendorId: session.user.id })
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .lean()
+      return handleCORS(
+        NextResponse.json({
+          balance,
+          requests: requests.map((r) => ({ id: r._id, ...r, _id: undefined })),
+        })
+      )
+    }
+
+    // ---- POST /vendor/payouts (vendor requests a payout) ----
+    if (route === '/vendor/payouts' && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
+      }
+      await connectDB()
+      const dbUser = await User.findById(session.user.id).lean()
+      if (!dbUser || (dbUser.role !== 'VENDOR' && dbUser.role !== 'ADMIN')) {
+        return handleCORS(
+          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
+        )
+      }
+      const body = await request.json().catch(() => ({}))
+      const amount = Number(body?.amount)
+      const bank = body?.bankDetails || {}
+      const accountHolderName = String(bank.accountHolderName || '').trim()
+      const bankName = String(bank.bankName || '').trim()
+      const iban = String(bank.iban || '').replace(/\s+/g, '').toUpperCase()
+
+      if (!Number.isFinite(amount) || amount < MIN_PAYOUT_AMOUNT) {
+        return handleCORS(
+          NextResponse.json(
+            { error: `الحد الأدنى لطلب السحب هو ${MIN_PAYOUT_AMOUNT} ر.ع` },
+            { status: 400 }
+          )
+        )
+      }
+      if (!accountHolderName) {
+        return handleCORS(NextResponse.json({ error: 'اسم صاحب الحساب مطلوب' }, { status: 400 }))
+      }
+      if (!bankName) {
+        return handleCORS(NextResponse.json({ error: 'اسم البنك مطلوب' }, { status: 400 }))
+      }
+      // Basic IBAN validation for Oman: starts with OM followed by 2 digits + 16 chars
+      if (!/^OM\d{2}[A-Z0-9]{16}$/.test(iban)) {
+        return handleCORS(
+          NextResponse.json({ error: 'رقم IBAN غير صالح (يجب أن يبدأ بـ OM ويحتوي على 20 خانة)' }, { status: 400 })
+        )
+      }
+
+      const balance = await computeVendorBalance(session.user.id)
+      if (amount > balance.availableBalance) {
+        return handleCORS(
+          NextResponse.json(
+            { error: `الرصيد المتاح للسحب هو ${balance.availableBalance} ر.ع فقط` },
+            { status: 400 }
+          )
+        )
+      }
+
+      const req = await PayoutRequest.create({
+        vendorId: session.user.id,
+        vendorName: dbUser.name || '',
+        amountRequested: +amount.toFixed(3),
+        bankDetails: {
+          accountHolderName,
+          bankName,
+          iban,
+          note: String(bank.note || '').slice(0, 300),
+        },
+        status: 'PENDING',
+        requestedAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      return handleCORS(
+        NextResponse.json({
+          request: { id: req._id, ...req.toObject(), _id: undefined },
+        })
+      )
+    }
+
+    // ---- GET /admin/payouts (admin: all requests, filterable) ----
+    if (route === '/admin/payouts' && method === 'GET') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user || session.user.role !== 'ADMIN') {
+        return handleCORS(NextResponse.json({ error: 'صلاحيات الإدارة مطلوبة' }, { status: 403 }))
+      }
+      await connectDB()
+      const url = new URL(request.url)
+      const status = url.searchParams.get('status') // optional
+      const q = status ? { status } : {}
+      const requests = await PayoutRequest.find(q)
+        .sort({ createdAt: -1 })
+        .limit(200)
+        .lean()
+      return handleCORS(
+        NextResponse.json({
+          requests: requests.map((r) => ({ id: r._id, ...r, _id: undefined })),
+        })
+      )
+    }
+
+    // ---- POST /admin/payouts/:id/:action (admin approve/reject/mark-paid) ----
+    const adminPayoutMatch = route.match(
+      /^\/admin\/payouts\/([A-Za-z0-9-]+)\/(approve|reject|mark-paid)$/
+    )
+    if (adminPayoutMatch && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user || session.user.role !== 'ADMIN') {
+        return handleCORS(NextResponse.json({ error: 'صلاحيات الإدارة مطلوبة' }, { status: 403 }))
+      }
+      await connectDB()
+      const [, id, action] = adminPayoutMatch
+      const req = await PayoutRequest.findById(id)
+      if (!req) {
+        return handleCORS(NextResponse.json({ error: 'الطلب غير موجود' }, { status: 404 }))
+      }
+      const body = await request.json().catch(() => ({}))
+      const admin = await User.findById(session.user.id).lean()
+
+      if (action === 'approve') {
+        if (req.status !== 'PENDING') {
+          return handleCORS(
+            NextResponse.json({ error: 'لا يمكن الموافقة على طلب ليس قيد الانتظار' }, { status: 400 })
+          )
+        }
+        req.status = 'APPROVED'
+        req.adminId = session.user.id
+        req.adminName = admin?.name || ''
+        req.processedAt = new Date()
+      } else if (action === 'reject') {
+        if (req.status !== 'PENDING') {
+          return handleCORS(
+            NextResponse.json({ error: 'لا يمكن رفض طلب ليس قيد الانتظار' }, { status: 400 })
+          )
+        }
+        const reason = String(body?.reason || '').trim()
+        if (!reason) {
+          return handleCORS(
+            NextResponse.json({ error: 'سبب الرفض مطلوب' }, { status: 400 })
+          )
+        }
+        req.status = 'REJECTED'
+        req.rejectionReason = reason.slice(0, 500)
+        req.adminId = session.user.id
+        req.adminName = admin?.name || ''
+        req.processedAt = new Date()
+      } else if (action === 'mark-paid') {
+        if (req.status !== 'APPROVED') {
+          return handleCORS(
+            NextResponse.json({ error: 'يجب الموافقة على الطلب أولاً' }, { status: 400 })
+          )
+        }
+        const ref = String(body?.transferReference || '').trim()
+        if (!ref) {
+          return handleCORS(
+            NextResponse.json({ error: 'مرجع التحويل البنكي مطلوب' }, { status: 400 })
+          )
+        }
+        req.status = 'PAID'
+        req.transferReference = ref.slice(0, 100)
+        req.adminId = session.user.id
+        req.adminName = admin?.name || ''
+      }
+      req.updatedAt = new Date()
+      await req.save()
+      return handleCORS(
+        NextResponse.json({
+          request: { id: req._id, ...req.toObject(), _id: undefined },
         })
       )
     }
