@@ -709,6 +709,7 @@ function ProductsTab() {
   const [products, setProducts] = useState([])
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState(null)
+  const [importOpen, setImportOpen] = useState(false)
 
   const load = async () => {
     setLoading(true)
@@ -735,14 +736,22 @@ function ProductsTab() {
 
   return (
     <div>
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-3 flex items-center justify-between gap-2 flex-wrap">
         <div className="text-sm text-gray-500">{products.length} منتج</div>
-        <button
-          onClick={() => setEditing({})}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-[#C9A84C] px-4 py-2 text-sm font-bold text-[#1B3A6B] hover:bg-[#b89440]"
-        >
-          <Plus className="h-4 w-4" /> إضافة منتج
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setImportOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[#1B3A6B] bg-white px-3 py-2 text-sm font-bold text-[#1B3A6B] hover:bg-[#1B3A6B] hover:text-white transition"
+          >
+            <Upload className="h-4 w-4" /> استيراد CSV
+          </button>
+          <button
+            onClick={() => setEditing({})}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[#C9A84C] px-4 py-2 text-sm font-bold text-[#1B3A6B] hover:bg-[#b89440]"
+          >
+            <Plus className="h-4 w-4" /> إضافة منتج
+          </button>
+        </div>
       </div>
       {loading ? (
         <div className="flex items-center justify-center py-12">
@@ -812,6 +821,239 @@ function ProductsTab() {
           onSaved={() => { setEditing(null); load() }}
         />
       )}
+      {importOpen && (
+        <CsvImportModal
+          onClose={() => setImportOpen(false)}
+          onDone={() => { setImportOpen(false); load() }}
+        />
+      )}
+    </div>
+  )
+}
+
+function CsvImportModal({ onClose, onDone }) {
+  const [step, setStep] = useState('upload') // 'upload' | 'preview' | 'importing' | 'done'
+  const [rows, setRows] = useState([])
+  const [fileName, setFileName] = useState('')
+  const [error, setError] = useState('')
+  const [results, setResults] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  const handleFile = async (e) => {
+    setError('')
+    const file = e.target.files?.[0]
+    if (!file) return
+    setFileName(file.name)
+    try {
+      const Papa = (await import('papaparse')).default
+      const text = await file.text()
+      Papa.parse(text, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (res) => {
+          if (!res.data || res.data.length === 0) {
+            setError('الملف فارغ أو صيغته غير صحيحة')
+            return
+          }
+          if (res.data.length > 200) {
+            setError('الحد الأقصى 200 منتج لكل ملف')
+            return
+          }
+          setRows(res.data)
+          setStep('preview')
+        },
+        error: (err) => setError('تعذّر قراءة الملف: ' + err.message),
+      })
+    } catch (e) {
+      setError('تعذّر قراءة الملف: ' + e.message)
+    }
+  }
+
+  const runImport = async () => {
+    setLoading(true)
+    setStep('importing')
+    try {
+      const r = await fetch('/api/vendor/products/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows }),
+      })
+      const d = await r.json()
+      setResults(d)
+      setStep('done')
+    } catch (e) {
+      setError('فشل الاستيراد: ' + e.message)
+      setStep('preview')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const downloadTemplate = () => {
+    window.open('/api/vendor/products/import/template', '_blank')
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4">
+      <div className="mt-10 w-full max-w-3xl rounded-2xl bg-white p-5 shadow-xl">
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h3 className="text-base font-bold text-[#1B3A6B]">📤 استيراد منتجات بالجملة (CSV)</h3>
+            <p className="mt-0.5 text-[11px] text-gray-500">ارفع ملف CSV بمنتجاتك وأضفهم دفعة واحدة (حتى 200 منتج)</p>
+          </div>
+          <button onClick={onClose} className="rounded-md p-1 hover:bg-gray-100">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {step === 'upload' && (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-6 text-center">
+              <Upload className="mx-auto h-10 w-10 text-gray-400" />
+              <p className="mt-2 text-sm font-semibold text-gray-700">اختر ملف CSV لرفعه</p>
+              <p className="mt-1 text-[11px] text-gray-500">الأعمدة المطلوبة: nameAr, price, stock, category</p>
+              <label className="mt-4 inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-[#C9A84C] px-4 py-2 text-sm font-bold text-[#1B3A6B] hover:bg-[#b89440]">
+                <Upload className="h-4 w-4" /> اختر ملف
+                <input type="file" accept=".csv,text/csv" onChange={handleFile} className="hidden" />
+              </label>
+              {fileName && <p className="mt-2 text-xs text-gray-600">📄 {fileName}</p>}
+            </div>
+
+            <div className="rounded-xl border border-blue-200 bg-blue-50 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs">
+                  <div className="font-bold text-blue-900">💡 لست متأكد من الصيغة؟</div>
+                  <div className="mt-0.5 text-blue-700">حمّل القالب الجاهز وعبّئه بمنتجاتك</div>
+                </div>
+                <button
+                  onClick={downloadTemplate}
+                  className="rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-100"
+                >
+                  📥 تنزيل القالب
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-gray-200 bg-white p-3">
+              <div className="mb-2 text-xs font-bold text-gray-800">📋 الأعمدة المدعومة:</div>
+              <div className="grid grid-cols-2 gap-1 text-[11px] text-gray-600">
+                <div>• <b>nameAr</b> (مطلوب) — اسم المنتج بالعربي</div>
+                <div>• <b>price</b> (مطلوب) — السعر بالريال العماني</div>
+                <div>• <b>stock</b> (مطلوب) — الكمية في المخزون</div>
+                <div>• <b>category</b> (مطلوب) — الفئة (FOOD/FASHION/…)</div>
+                <div>• <b>nameEn</b> (اختياري) — الاسم الإنجليزي</div>
+                <div>• <b>description</b> (اختياري) — الوصف</div>
+                <div>• <b>lowStockThreshold</b> (اختياري) — حد التنبيه</div>
+              </div>
+            </div>
+
+            {error && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-800">
+                <AlertCircle className="inline-block h-3.5 w-3.5" /> {error}
+              </div>
+            )}
+          </div>
+        )}
+
+        {step === 'preview' && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold text-gray-700">📋 معاينة — {rows.length} صف</div>
+              <button onClick={() => { setStep('upload'); setRows([]); setFileName('') }} className="text-xs text-gray-500 hover:text-gray-700 underline">
+                إلغاء واختيار ملف آخر
+              </button>
+            </div>
+            <div className="max-h-[50vh] overflow-auto rounded-lg border border-gray-200">
+              <table className="w-full text-xs">
+                <thead className="bg-gray-50 text-gray-700">
+                  <tr>
+                    <th className="p-2 text-start">#</th>
+                    <th className="p-2 text-start">الاسم</th>
+                    <th className="p-2 text-start">السعر</th>
+                    <th className="p-2 text-start">المخزون</th>
+                    <th className="p-2 text-start">الفئة</th>
+                    <th className="p-2 text-start">حد التنبيه</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.slice(0, 50).map((r, i) => (
+                    <tr key={i} className="border-t border-gray-100">
+                      <td className="p-2 text-gray-400">{i + 2}</td>
+                      <td className="p-2 font-semibold text-gray-800 line-clamp-1">{r.nameAr || r.name_ar || r['اسم المنتج'] || '—'}</td>
+                      <td className="p-2">{r.price || r['السعر'] || '—'}</td>
+                      <td className="p-2">{r.stock || r['المخزون'] || '—'}</td>
+                      <td className="p-2">{r.category || r['الفئة'] || 'OTHER'}</td>
+                      <td className="p-2">{r.lowStockThreshold || r['حد التنبيه'] || 5}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {rows.length > 50 && (
+                <div className="p-2 text-center text-[11px] text-gray-500 bg-gray-50">
+                  +{rows.length - 50} صف إضافي لم يُعرض في المعاينة
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2">
+              <button onClick={onClose} className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold hover:bg-gray-50">
+                إلغاء
+              </button>
+              <button
+                onClick={runImport}
+                disabled={loading}
+                className="inline-flex items-center gap-1 rounded-lg bg-[#C9A84C] px-4 py-2 text-sm font-bold text-[#1B3A6B] hover:bg-[#b89440] disabled:opacity-50"
+              >
+                {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+                <CheckCircle2 className="h-4 w-4" /> استيراد الكل ({rows.length})
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step === 'importing' && (
+          <div className="flex flex-col items-center justify-center py-16">
+            <Loader2 className="h-10 w-10 animate-spin text-[#1B3A6B]" />
+            <p className="mt-3 text-sm font-semibold text-gray-700">جاري استيراد المنتجات...</p>
+          </div>
+        )}
+
+        {step === 'done' && results && (
+          <div className="space-y-3">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="rounded-xl border border-gray-200 bg-white p-3 text-center">
+                <div className="text-[11px] text-gray-500">إجمالي الصفوف</div>
+                <div className="text-2xl font-extrabold text-[#1B3A6B]">{results.total}</div>
+              </div>
+              <div className="rounded-xl border border-green-200 bg-green-50 p-3 text-center">
+                <div className="text-[11px] text-green-700">تم إنشاؤه</div>
+                <div className="text-2xl font-extrabold text-green-800">{results.createdCount}</div>
+              </div>
+              <div className={`rounded-xl border p-3 text-center ${results.failCount > 0 ? 'border-red-200 bg-red-50' : 'border-gray-200 bg-white'}`}>
+                <div className={`text-[11px] ${results.failCount > 0 ? 'text-red-700' : 'text-gray-500'}`}>فشل</div>
+                <div className={`text-2xl font-extrabold ${results.failCount > 0 ? 'text-red-800' : 'text-gray-700'}`}>{results.failCount}</div>
+              </div>
+            </div>
+            {results.failCount > 0 && (
+              <div className="max-h-[30vh] overflow-auto rounded-lg border border-red-200 bg-red-50 p-3">
+                <div className="mb-1.5 text-xs font-bold text-red-900">الصفوف الفاشلة:</div>
+                <ul className="space-y-1 text-[11px] text-red-800">
+                  {results.results.filter((r) => !r.ok).map((r, i) => (
+                    <li key={i}>• الصف {r.row}: {r.nameAr || '(بدون اسم)'} — {r.error}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={onDone}
+                className="rounded-lg bg-[#1B3A6B] px-4 py-2 text-sm font-bold text-white hover:bg-[#152c52]"
+              >
+                تم ✓
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

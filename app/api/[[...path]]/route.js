@@ -3465,6 +3465,142 @@ async function handleRoute(request, { params }) {
       )
     }
 
+    // ---- POST /vendor/products/import (bulk CSV import for vendors) ----
+    if (route === '/vendor/products/import' && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
+      }
+      await connectDB()
+      const dbUser = await User.findById(session.user.id).lean()
+      if (!dbUser || (dbUser.role !== 'VENDOR' && dbUser.role !== 'ADMIN')) {
+        return handleCORS(
+          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
+        )
+      }
+      const body = await request.json().catch(() => ({}))
+      const rows = Array.isArray(body?.rows) ? body.rows : []
+      if (rows.length === 0) {
+        return handleCORS(
+          NextResponse.json({ error: 'لا توجد صفوف لاستيرادها' }, { status: 400 })
+        )
+      }
+      if (rows.length > 200) {
+        return handleCORS(
+          NextResponse.json({ error: 'الحد الأقصى 200 منتج لكل استيراد' }, { status: 400 })
+        )
+      }
+      const dryRun = !!body?.dryRun
+      const validCategories = ['FOOD','FASHION','ELECTRONICS','OFFICE','HANDICRAFT','DIGITAL','OTHER']
+
+      const results = []
+      let createdCount = 0
+
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i] || {}
+        const lineNo = i + 2 // +2 because spreadsheet row 1 is header
+        // Normalize field names (allow both English and alternate forms)
+        const nameAr = String(
+          r.nameAr ?? r.name_ar ?? r['اسم المنتج'] ?? r.name ?? ''
+        ).trim()
+        const nameEn = String(r.nameEn ?? r.name_en ?? r['الاسم الإنجليزي'] ?? '').trim()
+        const description = String(r.description ?? r['الوصف'] ?? '').slice(0, 3000)
+        const priceRaw = r.price ?? r['السعر']
+        const stockRaw = r.stock ?? r['المخزون']
+        const categoryRaw = String(r.category ?? r['الفئة'] ?? 'OTHER').toUpperCase().trim()
+        const lowStockThresholdRaw = r.lowStockThreshold ?? r['حد التنبيه'] ?? 5
+
+        if (!nameAr) {
+          results.push({ row: lineNo, ok: false, error: 'اسم المنتج مطلوب' })
+          continue
+        }
+        const price = Number(priceRaw)
+        if (!Number.isFinite(price) || price < 0) {
+          results.push({ row: lineNo, ok: false, nameAr, error: 'السعر غير صحيح' })
+          continue
+        }
+        const stock = Math.max(0, parseInt(stockRaw, 10) || 0)
+        const category = validCategories.includes(categoryRaw) ? categoryRaw : 'OTHER'
+        const lowStockThreshold = Math.max(0, parseInt(lowStockThresholdRaw, 10) || 0)
+
+        if (dryRun) {
+          results.push({ row: lineNo, ok: true, nameAr, preview: { price, stock, category, lowStockThreshold } })
+          continue
+        }
+
+        try {
+          const prod = await Product.create({
+            vendorId: session.user.id,
+            nameAr,
+            nameEn,
+            description,
+            price: +price.toFixed(3),
+            category,
+            images: [],
+            stock,
+            lowStockThreshold,
+            hasVariants: false,
+            variants: [],
+            isActive: true,
+            salesCount: 0,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          })
+          createdCount += 1
+          if (stock > 0) {
+            await recordStockMovement({
+              productId: prod._id,
+              vendorId: session.user.id,
+              type: 'INIT',
+              qtyBefore: 0,
+              qtyAfter: stock,
+              qtyDelta: stock,
+              note: 'استيراد CSV',
+              createdBy: session.user.id,
+              createdByName: dbUser.name || '',
+            })
+          }
+          results.push({ row: lineNo, ok: true, productId: prod._id, nameAr })
+        } catch (e) {
+          results.push({ row: lineNo, ok: false, nameAr, error: e.message || 'فشل إنشاء المنتج' })
+        }
+      }
+
+      const okCount = results.filter((x) => x.ok).length
+      const failCount = results.length - okCount
+      return handleCORS(
+        NextResponse.json({
+          success: true,
+          dryRun,
+          total: rows.length,
+          okCount,
+          failCount,
+          createdCount,
+          results,
+        })
+      )
+    }
+
+    // ---- GET /vendor/products/import/template (CSV template download) ----
+    if (route === '/vendor/products/import/template' && method === 'GET') {
+      // Return a UTF-8 CSV with BOM so Excel shows Arabic correctly.
+      const header = 'nameAr,nameEn,description,price,stock,category,lowStockThreshold'
+      const samples = [
+        'عسل سدر جبلي,Mountain Sidr Honey,عسل سدر طبيعي 100%,15.5,20,FOOD,3',
+        'قميص قطني,Cotton Shirt,قميص قطني فاخر,25,50,FASHION,5',
+        'سماعات بلوتوث,Bluetooth Headphones,سماعات لاسلكية,45,15,ELECTRONICS,2',
+      ]
+      const csv = '\uFEFF' + [header, ...samples].join('\n')
+      return new NextResponse(csv, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': 'attachment; filename="products_template.csv"',
+          'Access-Control-Allow-Origin': '*',
+        },
+      })
+    }
+
     // ---- GET /vendor/inventory (vendor only — products + stock status + low-stock flags) ----
     if (route === '/vendor/inventory' && method === 'GET') {
       const session = await getServerSession(authOptions)
