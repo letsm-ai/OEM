@@ -63,6 +63,7 @@ import {
   sendAppointmentReminderEmail,
   sendOrderConfirmationEmail,
   sendVendorNewOrderEmail,
+  sendOrderStatusUpdateEmail,
 } from '@/lib/email'
 import { getPaymentProvider, isRealPayment } from '@/lib/payments'
 
@@ -112,6 +113,20 @@ async function finalizeOrderPayment(order, buyer) {
     fresh.paymentStatus = 'PAID'
     fresh.paidAt = fresh.paidAt || new Date()
     fresh.paymentProcessedSideEffects = true
+    // Push PAID entry to statusHistory (only if not already there)
+    const hist = fresh.statusHistory || []
+    if (!hist.some((h) => h.status === 'PAID')) {
+      fresh.statusHistory = [
+        ...hist,
+        {
+          status: 'PAID',
+          changedAt: new Date(),
+          changedBy: 'SYSTEM',
+          actorName: 'نظام الدفع',
+          note: '',
+        },
+      ]
+    }
     await fresh.save()
 
     const items = fresh.items || []
@@ -3737,7 +3752,7 @@ async function handleRoute(request, { params }) {
       }
       const body = await request.json().catch(() => ({}))
       const newStatus = String(body?.status || '').toUpperCase()
-      const allowed = ['SHIPPED', 'DELIVERED']
+      const allowed = ['SHIPPED', 'DELIVERED', 'CANCELLED']
       if (!allowed.includes(newStatus)) {
         return handleCORS(
           NextResponse.json(
@@ -3746,9 +3761,62 @@ async function handleRoute(request, { params }) {
           )
         )
       }
+      // Enforce valid transitions
+      const valid = {
+        PAID: ['SHIPPED', 'CANCELLED'],
+        SHIPPED: ['DELIVERED', 'CANCELLED'],
+        DELIVERED: [],
+        CANCELLED: [],
+      }
+      const currentAllowed = valid[order.status] || []
+      if (!currentAllowed.includes(newStatus)) {
+        return handleCORS(
+          NextResponse.json(
+            { error: `لا يمكن الانتقال من ${order.status} إلى ${newStatus}` },
+            { status: 400 }
+          )
+        )
+      }
+      const trackingNumber = String(body?.trackingNumber || '').trim().slice(0, 80)
+      const carrier = String(body?.carrier || '').trim().slice(0, 80)
+      const note = String(body?.note || '').trim().slice(0, 500)
+
       order.status = newStatus
       order.updatedAt = new Date()
+      if (trackingNumber) order.trackingNumber = trackingNumber
+      if (carrier) order.carrier = carrier
+      order.statusHistory = [
+        ...(order.statusHistory || []),
+        {
+          status: newStatus,
+          changedAt: new Date(),
+          changedBy: session.user.id,
+          actorName: user.name || 'البائع',
+          note,
+        },
+      ]
       await order.save()
+
+      // Fire-and-forget email on SHIPPED / DELIVERED / CANCELLED
+      ;(async () => {
+        try {
+          const buyer = await User.findById(order.buyerId).lean()
+          if (buyer?.email) {
+            sendOrderStatusUpdateEmail({
+              to: buyer.email,
+              name: buyer.name,
+              order: { id: order._id },
+              newStatus,
+              trackingNumber,
+              carrier,
+              note,
+            }).catch((e) => console.error('[email] status update failed', e))
+          }
+        } catch (e) {
+          console.error('[order status] email block failed', e)
+        }
+      })()
+
       return handleCORS(
         NextResponse.json({
           success: true,

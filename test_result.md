@@ -2735,6 +2735,78 @@ agent_communication:
           - Image uploads: banner (1200x400 recommended) + logo (square). Client-side compressed to data URL.
           - Save button calls PUT /api/vendor/profile with all fields. Shows success/error toast.
           - Shows live preview link: {origin}/store/vendor/{slug}.
+  - task: "Order Status Timeline — /store/orders + PATCH /api/vendor/orders/:id/status with tracking/carrier/note + statusHistory + email notifications"
+    implemented: true
+    working: true
+    file: "/app/lib/models.js, /app/lib/email.js, /app/app/api/[[...path]]/route.js, /app/app/store/orders/page.js, /app/app/store/orders/_OrdersClient.jsx, /app/app/dashboard/vendor/_VendorDashboardClient.jsx, /app/app/store/_StoreClient.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          FINAL Phase 5 Shopify-like feature: Detailed order status tracking with Timeline UI.
+          
+          Schema additions on Order:
+          - statusHistory: [{status, changedAt, changedBy, actorName, note}] — append-only log
+          - trackingNumber (String)
+          - carrier (String)
+          - FAILED added to status enum
+          
+          Enhanced `finalizeOrderPayment(order, buyer)`:
+          - Now pushes {status:'PAID', changedBy:'SYSTEM', actorName:'نظام الدفع'} into statusHistory on success (if not already there)
+          - Remains idempotent
+          
+          Enhanced PATCH /api/vendor/orders/:id/status (existed previously, now fully fleshed out):
+          - Validates transitions: PAID→{SHIPPED,CANCELLED}, SHIPPED→{DELIVERED,CANCELLED}, DELIVERED/CANCELLED = terminal
+          - Invalid transition → 400 with Arabic message
+          - Accepts body {status, trackingNumber, carrier, note}
+          - All inputs length-capped (80/80/500 chars)
+          - Pushes new entry to statusHistory with {changedBy:userId, actorName:vendor.name, note}
+          - Stores trackingNumber + carrier on order (if provided)
+          - Fires SHIPPED / DELIVERED / CANCELLED email to buyer via new sendOrderStatusUpdateEmail template (Resend) — tracking number + carrier + note included
+          - Vendor must have at least 1 line item in the order OR be ADMIN
+          
+          New email template `sendOrderStatusUpdateEmail`:
+          - Arabic RTL design
+          - Status label in Arabic with emoji (🚚 Shipped, ✅ Delivered)
+          - Tracking number + carrier block (monospaced)
+          - Optional note in amber highlighted box
+          - CTA button linking to /store/orders
+          
+          UI — Buyer page /store/orders (NEW):
+          - Auth-gated (redirects to /login?callbackUrl=/store/orders)
+          - Lists all buyer's orders with:
+            * Order ID (copyable) + date + status badge + total
+            * **3-step visual Timeline**: PAID → SHIPPED → DELIVERED with animated progress line + step icons + per-step dates
+            * Special CANCELLED / FAILED state (red card)
+            * Tracking number card (copyable) when available
+            * Items grid with thumbnails + quantities + line totals
+            * Shipping address
+            * Collapsible "سجلّ التحديثات" with full statusHistory entries (actor + timestamp + note)
+          - Empty state with CTA to /store
+          - Added "طلباتي" quick link on /store header with Package icon
+          
+          UI — Vendor dashboard (enhanced):
+          - "شحن" button now prompts for tracking number + carrier + note sequentially
+          - "تسليم" button prompts for optional delivery note
+          - NEW "إلغاء" button (red) prompts for cancellation reason
+          - Tracking number badge shown inline once set
+          - Error handling: shows alert on 400 (invalid transition) or 403
+          
+          VERIFIED with live test (pymongo + HTTPS NextAuth):
+          ✅ Buyer GET /api/orders returns history
+          ✅ Vendor PATCH SHIPPED + tracking=TRK12345 + carrier=Aramex + note='3 أيام' → saves correctly
+          ✅ statusHistory grew from 1 → 2 entries (PAID + SHIPPED(3 أيام))
+          ✅ Invalid transition SHIPPED→PAID → 400
+          ✅ Other vendor tries to update → 403 'لا يمكنك تعديل حالة هذا الطلب'
+          ✅ Transition to DELIVERED → 200, history now 3 entries
+          ✅ Terminal: DELIVERED→SHIPPED → 400
+          ✅ /store/orders auth gate redirects unauthenticated users
+          ✅ Lint clean
+
+
   - task: "Thawani Pay integration — POST /api/orders (session creation), POST /api/orders/verify, POST /api/webhooks/thawani"
     implemented: true
     working: true

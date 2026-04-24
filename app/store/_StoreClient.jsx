@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Suspense, useMemo } from 'react'
 import Link from 'next/link'
-import { Search, ShoppingBag, ShoppingCart, Store as StoreIcon, Heart } from 'lucide-react'
+import { Search, ShoppingBag, ShoppingCart, Store as StoreIcon, Heart, Package } from 'lucide-react'
 import { PRODUCT_CATEGORIES, categoryLabel, categoryEmoji } from '@/lib/store'
 import ProductCard from '@/components/ProductCard'
 import { useCart } from '@/components/CartContext'
@@ -157,6 +157,17 @@ function CategoryPill({ active, onClick, label, emoji }) {
     <button
       onClick={onClick}
       className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition ${
+        active
+          ? 'border-[#1B3A6B] bg-[#1B3A6B] text-white'
+          : 'border-gray-200 bg-white text-gray-700 hover:border-[#1B3A6B] hover:text-[#1B3A6B]'
+      }`}
+    >
+      <span className="text-sm">{emoji}</span>
+      {label}
+    </button>
+  )
+}
+l border px-3.5 py-1.5 text-xs font-semibold transition ${
         active
           ? 'border-[#1B3A6B] bg-[#1B3A6B] text-white'
           : 'border-gray-200 bg-white text-gray-700 hover:border-[#1B3A6B] hover:text-[#1B3A6B]'

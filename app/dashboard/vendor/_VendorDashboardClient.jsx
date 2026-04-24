@@ -332,13 +332,36 @@ function OrdersTab() {
   }
   useEffect(() => { load() }, [])
 
-  const updateStatus = async (id, status) => {
-    await fetch(`/api/vendor/orders/${id}/status`, {
+  const updateStatus = async (id, status, extras = {}) => {
+    const res = await fetch(`/api/vendor/orders/${id}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, ...extras }),
     })
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}))
+      alert(d.error || 'تعذّر تحديث الحالة')
+      return
+    }
     load()
+  }
+
+  const handleShip = async (o) => {
+    const trackingNumber = window.prompt('رقم التتبّع (اختياري):', '') || ''
+    const carrier = trackingNumber
+      ? window.prompt('شركة الشحن (اختياري، مثل: Aramex، عمان بوست):', '') || ''
+      : ''
+    const note = window.prompt('ملاحظة للمشتري (اختياري):', '') || ''
+    await updateStatus(o.id, 'SHIPPED', { trackingNumber, carrier, note })
+  }
+  const handleDeliver = async (o) => {
+    const note = window.prompt('ملاحظة تسليم (اختياري):', '') || ''
+    await updateStatus(o.id, 'DELIVERED', { note })
+  }
+  const handleCancel = async (o) => {
+    if (!window.confirm('إلغاء الطلب؟ هذا الإجراء لا يمكن التراجع عنه.')) return
+    const note = window.prompt('سبب الإلغاء:', '') || ''
+    await updateStatus(o.id, 'CANCELLED', { note })
   }
 
   if (loading) return <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-[#1B3A6B]" /></div>
@@ -382,16 +405,26 @@ function OrdersTab() {
               <div className="text-red-600">عمولة {COMMISSION_PERCENT}%: − {formatOMR(o.vendorCommission)} ر.ع</div>
               <div className="text-green-700 font-bold">صافي: {formatOMR(o.vendorNet)} ر.ع</div>
             </div>
-            <div className="flex gap-1">
+            <div className="flex flex-wrap gap-1">
               {o.status === 'PAID' && (
-                <button onClick={() => updateStatus(o.id, 'SHIPPED')} className="inline-flex items-center gap-1 rounded-md bg-indigo-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-indigo-700">
-                  <Truck className="h-3 w-3" /> شحن
-                </button>
+                <>
+                  <button onClick={() => handleShip(o)} className="inline-flex items-center gap-1 rounded-md bg-indigo-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-indigo-700">
+                    <Truck className="h-3 w-3" /> شحن
+                  </button>
+                  <button onClick={() => handleCancel(o)} className="inline-flex items-center gap-1 rounded-md border border-red-300 px-3 py-1.5 text-[11px] font-semibold text-red-600 hover:bg-red-50">
+                    إلغاء
+                  </button>
+                </>
               )}
               {o.status === 'SHIPPED' && (
-                <button onClick={() => updateStatus(o.id, 'DELIVERED')} className="inline-flex items-center gap-1 rounded-md bg-green-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-green-700">
+                <button onClick={() => handleDeliver(o)} className="inline-flex items-center gap-1 rounded-md bg-green-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-green-700">
                   <CheckCircle2 className="h-3 w-3" /> تسليم
                 </button>
+              )}
+              {o.trackingNumber && (
+                <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-1 text-[10px] font-mono font-semibold text-amber-700" dir="ltr">
+                  📦 {o.trackingNumber}
+                </span>
               )}
             </div>
           </div>
