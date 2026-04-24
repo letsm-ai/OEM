@@ -4,7 +4,7 @@ import crypto from 'crypto'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { connectDB } from '@/lib/db'
-import { User, Membership, PasswordResetToken, Company, Expert, Availability, Appointment, VendorApplication, Product, ProductReview, Order, Coupon, CouponRedemption, Cart } from '@/lib/models'
+import { User, Membership, PasswordResetToken, Company, Expert, Availability, Appointment, VendorApplication, Product, ProductReview, Order, Coupon, CouponRedemption, Cart, StockMovement } from '@/lib/models'
 
 // ---- Extracted modular handlers ----
 import {
@@ -48,6 +48,7 @@ import { SECTOR_KEYS, GOVERNORATE_KEYS } from '@/lib/directory'
 import { CATEGORY_KEYS, COMMISSION_PERCENT, TIER_DISCOUNT_PERCENT, computeShippingFee, FREE_SHIPPING_THRESHOLD, SHIPPING_FEES_OMR, COD_EXTRA_FEE_OMR } from '@/lib/store'
 import { slugify, uniqueVendorSlug } from '@/lib/slug'
 import { sanitizeVariants, findVariant } from '@/lib/variants'
+import { recordStockMovement, isLowStock, lowStockVariants } from '@/lib/inventory'
 import {
   SPECIALTY_KEYS,
   specialtyLabel,
@@ -2978,6 +2979,7 @@ async function handleRoute(request, { params }) {
             .slice(0, 5)
         : []
       const stock = Math.max(0, parseInt(body?.stock || 0, 10) || 0)
+      const lowStockThreshold = Math.max(0, parseInt(body?.lowStockThreshold ?? 5, 10) || 0)
       // Variants (optional)
       const vres = sanitizeVariants(body?.variants)
       if (!vres.ok) {
@@ -2995,6 +2997,7 @@ async function handleRoute(request, { params }) {
         images,
         // If variants exist, stock is the sum across variants; otherwise use the plain stock input.
         stock: vres.hasVariants ? vres.aggregatedStock : stock,
+        lowStockThreshold,
         hasVariants: vres.hasVariants,
         variants: vres.variants,
         isActive: true,
@@ -3002,6 +3005,38 @@ async function handleRoute(request, { params }) {
         createdAt: new Date(),
         updatedAt: new Date(),
       })
+      // Record INIT stock movements
+      if (vres.hasVariants) {
+        for (const v of vres.variants) {
+          if ((v.stock || 0) > 0) {
+            await recordStockMovement({
+              productId: product._id,
+              vendorId: session.user.id,
+              variantId: v.id,
+              variantName: v.name,
+              type: 'INIT',
+              qtyBefore: 0,
+              qtyAfter: v.stock,
+              qtyDelta: v.stock,
+              note: 'إنشاء المنتج',
+              createdBy: session.user.id,
+              createdByName: dbUser.name || '',
+            })
+          }
+        }
+      } else if (stock > 0) {
+        await recordStockMovement({
+          productId: product._id,
+          vendorId: session.user.id,
+          type: 'INIT',
+          qtyBefore: 0,
+          qtyAfter: stock,
+          qtyDelta: stock,
+          note: 'إنشاء المنتج',
+          createdBy: session.user.id,
+          createdByName: dbUser.name || '',
+        })
+      }
       const po = product.toObject()
       return handleCORS(
         NextResponse.json({
@@ -3068,6 +3103,9 @@ async function handleRoute(request, { params }) {
         product.stock = Math.max(0, parseInt(body.stock, 10) || 0)
       }
       if (body.isActive !== undefined) product.isActive = !!body.isActive
+      if (body.lowStockThreshold !== undefined) {
+        product.lowStockThreshold = Math.max(0, parseInt(body.lowStockThreshold, 10) || 0)
+      }
       // Variants (if provided, replace whole array)
       if (body.variants !== undefined) {
         const vres = sanitizeVariants(body.variants)
@@ -3423,6 +3461,213 @@ async function handleRoute(request, { params }) {
             status: x._id,
             count: x.count,
           })),
+        })
+      )
+    }
+
+    // ---- GET /vendor/inventory (vendor only — products + stock status + low-stock flags) ----
+    if (route === '/vendor/inventory' && method === 'GET') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
+      }
+      await connectDB()
+      const dbUser = await User.findById(session.user.id).lean()
+      if (!dbUser || (dbUser.role !== 'VENDOR' && dbUser.role !== 'ADMIN')) {
+        return handleCORS(
+          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
+        )
+      }
+      const url = new URL(request.url)
+      const onlyLow = url.searchParams.get('lowStock') === '1'
+      const products = await Product.find({ vendorId: session.user.id }).lean()
+      const enriched = products.map((p) => ({
+        id: p._id,
+        nameAr: p.nameAr,
+        category: p.category,
+        images: (p.images || []).slice(0, 1),
+        price: p.price,
+        stock: p.stock,
+        lowStockThreshold: p.lowStockThreshold ?? 5,
+        isActive: p.isActive,
+        hasVariants: !!p.hasVariants,
+        variants: (p.variants || []).map((v) => ({
+          id: v.id,
+          name: v.name,
+          sku: v.sku,
+          stock: v.stock,
+          price: v.price,
+        })),
+        isLow: isLowStock(p),
+        lowItems: lowStockVariants(p),
+      }))
+      const result = onlyLow ? enriched.filter((p) => p.isLow) : enriched
+      return handleCORS(
+        NextResponse.json({
+          products: result,
+          summary: {
+            total: products.length,
+            active: products.filter((p) => p.isActive).length,
+            lowCount: enriched.filter((p) => p.isLow).length,
+          },
+        })
+      )
+    }
+
+    // ---- GET /products/:id/stock/movements (owner or admin) ----
+    const stockMovementsMatch = route.match(
+      /^\/products\/([A-Za-z0-9-]+)\/stock\/movements$/
+    )
+    if (stockMovementsMatch && method === 'GET') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
+      }
+      await connectDB()
+      const id = stockMovementsMatch[1]
+      const p = await Product.findById(id).lean()
+      if (!p) {
+        return handleCORS(
+          NextResponse.json({ error: 'المنتج غير موجود' }, { status: 404 })
+        )
+      }
+      if (p.vendorId !== session.user.id && session.user.role !== 'ADMIN') {
+        return handleCORS(
+          NextResponse.json({ error: 'لا يمكنك رؤية سجل هذا المنتج' }, { status: 403 })
+        )
+      }
+      const movements = await StockMovement.find({ productId: id })
+        .sort({ createdAt: -1 })
+        .limit(200)
+        .lean()
+      return handleCORS(
+        NextResponse.json({
+          movements: movements.map((m) => ({
+            id: m._id,
+            ...m,
+            _id: undefined,
+          })),
+        })
+      )
+    }
+
+    // ---- POST /products/:id/stock/adjust (owner or admin — manual stock adjust) ----
+    const stockAdjustMatch = route.match(
+      /^\/products\/([A-Za-z0-9-]+)\/stock\/adjust$/
+    )
+    if (stockAdjustMatch && method === 'POST') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
+      }
+      await connectDB()
+      const id = stockAdjustMatch[1]
+      const product = await Product.findById(id)
+      if (!product) {
+        return handleCORS(
+          NextResponse.json({ error: 'المنتج غير موجود' }, { status: 404 })
+        )
+      }
+      if (product.vendorId !== session.user.id && session.user.role !== 'ADMIN') {
+        return handleCORS(
+          NextResponse.json({ error: 'لا يمكنك تعديل مخزون هذا المنتج' }, { status: 403 })
+        )
+      }
+      const body = await request.json().catch(() => ({}))
+      const type = String(body?.type || 'ADJUST').toUpperCase()
+      if (!['RESTOCK', 'ADJUST', 'RETURN'].includes(type)) {
+        return handleCORS(
+          NextResponse.json({ error: 'نوع الحركة غير صحيح' }, { status: 400 })
+        )
+      }
+      const delta = parseInt(body?.delta, 10)
+      if (!Number.isFinite(delta) || delta === 0) {
+        return handleCORS(
+          NextResponse.json({ error: 'قيمة التعديل غير صحيحة' }, { status: 400 })
+        )
+      }
+      const variantId = String(body?.variantId || '').trim()
+      const note = String(body?.note || '').slice(0, 300)
+      const dbUser = await User.findById(session.user.id).lean()
+
+      // Variant-specific adjust
+      if (variantId) {
+        if (!product.hasVariants || !product.variants?.length) {
+          return handleCORS(
+            NextResponse.json({ error: 'المنتج لا يحتوي على خيارات' }, { status: 400 })
+          )
+        }
+        const vIdx = product.variants.findIndex((v) => v.id === variantId)
+        if (vIdx < 0) {
+          return handleCORS(
+            NextResponse.json({ error: 'الخيار غير موجود' }, { status: 404 })
+          )
+        }
+        const v = product.variants[vIdx]
+        const before = Number(v.stock || 0)
+        const after = Math.max(0, before + delta)
+        const actualDelta = after - before
+        product.variants[vIdx].stock = after
+        // Recalculate aggregate stock as sum
+        product.stock = product.variants.reduce((s, x) => s + Number(x.stock || 0), 0)
+        product.updatedAt = new Date()
+        await product.save()
+        await recordStockMovement({
+          productId: product._id,
+          vendorId: product.vendorId,
+          variantId: v.id,
+          variantName: v.name,
+          type,
+          qtyBefore: before,
+          qtyAfter: after,
+          qtyDelta: actualDelta,
+          note,
+          createdBy: session.user.id,
+          createdByName: dbUser?.name || '',
+        })
+        return handleCORS(
+          NextResponse.json({
+            success: true,
+            newStock: after,
+            variantStock: after,
+            productStock: product.stock,
+            delta: actualDelta,
+          })
+        )
+      }
+
+      // Simple product adjust (no variant)
+      if (product.hasVariants) {
+        return handleCORS(
+          NextResponse.json(
+            { error: 'يجب تحديد الخيار (variantId) لهذا المنتج' },
+            { status: 400 }
+          )
+        )
+      }
+      const before = Number(product.stock || 0)
+      const after = Math.max(0, before + delta)
+      const actualDelta = after - before
+      product.stock = after
+      product.updatedAt = new Date()
+      await product.save()
+      await recordStockMovement({
+        productId: product._id,
+        vendorId: product.vendorId,
+        type,
+        qtyBefore: before,
+        qtyAfter: after,
+        qtyDelta: actualDelta,
+        note,
+        createdBy: session.user.id,
+        createdByName: dbUser?.name || '',
+      })
+      return handleCORS(
+        NextResponse.json({
+          success: true,
+          newStock: after,
+          productStock: after,
+          delta: actualDelta,
         })
       )
     }
@@ -3929,6 +4174,15 @@ async function handleRoute(request, { params }) {
 
       // Decrement stock + salesCount atomically per product (and per-variant if applicable)
       for (const it of resolvedItems) {
+        // Capture before-state for stock movement record
+        const productBefore = byId[it.productId]
+        let qtyBefore = 0
+        if (it.variantId) {
+          const v = productBefore.variants?.find((x) => x.id === it.variantId)
+          qtyBefore = Number(v?.stock || 0)
+        } else {
+          qtyBefore = Number(productBefore?.stock || 0)
+        }
         if (it.variantId) {
           // Variant-based stock: decrement the matching variant AND the aggregate stock
           await Product.updateOne(
@@ -3948,6 +4202,20 @@ async function handleRoute(request, { params }) {
             $set: { updatedAt: new Date() },
           })
         }
+        // Record SALE stock movement (fire-and-forget, best effort)
+        await recordStockMovement({
+          productId: it.productId,
+          vendorId: it.vendorId,
+          variantId: it.variantId,
+          variantName: it.variantName,
+          type: 'SALE',
+          qtyBefore,
+          qtyAfter: Math.max(0, qtyBefore - it.quantity),
+          qtyDelta: -it.quantity,
+          note: `بيع ضمن طلب`,
+          createdBy: 'SYSTEM',
+          createdByName: 'نظام المبيعات',
+        })
       }
 
       const order = await Order.create({

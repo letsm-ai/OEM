@@ -29,6 +29,10 @@ import {
   TrendingUp,
   BarChart3,
   Tag,
+  Warehouse,
+  History,
+  AlertTriangle,
+  Minus,
 } from 'lucide-react'
 import {
   PRODUCT_CATEGORIES,
@@ -53,6 +57,7 @@ export default function VendorDashboardClient() {
         <div className="mb-5 flex gap-1 rounded-xl border border-gray-200 bg-white p-1 shadow-sm overflow-x-auto">
           <TabBtn active={tab === 'analytics'} onClick={() => setTab('analytics')} icon={<BarChart3 className="h-4 w-4" />} label="التحليلات" />
           <TabBtn active={tab === 'products'} onClick={() => setTab('products')} icon={<Package className="h-4 w-4" />} label="منتجاتي" />
+          <TabBtn active={tab === 'inventory'} onClick={() => setTab('inventory')} icon={<Warehouse className="h-4 w-4" />} label="المخزون" />
           <TabBtn active={tab === 'orders'} onClick={() => setTab('orders')} icon={<ShoppingCart className="h-4 w-4" />} label="الطلبات" />
           <TabBtn active={tab === 'earnings'} onClick={() => setTab('earnings')} icon={<Wallet className="h-4 w-4" />} label="الأرباح" />
           <TabBtn active={tab === 'profile'} onClick={() => setTab('profile')} icon={<SettingsIcon className="h-4 w-4" />} label="بروفايل المتجر" />
@@ -60,6 +65,7 @@ export default function VendorDashboardClient() {
 
         {tab === 'analytics' && <AnalyticsTab />}
         {tab === 'products' && <ProductsTab />}
+        {tab === 'inventory' && <InventoryTab />}
         {tab === 'orders' && <OrdersTab />}
         {tab === 'earnings' && <EarningsTab />}
         {tab === 'profile' && <ProfileTab />}
@@ -79,6 +85,396 @@ function TabBtn({ active, onClick, icon, label }) {
       {icon}
       {label}
     </button>
+  )
+}
+
+/* --------------- INVENTORY (vendor) --------------- */
+function InventoryTab() {
+  const [items, setItems] = useState([])
+  const [summary, setSummary] = useState({ total: 0, active: 0, lowCount: 0 })
+  const [loading, setLoading] = useState(true)
+  const [onlyLow, setOnlyLow] = useState(false)
+  const [adjustTarget, setAdjustTarget] = useState(null) // { productId, productName, variantId?, variantName?, currentStock }
+  const [historyTarget, setHistoryTarget] = useState(null) // productId to show history
+
+  const load = async (low = onlyLow) => {
+    setLoading(true)
+    try {
+      const res = await fetch(`/api/vendor/inventory${low ? '?lowStock=1' : ''}`)
+      const d = await res.json()
+      if (res.ok) {
+        setItems(d.products || [])
+        setSummary(d.summary || { total: 0, active: 0, lowCount: 0 })
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+  useEffect(() => { load(onlyLow) }, [onlyLow])
+
+  return (
+    <div className="space-y-4">
+      {/* Summary bar */}
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded-xl border border-gray-200 bg-white p-3">
+          <div className="text-[11px] text-gray-500">إجمالي المنتجات</div>
+          <div className="text-xl font-extrabold text-[#1B3A6B]">{summary.total}</div>
+        </div>
+        <div className="rounded-xl border border-gray-200 bg-white p-3">
+          <div className="text-[11px] text-gray-500">منتجات نشطة</div>
+          <div className="text-xl font-extrabold text-green-700">{summary.active}</div>
+        </div>
+        <div className={`rounded-xl border p-3 ${summary.lowCount > 0 ? 'border-amber-300 bg-amber-50' : 'border-gray-200 bg-white'}`}>
+          <div className="text-[11px] text-gray-500">منتجات انخفاض مخزون</div>
+          <div className={`text-xl font-extrabold ${summary.lowCount > 0 ? 'text-amber-800' : 'text-gray-700'}`}>
+            {summary.lowCount}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between">
+        <label className="inline-flex cursor-pointer items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={onlyLow}
+            onChange={(e) => setOnlyLow(e.target.checked)}
+            className="h-4 w-4 accent-[#C9A84C]"
+          />
+          <span className="font-semibold text-gray-700">عرض المنتجات المنخفضة فقط</span>
+        </label>
+        <button
+          onClick={() => load(onlyLow)}
+          className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-semibold hover:bg-gray-50"
+        >
+          تحديث
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-16">
+          <Loader2 className="h-6 w-6 animate-spin text-[#1B3A6B]" />
+        </div>
+      ) : items.length === 0 ? (
+        <div className="rounded-xl border border-gray-200 bg-white p-8 text-center text-sm text-gray-500">
+          {onlyLow ? 'لا توجد منتجات منخفضة المخزون 🎉' : 'لا توجد منتجات بعد'}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {items.map((p) => (
+            <InventoryCard
+              key={p.id}
+              product={p}
+              onAdjust={(variant) => setAdjustTarget({
+                productId: p.id,
+                productName: p.nameAr,
+                variantId: variant?.id || '',
+                variantName: variant?.name || '',
+                currentStock: variant ? variant.stock : p.stock,
+              })}
+              onHistory={() => setHistoryTarget(p.id)}
+            />
+          ))}
+        </div>
+      )}
+
+      {adjustTarget && (
+        <AdjustStockModal
+          target={adjustTarget}
+          onClose={() => setAdjustTarget(null)}
+          onSaved={() => { setAdjustTarget(null); load(onlyLow) }}
+        />
+      )}
+      {historyTarget && (
+        <StockHistoryModal
+          productId={historyTarget}
+          onClose={() => setHistoryTarget(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+function InventoryCard({ product, onAdjust, onHistory }) {
+  return (
+    <div className={`rounded-xl border bg-white p-4 shadow-sm ${product.isLow ? 'border-amber-300 ring-1 ring-amber-200' : 'border-gray-200'}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3 min-w-0 flex-1">
+          <div className="h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
+            {product.images?.[0] ? (
+              <img src={product.images[0]} alt="" className="h-full w-full object-cover" />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center text-2xl opacity-40">📦</div>
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <div className="truncate text-sm font-bold text-[#1B3A6B]">{product.nameAr}</div>
+              {product.isLow && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">
+                  <AlertTriangle className="h-3 w-3" /> منخفض
+                </span>
+              )}
+              {!product.isActive && (
+                <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-bold text-gray-600">متوقّف</span>
+              )}
+            </div>
+            <div className="mt-0.5 text-[11px] text-gray-500">
+              السعر: {formatOMR(product.price)} ر.ع · الحد الأدنى: {product.lowStockThreshold}
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-shrink-0 flex-col items-end gap-1">
+          <div className={`text-2xl font-extrabold ${product.isLow ? 'text-amber-700' : 'text-[#1B3A6B]'}`}>
+            {product.stock}
+          </div>
+          <div className="text-[10px] text-gray-400">قطعة</div>
+        </div>
+      </div>
+
+      {product.hasVariants && product.variants?.length > 0 && (
+        <div className="mt-3 space-y-1.5 rounded-lg border border-gray-100 bg-gray-50 p-2">
+          <div className="text-[11px] font-bold text-gray-600">الخيارات:</div>
+          {product.variants.map((v) => {
+            const isLow = v.stock <= product.lowStockThreshold
+            return (
+              <div
+                key={v.id}
+                className={`flex items-center justify-between gap-2 rounded-md px-2 py-1.5 ${isLow ? 'bg-amber-50' : 'bg-white'}`}
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-gray-800">{v.name}</span>
+                    {v.sku && <span dir="ltr" className="text-[10px] text-gray-400">SKU: {v.sku}</span>}
+                    {isLow && (
+                      <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-800">منخفض</span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className={`text-sm font-extrabold ${isLow ? 'text-amber-700' : 'text-[#1B3A6B]'}`}>{v.stock}</div>
+                  <button
+                    onClick={() => onAdjust(v)}
+                    className="rounded-md border border-gray-300 px-2 py-0.5 text-[11px] font-semibold hover:bg-gray-50"
+                  >
+                    تعديل
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      <div className="mt-3 flex gap-2">
+        {!product.hasVariants && (
+          <button
+            onClick={() => onAdjust(null)}
+            className="inline-flex items-center gap-1 rounded-lg bg-[#C9A84C] px-3 py-1.5 text-xs font-bold text-[#1B3A6B] hover:bg-[#b89440]"
+          >
+            <Edit2 className="h-3.5 w-3.5" /> تعديل المخزون
+          </button>
+        )}
+        <button
+          onClick={onHistory}
+          className="inline-flex items-center gap-1 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-gray-50"
+        >
+          <History className="h-3.5 w-3.5" /> سجل الحركات
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function AdjustStockModal({ target, onClose, onSaved }) {
+  const [type, setType] = useState('RESTOCK')
+  const [delta, setDelta] = useState(1)
+  const [note, setNote] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const newStock = Math.max(0, (target.currentStock || 0) + Number(delta || 0))
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setError('')
+    if (!Number.isFinite(Number(delta)) || Number(delta) === 0) {
+      return setError('قيمة التعديل لا يمكن أن تكون صفراً')
+    }
+    setLoading(true)
+    const res = await fetch(`/api/products/${target.productId}/stock/adjust`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        delta: Number(delta),
+        type,
+        note,
+        variantId: target.variantId || undefined,
+      }),
+    })
+    const d = await res.json().catch(() => ({}))
+    setLoading(false)
+    if (!res.ok) return setError(d.error || 'خطأ')
+    onSaved()
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4">
+      <form onSubmit={submit} className="mt-10 w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-base font-bold text-[#1B3A6B]">تعديل المخزون</h3>
+          <button type="button" onClick={onClose} className="rounded-md p-1 hover:bg-gray-100">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="mb-3 rounded-lg border border-gray-200 bg-gray-50 p-2">
+          <div className="text-xs font-bold text-gray-800">{target.productName}</div>
+          {target.variantName && (
+            <div className="text-[11px] text-gray-600">الخيار: {target.variantName}</div>
+          )}
+          <div className="mt-1 text-[11px] text-gray-500">
+            المخزون الحالي: <b className="text-[#1B3A6B]">{target.currentStock}</b> قطعة
+          </div>
+        </div>
+        <div className="mb-3 grid gap-2">
+          <label className="text-xs font-semibold text-gray-700">نوع الحركة</label>
+          <select
+            value={type}
+            onChange={(e) => setType(e.target.value)}
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-[#1B3A6B]"
+          >
+            <option value="RESTOCK">🔼 شحنة جديدة (RESTOCK)</option>
+            <option value="ADJUST">⚙️ تعديل يدوي (ADJUST)</option>
+            <option value="RETURN">↩️ إرجاع (RETURN)</option>
+          </select>
+        </div>
+        <div className="mb-3 grid gap-2">
+          <label className="text-xs font-semibold text-gray-700">
+            قيمة التعديل <span className="text-[10px] text-gray-400">(موجب = زيادة، سالب = نقصان)</span>
+          </label>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setDelta((d) => Number(d) - 1)}
+              className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50"
+            >
+              <Minus className="h-4 w-4" />
+            </button>
+            <input
+              type="number"
+              value={delta}
+              onChange={(e) => setDelta(e.target.value)}
+              className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-center text-sm font-bold outline-none focus:border-[#1B3A6B]"
+            />
+            <button
+              type="button"
+              onClick={() => setDelta((d) => Number(d) + 1)}
+              className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-50"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="text-[11px] text-gray-500">
+            المخزون الجديد: <b className="text-[#1B3A6B]">{newStock}</b> قطعة
+          </div>
+        </div>
+        <div className="mb-3 grid gap-2">
+          <label className="text-xs font-semibold text-gray-700">ملاحظة (اختياري)</label>
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value.slice(0, 300))}
+            rows={2}
+            maxLength={300}
+            placeholder="مثال: شحنة جديدة من المورد، أو تالف بسبب الرطوبة..."
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-[#1B3A6B]"
+          />
+        </div>
+        {error && (
+          <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-800">
+            <AlertCircle className="inline-block h-3.5 w-3.5" /> {error}
+          </div>
+        )}
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-semibold hover:bg-gray-50">
+            إلغاء
+          </button>
+          <button
+            type="submit"
+            disabled={loading}
+            className="inline-flex items-center gap-1 rounded-lg bg-[#C9A84C] px-4 py-1.5 text-sm font-bold text-[#1B3A6B] hover:bg-[#b89440] disabled:opacity-50"
+          >
+            {loading && <Loader2 className="h-3.5 w-3.5 animate-spin" />} حفظ
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+function StockHistoryModal({ productId, onClose }) {
+  const [movements, setMovements] = useState([])
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    ;(async () => {
+      const res = await fetch(`/api/products/${productId}/stock/movements`)
+      const d = await res.json()
+      setMovements(d?.movements || [])
+      setLoading(false)
+    })()
+  }, [productId])
+
+  const typeLabels = {
+    INIT: { label: 'إنشاء', color: 'text-blue-700 bg-blue-50' },
+    RESTOCK: { label: 'شحنة', color: 'text-green-700 bg-green-50' },
+    SALE: { label: 'بيع', color: 'text-purple-700 bg-purple-50' },
+    ADJUST: { label: 'تعديل', color: 'text-amber-700 bg-amber-50' },
+    RETURN: { label: 'إرجاع', color: 'text-teal-700 bg-teal-50' },
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4">
+      <div className="mt-10 w-full max-w-2xl rounded-2xl bg-white p-5 shadow-xl">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-base font-bold text-[#1B3A6B]">سجل حركات المخزون</h3>
+          <button onClick={onClose} className="rounded-md p-1 hover:bg-gray-100">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        {loading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-6 w-6 animate-spin text-[#1B3A6B]" />
+          </div>
+        ) : movements.length === 0 ? (
+          <div className="py-10 text-center text-sm text-gray-500">لا توجد حركات بعد</div>
+        ) : (
+          <div className="space-y-1.5 max-h-[60vh] overflow-y-auto">
+            {movements.map((m) => {
+              const info = typeLabels[m.type] || { label: m.type, color: 'text-gray-700 bg-gray-100' }
+              return (
+                <div key={m.id} className="flex items-center gap-3 rounded-lg border border-gray-200 p-2.5">
+                  <span className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${info.color}`}>
+                    {info.label}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    {m.variantName && <div className="text-[11px] text-gray-500">{m.variantName}</div>}
+                    <div className="text-xs text-gray-700">
+                      {m.qtyBefore} → <b className="text-[#1B3A6B]">{m.qtyAfter}</b>
+                      <span className={`ms-1 font-bold ${m.qtyDelta >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                        ({m.qtyDelta >= 0 ? '+' : ''}{m.qtyDelta})
+                      </span>
+                    </div>
+                    {m.note && <div className="mt-0.5 text-[11px] text-gray-500 line-clamp-1">{m.note}</div>}
+                  </div>
+                  <div className="flex-shrink-0 text-end text-[10px] text-gray-400">
+                    {new Date(m.createdAt).toLocaleString('ar-OM', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                    {m.createdByName && <div className="mt-0.5">{m.createdByName}</div>}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -428,6 +824,7 @@ function ProductFormModal({ product, onClose, onSaved }) {
     price: product?.price ?? '',
     category: product?.category || 'OTHER',
     stock: product?.stock ?? 0,
+    lowStockThreshold: product?.lowStockThreshold ?? 5,
     images: product?.images || [],
     hasVariants: !!product?.hasVariants,
     variants: Array.isArray(product?.variants) ? product.variants : [],
@@ -508,6 +905,7 @@ function ProductFormModal({ product, onClose, onSaved }) {
     const payload = {
       ...form,
       price,
+      lowStockThreshold: parseInt(form.lowStockThreshold, 10) || 0,
       variants: form.hasVariants ? form.variants.map((v) => ({
         id: v.id,
         name: String(v.name || '').trim(),
@@ -548,7 +946,14 @@ function ProductFormModal({ product, onClose, onSaved }) {
               <input required type="number" step="0.001" min="0" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} className="input" />
             </F>
             <F label="الكمية في المخزون">
-              <input type="number" min="0" value={form.stock} onChange={(e) => setForm({ ...form, stock: e.target.value })} className="input" />
+              <input type="number" min="0" value={form.stock} onChange={(e) => setForm({ ...form, stock: e.target.value })} className="input" disabled={form.hasVariants} />
+              {form.hasVariants && (
+                <div className="mt-0.5 text-[10px] text-gray-500">يُحسب تلقائياً من مجموع خيارات المنتج</div>
+              )}
+            </F>
+            <F label="حد التنبيه بانخفاض المخزون">
+              <input type="number" min="0" value={form.lowStockThreshold} onChange={(e) => setForm({ ...form, lowStockThreshold: e.target.value })} className="input" />
+              <div className="mt-0.5 text-[10px] text-gray-500">سيظهر تنبيه عند وصول المخزون لهذا الرقم أو أقل</div>
             </F>
             <F label="الفئة">
               <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className="input">
