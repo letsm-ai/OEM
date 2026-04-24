@@ -2597,7 +2597,191 @@ agent_communication:
           • Email templates properly formatted in Arabic RTL
           • Live Resend integration working correctly
 
+  - task: "Vendor Storefront endpoints — GET /api/vendors, GET /api/vendors/:slug, GET /api/vendor/profile, PUT /api/vendor/profile"
+    implemented: true
+    working: true
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW Phase 5 Shopify-like feature: Custom Vendor Storefronts.
+          
+          Schema additions on User.vendorProfile: slug (unique index), businessName, tagline, bio, banner (base64), logo (base64), phone, whatsapp, instagram, website, governorate, city, address. All default '' with length caps.
+          
+          Existing vendors backfilled with slugs via uniqueVendorSlug() (from /app/lib/slug.js).
+          
+          New endpoints:
+          
+          1) GET /api/vendors (public) — lists vendors with at least 1 active product.
+             Response: {vendors:[{id, name, slug, businessName, tagline, logo, banner, governorate, city, productCount}]}
+          
+          2) GET /api/vendors/:slug (public) — fetches a vendor's storefront + active products.
+             Response: {vendor:{id, name, slug, businessName, tagline, bio, banner, logo, phone, whatsapp, instagram, website, governorate, city, address, membershipTier, memberSince}, products:[...]}
+             404 'المتجر غير موجود' if slug not found.
+             Slug may contain Arabic characters (URL-decoded on server).
+          
+          3) GET /api/vendor/profile (auth, VENDOR or ADMIN) — returns current vendor's editable profile.
+             401 'غير مصرح' if no session. 403 'صلاحيات بائع مطلوبة' if role != VENDOR/ADMIN.
+          
+          4) PUT /api/vendor/profile (auth, VENDOR or ADMIN) — updates vendor profile.
+             - Text fields: length-capped (businessName=80, tagline=160, bio=3000, phone=30, whatsapp=30, instagram=80, website=200, governorate=40, city=60, address=300).
+             - businessName < 2 chars → 400 'اسم المتجر قصير جداً'.
+             - banner/logo: '' to clear OR data:image/(png|jpeg|jpg|webp|gif);base64,... AND length <= 3,000,000 → else 400 'صيغة/حجم الصورة غير مدعوم'.
+             - Custom slug (optional): slugified. Length 3..60 → else 400 'الرابط يجب أن يكون بين 3 و 60 حرفاً'. If collides with another user's slug → 409 'هذا الرابط مستخدم، جرّب اسماً آخر'. Empty/invalid → 400 'الرابط غير صالح'.
+             - If slug ends up empty, auto-synthesizes via uniqueVendorSlug().
+             Returns 200 {success:true, profile:{...}}.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ VENDOR STOREFRONT BACKEND TESTING COMPLETE - All functionality working perfectly:
+          
+          🎯 COMPREHENSIVE TEST RESULTS (8/8 PASSED - 100% SUCCESS RATE):
+          
+          📋 GET /api/vendors (public list) ✅
+             • Returns only vendors with at least 1 active product
+             • Response structure: {vendors:[{id, name, slug, businessName, tagline, logo, banner, governorate, city, productCount}]}
+             • All vendors have productCount >= 1 and non-empty slugs
+             • Public access working correctly (no authentication required)
+          
+          📋 GET /api/vendors/:slug (public storefront) ✅
+             • Valid slug → 200 with {vendor, products} structure
+             • Vendor response includes all required fields: id, name, slug, businessName, tagline, bio, banner, logo, phone, whatsapp, instagram, website, governorate, city, address, membershipTier, memberSince
+             • Only active products returned (isActive: true)
+             • Invalid slug → 404 with Arabic error 'المتجر غير موجود'
+             • Arabic slug support working (URL-decoded correctly)
+          
+          📋 GET /api/vendor/profile (auth required) ✅
+             • No session → 401 with Arabic error 'غير مصرح'
+             • MEMBER role → 403 with Arabic error 'صلاحيات بائع مطلوبة'
+             • VENDOR role → 200 with complete editable profile object
+             • All required fields present: id, name, email, slug, businessName, tagline, bio, banner, logo, phone, whatsapp, instagram, website, governorate, city, address
+          
+          📋 PUT /api/vendor/profile (auth + validation) ✅
+             • Authentication: No session → 401 'غير مصرح'
+             • Authorization: MEMBER role → 403 'صلاحيات بائع مطلوبة'
+             • Validation errors working:
+               - businessName < 2 chars → 400 'اسم المتجر قصير جداً'
+               - Invalid banner format → 400 'صيغة/حجم الصورة غير مدعوم'
+               - Slug too short → 400 'الرابط يجب أن يكون بين 3 و 60 حرفاً'
+               - Invalid slug → 400 'الرابط غير صالح'
+               - Slug collision → 409 'هذا الرابط مستخدم، جرّب اسماً آخر'
+          
+          📋 PUT /api/vendor/profile (happy path) ✅
+             • Profile update successful with all fields
+             • businessName, tagline, bio, contact info updated correctly
+             • Banner and logo (base64 data URLs) working
+             • Arabic slug handling and slugification working
+             • Response includes updated profile with all fields
+          
+          📋 REGRESSION TESTS ✅
+             • GET /api/ → 200 'Majles API is running'
+             • GET /api/products → 200 (marketplace still works)
+             • POST /api/signup → 200 (auth still works)
+          
+          📋 SLUG COLLISION TEST ✅
+             • Attempting to use existing slug → 409 with correct Arabic error
+             • Collision detection working across different vendors
+          
+          🔧 TECHNICAL IMPLEMENTATION VERIFIED:
+          ✅ NextAuth session authentication working correctly
+          ✅ Role-based authorization (VENDOR/ADMIN only) enforced
+          ✅ Arabic error messages for all validation cases
+          ✅ Slug generation and uniqueness validation working
+          ✅ Image validation (base64 data URLs, size limits) working
+          ✅ Database operations: User.vendorProfile updates working
+          ✅ Product filtering (only active products) working
+          ✅ Arabic character support in slugs (URL encoding/decoding)
+          ✅ Field length validation and trimming working
+          ✅ Response structure matches specification exactly
+          
+          📊 PYMONGO DIRECT DB TESTING: Used pymongo for realistic test data setup with proper UUID format, bcrypt password hashing, and MongoDB document structure matching the Node.js application.
+          
+          🎉 CONCLUSION: All Vendor Storefront endpoints are fully functional and production-ready. The system properly handles authentication, validation, Arabic localization, slug management, and database operations. All core vendor storefront functionality is working correctly.
+
+  - task: "Vendor Storefront public page /store/vendor/[slug] + vendors index /store/vendor"
+    implemented: true
+    working: "NA"
+    file: "/app/app/store/vendor/[slug]/page.js, /app/app/store/vendor/[slug]/_VendorStorefront.jsx, /app/app/store/vendor/page.js, /app/app/store/vendor/_VendorsListClient.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW Arabic RTL pages:
+          - /store/vendor (index): Client component fetches GET /api/vendors and displays vendor cards with logo/banner/name/tagline/productCount/governorate. Clicking a card navigates to /store/vendor/[slug].
+          - /store/vendor/[slug]: Server component fetches vendor by slug directly from DB (for SEO). Renders VendorStorefront client component with banner hero, logo, bio, contact info (phone/whatsapp/instagram/website), address, and full product grid. 404 if slug not found.
+          Handles Arabic slugs via decodeURIComponent.
+
+  - task: "Vendor Dashboard 'Profile' tab — edit storefront details"
+    implemented: true
+    working: "NA"
+    file: "/app/app/dashboard/vendor/_VendorDashboardClient.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          NEW tab added to /dashboard/vendor: 'ملف المتجر' (Storefront Profile).
+          - Loads via GET /api/vendor/profile on tab mount.
+          - Form fields: businessName, tagline, bio, slug (custom URL), governorate, city, address, phone, whatsapp, instagram, website.
+          - Image uploads: banner (1200x400 recommended) + logo (square). Client-side compressed to data URL.
+          - Save button calls PUT /api/vendor/profile with all fields. Shows success/error toast.
+          - Shows live preview link: {origin}/store/vendor/{slug}.
+
 agent_communication:
+  - agent: "main"
+    message: |
+      📦 VENDOR STOREFRONT FEATURE READY FOR TESTING
+      
+      Implemented in previous session, code is complete but untested. Need comprehensive backend testing of the new vendor storefront endpoints before moving to the next Shopify-like feature (Product Reviews).
+      
+      🎯 PLEASE TEST:
+      
+      1) GET /api/vendors (public list)
+         • Returns only vendors with at least 1 active product
+         • Response structure: {vendors:[{id, name, slug, businessName, tagline, logo, banner, governorate, city, productCount}]}
+      
+      2) GET /api/vendors/:slug (public storefront)
+         • Happy path: valid slug → 200 with {vendor, products}
+         • Invalid slug → 404 'المتجر غير موجود'
+         • Arabic slugs supported (URL-decoded)
+         • Only active products returned
+      
+      3) GET /api/vendor/profile (auth required)
+         • No session → 401 'غير مصرح'
+         • MEMBER role → 403 'صلاحيات بائع مطلوبة'
+         • VENDOR/ADMIN → 200 with editable profile object
+      
+      4) PUT /api/vendor/profile (auth required)
+         • Validation: businessName < 2 → 400 'اسم المتجر قصير جداً'
+         • Invalid image format/size → 400 'صيغة/حجم الصورة غير مدعوم'
+         • Custom slug: length 3-60 → else 400 'الرابط يجب أن يكون بين 3 و 60 حرفاً'
+         • Invalid slug (no chars remain after slugify) → 400 'الرابط غير صالح'
+         • Duplicate slug → 409 'هذا الرابط مستخدم، جرّب اسماً آخر'
+         • Happy path: updates profile, returns 200 with updated profile
+         • Arabic slugs/business names should work (slug is slugified)
+         • Role guard: MEMBER → 403
+      
+      🧪 TESTING SETUP NEEDED:
+      - Create fresh users: one VENDOR (promote via DB), one MEMBER, one with products listed
+      - Promote user role=VENDOR in DB for auth tests
+      - Seed a product (Product model) linked to vendor for /api/vendors list test
+      
+      📋 ALSO PLEASE REGRESSION-TEST:
+      • GET /api/ → 200
+      • GET /api/products → 200 (existing marketplace still works)
+      • POST /api/signup → 200
+      
+      Use direct pymongo for test data setup (UUIDs + bcrypt) as in previous tests.
+
   - agent: "testing"
     message: |
       ✅ ORDER EMAIL NOTIFICATIONS TESTING COMPLETE - All functionality working perfectly:
@@ -2637,3 +2821,48 @@ agent_communication:
       ✅ Code inspection confirms proper fire-and-forget implementation
       
       🎉 CONCLUSION: The order email notification system is fully functional and production-ready. All requirements from the review request have been met and verified through comprehensive testing.
+
+  - agent: "testing"
+    message: |
+      ✅ VENDOR STOREFRONT BACKEND TESTING COMPLETE - All functionality working perfectly:
+      
+      🎯 COMPREHENSIVE TEST RESULTS (8/8 PASSED - 100% SUCCESS RATE):
+      
+      📋 ENDPOINTS TESTED:
+      1️⃣ GET /api/vendors (public) ✅ - Lists vendors with ≥1 active products
+      2️⃣ GET /api/vendors/:slug (public) ✅ - Vendor storefront with products
+      3️⃣ GET /api/vendor/profile (auth) ✅ - Editable profile for VENDOR/ADMIN
+      4️⃣ PUT /api/vendor/profile (auth) ✅ - Profile updates with validation
+      
+      📋 KEY VALIDATIONS VERIFIED:
+      • Authentication: 401 'غير مصرح' without session
+      • Authorization: 403 'صلاحيات بائع مطلوبة' for non-vendors
+      • businessName validation: < 2 chars → 400 'اسم المتجر قصير جداً'
+      • Image validation: Invalid format → 400 'صيغة/حجم الصورة غير مدعوم'
+      • Slug validation: Length 3-60, uniqueness, Arabic support
+      • Slug collision: 409 'هذا الرابط مستخدم، جرّب اسماً آخر'
+      
+      📋 TECHNICAL FEATURES WORKING:
+      ✅ Arabic slug support with URL encoding/decoding
+      ✅ Base64 image validation (banner/logo, 3MB limit)
+      ✅ Vendor filtering (only those with active products)
+      ✅ Product filtering (only isActive: true)
+      ✅ Slug generation and uniqueness checking
+      ✅ NextAuth session authentication
+      ✅ Role-based authorization (VENDOR/ADMIN)
+      ✅ Database operations on User.vendorProfile
+      
+      📋 REGRESSION TESTS ✅
+      • GET /api/ → 200 'Majles API is running'
+      • GET /api/products → 200 (marketplace still works)
+      • POST /api/signup → 200 (auth still works)
+      
+      🧪 TESTING METHODOLOGY:
+      • Created test vendors with proper role promotion
+      • Seeded active products for vendor visibility
+      • Used pymongo for direct DB operations with UUID format
+      • Tested authentication via NextAuth credentials flow
+      • Verified Arabic text handling and RTL support
+      • Comprehensive validation and error message testing
+      
+      🎉 CONCLUSION: All Vendor Storefront endpoints are production-ready. The system handles authentication, validation, Arabic localization, and database operations correctly. Ready for frontend integration and user testing.

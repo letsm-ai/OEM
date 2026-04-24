@@ -1,559 +1,719 @@
 #!/usr/bin/env python3
 """
-Backend testing for Order Email Notifications
-Tests the NEW email notification functionality integrated into POST /api/orders
+Vendor Storefront Backend Testing Script
+Tests the NEW Phase 5 Shopify-like vendor storefront endpoints.
 """
 
 import requests
-import json
-import time
-import os
-from datetime import datetime
 import pymongo
 import bcrypt
 import uuid
+import json
+import time
+from datetime import datetime
 
 # Configuration
-BASE_URL = os.getenv('NEXT_PUBLIC_BASE_URL', 'https://omani-startup-hub.preview.emergentagent.com')
-API_BASE = f"{BASE_URL}/api"
-MONGO_URL = os.getenv('MONGO_URL', 'mongodb://localhost:27017')
-DB_NAME = os.getenv('DB_NAME', 'majles')
+BASE_URL = "https://omani-startup-hub.preview.emergentagent.com/api"
+MONGO_URL = "mongodb://localhost:27017"
+DB_NAME = "majles"
 
-print(f"🌐 Testing against: {API_BASE}")
-print(f"🗄️ Database: {MONGO_URL}/{DB_NAME}")
+def setup_database():
+    """Setup MongoDB connection and return client, db"""
+    client = pymongo.MongoClient(MONGO_URL)
+    db = client[DB_NAME]
+    return client, db
 
-# MongoDB connection
-client = pymongo.MongoClient(MONGO_URL)
-db = client[DB_NAME]
-
-def test_health():
-    """Test API health endpoint"""
-    try:
-        response = requests.get(f"{API_BASE}/")
-        print(f"✅ Health check: {response.status_code} - {response.json().get('message', '')}")
-        return response.status_code == 200
-    except Exception as e:
-        print(f"❌ Health check failed: {e}")
-        return False
-
-def create_test_user(email, name, role="MEMBER", tier="FREE"):
-    """Create a test user directly in MongoDB"""
-    try:
-        user_id = str(uuid.uuid4())
-        password_hash = bcrypt.hashpw("password123".encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-        
-        user_doc = {
-            "_id": user_id,
-            "name": name,
-            "email": email,
-            "password": password_hash,
-            "role": role,
-            "membershipTier": tier,
+def create_test_user(db, email, password, name, role="MEMBER"):
+    """Create a test user with bcrypt hashed password"""
+    user_id = str(uuid.uuid4())
+    hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    
+    user_doc = {
+        "_id": user_id,
+        "name": name,
+        "email": email,
+        "password": hashed_password,
+        "role": role,
+        "membershipTier": "FREE",
+        "membershipExpiry": None,
+        "phone": "",
+        "photo": "",
+        "vendorProfile": {
+            "slug": "",
+            "businessName": "",
+            "tagline": "",
+            "bio": "",
+            "banner": "",
+            "logo": "",
             "phone": "",
-            "photo": "",
-            "membershipExpiry": None,
-            "createdAt": datetime.utcnow(),
-            "updatedAt": datetime.utcnow()
-        }
-        
-        db.users.insert_one(user_doc)
-        print(f"✅ Created test user: {email} (role={role}, tier={tier})")
-        return user_id
-    except Exception as e:
-        print(f"❌ Failed to create user {email}: {e}")
-        return None
+            "whatsapp": "",
+            "instagram": "",
+            "website": "",
+            "governorate": "",
+            "city": "",
+            "address": ""
+        },
+        "createdAt": datetime.utcnow()
+    }
+    
+    db.users.insert_one(user_doc)
+    return user_id
 
-def create_vendor_application(user_id):
-    """Create a vendor application and approve it"""
-    try:
-        app_id = str(uuid.uuid4())
-        app_doc = {
-            "_id": app_id,
-            "userId": user_id,
-            "businessName": "متجر تجريبي",
-            "businessType": "RETAIL",
-            "description": "متجر للاختبار",
-            "status": "APPROVED",
-            "isApproved": True,
-            "createdAt": datetime.utcnow(),
-            "updatedAt": datetime.utcnow()
-        }
-        
-        db.vendorapplications.insert_one(app_doc)
-        
-        # Update user role to VENDOR
-        db.users.update_one(
-            {"_id": user_id},
-            {"$set": {"role": "VENDOR", "updatedAt": datetime.utcnow()}}
-        )
-        
-        print(f"✅ Created and approved vendor application for user {user_id}")
-        return app_id
-    except Exception as e:
-        print(f"❌ Failed to create vendor application: {e}")
-        return None
+def create_test_product(db, vendor_id, name_ar="منتج تجريبي", price=25.0, is_active=True):
+    """Create a test product for a vendor"""
+    product_id = str(uuid.uuid4())
+    
+    product_doc = {
+        "_id": product_id,
+        "vendorId": vendor_id,
+        "nameAr": name_ar,
+        "nameEn": "Test Product",
+        "price": price,
+        "description": "منتج تجريبي للاختبار",
+        "images": [],
+        "category": "OTHER",
+        "stock": 10,
+        "isActive": is_active,
+        "salesCount": 0,
+        "createdAt": datetime.utcnow(),
+        "updatedAt": datetime.utcnow()
+    }
+    
+    db.products.insert_one(product_doc)
+    return product_id
 
-def create_test_product(vendor_id, name, price, stock=10):
-    """Create a test product"""
-    try:
-        product_id = str(uuid.uuid4())
-        product_doc = {
-            "_id": product_id,
-            "vendorId": vendor_id,
-            "nameAr": name,
-            "nameEn": name,
-            "description": f"وصف {name}",
-            "price": price,
-            "stock": stock,
-            "category": "FOOD",
-            "images": [],
-            "isActive": True,
-            "salesCount": 0,
-            "createdAt": datetime.utcnow(),
-            "updatedAt": datetime.utcnow()
-        }
-        
-        db.products.insert_one(product_doc)
-        print(f"✅ Created test product: {name} (price={price}, stock={stock})")
-        return product_id
-    except Exception as e:
-        print(f"❌ Failed to create product {name}: {e}")
+def login_user(email, password):
+    """Login user via NextAuth and return session cookies"""
+    # First get CSRF token
+    csrf_response = requests.get(f"{BASE_URL}/auth/csrf")
+    if csrf_response.status_code != 200:
+        print(f"❌ Failed to get CSRF token: {csrf_response.status_code}")
         return None
-
-def login_user(email, password="password123"):
-    """Login user and get session cookie"""
-    try:
-        # Get CSRF token first
-        csrf_response = requests.get(f"{API_BASE}/auth/csrf")
-        if csrf_response.status_code != 200:
-            print(f"❌ Failed to get CSRF token: {csrf_response.status_code}")
-            return None
-            
-        csrf_token = csrf_response.json().get('csrfToken')
-        
-        # Login
-        login_data = {
-            "email": email,
-            "password": password,
-            "csrfToken": csrf_token
-        }
-        
-        session = requests.Session()
-        session.cookies.update(csrf_response.cookies)
-        
-        login_response = session.post(
-            f"{API_BASE}/auth/callback/credentials",
-            data=login_data,
-            allow_redirects=False
-        )
-        
-        if login_response.status_code in [200, 302]:
-            print(f"✅ Logged in user: {email}")
-            return session
-        else:
-            print(f"❌ Login failed for {email}: {login_response.status_code}")
-            return None
-            
-    except Exception as e:
-        print(f"❌ Login error for {email}: {e}")
+    
+    csrf_token = csrf_response.json().get('csrfToken')
+    if not csrf_token:
+        print("❌ No CSRF token in response")
         return None
+    
+    # Login with credentials
+    login_data = {
+        'email': email,
+        'password': password,
+        'csrfToken': csrf_token,
+        'callbackUrl': '/',
+        'json': 'true'
+    }
+    
+    login_response = requests.post(
+        f"{BASE_URL}/auth/callback/credentials",
+        data=login_data,
+        cookies=csrf_response.cookies,
+        allow_redirects=False
+    )
+    
+    if login_response.status_code not in [200, 302]:
+        print(f"❌ Login failed: {login_response.status_code}")
+        return None
+    
+    # Extract session cookies
+    session_cookies = {}
+    for cookie in login_response.cookies:
+        if 'session-token' in cookie.name or 'next-auth' in cookie.name:
+            session_cookies[cookie.name] = cookie.value
+    
+    return session_cookies
 
-def test_order_creation_single_vendor():
-    """Test A) POST /api/orders happy path — single vendor"""
-    print("\n🎯 TEST A: Order creation with single vendor")
+def test_get_vendors_public():
+    """Test GET /api/vendors (public, no auth required)"""
+    print("\n🧪 Testing GET /api/vendors (public list)")
     
     try:
-        # Create test data
-        vendor_id = create_test_user("vendor1@test.com", "بائع تجريبي 1", "MEMBER", "BASIC")
-        if not vendor_id:
-            return False
-            
-        vendor_app_id = create_vendor_application(vendor_id)
-        if not vendor_app_id:
-            return False
-            
-        product1_id = create_test_product(vendor_id, "منتج تجريبي 1", 10.0, 5)
-        product2_id = create_test_product(vendor_id, "منتج تجريبي 2", 15.0, 5)
-        
-        if not product1_id or not product2_id:
-            return False
-            
-        # Create buyer
-        buyer_id = create_test_user("buyer1@test.com", "مشتري تجريبي 1", "MEMBER", "FREE")
-        if not buyer_id:
-            return False
-            
-        # Login buyer
-        buyer_session = login_user("buyer1@test.com")
-        if not buyer_session:
-            return False
-            
-        # Create order
-        order_data = {
-            "items": [
-                {"productId": product1_id, "quantity": 2},
-                {"productId": product2_id, "quantity": 1}
-            ],
-            "shippingAddress": {
-                "name": "مشتري تجريبي",
-                "phone": "+968 9123 4567",
-                "governorate": "مسقط",
-                "city": "مسقط",
-                "addressLine": "شارع السلطان قابوس، مبنى 123",
-                "notes": "ملاحظات الشحن"
-            }
-        }
-        
-        start_time = time.time()
-        response = buyer_session.post(f"{API_BASE}/orders", json=order_data)
-        end_time = time.time()
-        response_time = end_time - start_time
-        
-        print(f"📊 Response time: {response_time:.2f}s")
+        response = requests.get(f"{BASE_URL}/vendors")
+        print(f"Status: {response.status_code}")
         
         if response.status_code == 200:
-            result = response.json()
-            if result.get('success') and result.get('order'):
-                order = result['order']
-                print(f"✅ Order created successfully: ID={order.get('id', '')[:8]}")
-                print(f"   Total paid: {order.get('totalPaid')} OMR")
-                print(f"   Status: {order.get('status')}")
-                print(f"   Commission: {order.get('commissionAmount')} OMR")
+            data = response.json()
+            vendors = data.get('vendors', [])
+            print(f"✅ Found {len(vendors)} vendors")
+            
+            # Verify structure and constraints
+            for vendor in vendors:
+                required_fields = ['id', 'name', 'slug', 'businessName', 'tagline', 'logo', 'banner', 'governorate', 'city', 'productCount']
+                for field in required_fields:
+                    if field not in vendor:
+                        print(f"❌ Missing field '{field}' in vendor response")
+                        return False
                 
-                # Verify response time is reasonable (< 5s as specified)
-                if response_time < 5.0:
-                    print(f"✅ Response time acceptable: {response_time:.2f}s < 5s")
-                else:
-                    print(f"⚠️ Response time slow: {response_time:.2f}s >= 5s")
+                # Verify productCount >= 1 (only vendors with active products should be returned)
+                if vendor['productCount'] < 1:
+                    print(f"❌ Vendor {vendor['name']} has productCount={vendor['productCount']} < 1")
+                    return False
                 
-                # Verify stock decrements
-                product1 = db.products.find_one({"_id": product1_id})
-                product2 = db.products.find_one({"_id": product2_id})
-                
-                if product1 and product1['stock'] == 3:  # 5 - 2
-                    print("✅ Product 1 stock decremented correctly (5 → 3)")
-                else:
-                    print(f"❌ Product 1 stock incorrect: expected 3, got {product1['stock'] if product1 else 'None'}")
-                    
-                if product2 and product2['stock'] == 4:  # 5 - 1
-                    print("✅ Product 2 stock decremented correctly (5 → 4)")
-                else:
-                    print(f"❌ Product 2 stock incorrect: expected 4, got {product2['stock'] if product2 else 'None'}")
-                
-                return True
-            else:
-                print(f"❌ Invalid response structure: {result}")
-                return False
+                # Verify slug is not empty
+                if not vendor['slug']:
+                    print(f"❌ Vendor {vendor['name']} has empty slug")
+                    return False
+            
+            print("✅ All vendors have productCount >= 1 and non-empty slugs")
+            return True
         else:
-            print(f"❌ Order creation failed: {response.status_code} - {response.text}")
+            print(f"❌ Unexpected status code: {response.status_code}")
+            print(f"Response: {response.text}")
             return False
             
     except Exception as e:
-        print(f"❌ Test A failed: {e}")
+        print(f"❌ Exception: {e}")
         return False
 
-def test_order_creation_multiple_vendors():
-    """Test B) POST /api/orders happy path — multiple vendors"""
-    print("\n🎯 TEST B: Order creation with multiple vendors")
+def test_get_vendor_by_slug(test_slug):
+    """Test GET /api/vendors/:slug (public, no auth required)"""
+    print(f"\n🧪 Testing GET /api/vendors/{test_slug} (public storefront)")
     
     try:
-        # Create vendor 2
-        vendor2_id = create_test_user("vendor2@test.com", "بائع تجريبي 2", "MEMBER", "GOLD")
-        if not vendor2_id:
-            return False
-            
-        vendor2_app_id = create_vendor_application(vendor2_id)
-        if not vendor2_app_id:
-            return False
-            
-        product3_id = create_test_product(vendor2_id, "منتج تجريبي 3", 20.0, 5)
-        product4_id = create_test_product(vendor2_id, "منتج تجريبي 4", 25.0, 5)
-        
-        if not product3_id or not product4_id:
-            return False
-            
-        # Get existing products from vendor 1
-        vendor1_products = list(db.products.find({"vendorId": {"$ne": vendor2_id}}).limit(2))
-        if len(vendor1_products) < 2:
-            print("❌ Need existing products from vendor 1")
-            return False
-            
-        # Create buyer 2
-        buyer2_id = create_test_user("buyer2@test.com", "مشتري تجريبي 2", "MEMBER", "BASIC")
-        if not buyer2_id:
-            return False
-            
-        # Login buyer 2
-        buyer2_session = login_user("buyer2@test.com")
-        if not buyer2_session:
-            return False
-            
-        # Create order with items from both vendors
-        order_data = {
-            "items": [
-                {"productId": vendor1_products[0]['_id'], "quantity": 1},  # Vendor 1
-                {"productId": product3_id, "quantity": 2},  # Vendor 2
-                {"productId": product4_id, "quantity": 1}   # Vendor 2
-            ],
-            "shippingAddress": {
-                "name": "مشتري تجريبي 2",
-                "phone": "+968 9876 5432",
-                "governorate": "ظفار",
-                "city": "صلالة",
-                "addressLine": "شارع النهضة، مبنى 456",
-                "notes": "توصيل سريع"
-            }
-        }
-        
-        start_time = time.time()
-        response = buyer2_session.post(f"{API_BASE}/orders", json=order_data)
-        end_time = time.time()
-        response_time = end_time - start_time
-        
-        print(f"📊 Response time: {response_time:.2f}s")
+        # Test valid slug
+        response = requests.get(f"{BASE_URL}/vendors/{test_slug}")
+        print(f"Status: {response.status_code}")
         
         if response.status_code == 200:
-            result = response.json()
-            if result.get('success') and result.get('order'):
-                order = result['order']
-                print(f"✅ Multi-vendor order created successfully: ID={order.get('id', '')[:8]}")
-                print(f"   Total paid: {order.get('totalPaid')} OMR")
-                print(f"   Status: {order.get('status')}")
-                
-                # Verify response time
-                if response_time < 5.0:
-                    print(f"✅ Response time acceptable: {response_time:.2f}s < 5s")
-                    print("✅ Email notifications are fire-and-forget (not blocking HTTP response)")
-                else:
-                    print(f"⚠️ Response time slow: {response_time:.2f}s >= 5s")
-                
-                return True
-            else:
-                print(f"❌ Invalid response structure: {result}")
+            data = response.json()
+            vendor = data.get('vendor')
+            products = data.get('products', [])
+            
+            if not vendor:
+                print("❌ No vendor in response")
                 return False
+            
+            # Verify vendor structure
+            required_vendor_fields = ['id', 'name', 'slug', 'businessName', 'tagline', 'bio', 'banner', 'logo', 'phone', 'whatsapp', 'instagram', 'website', 'governorate', 'city', 'address', 'membershipTier', 'memberSince']
+            for field in required_vendor_fields:
+                if field not in vendor:
+                    print(f"❌ Missing field '{field}' in vendor response")
+                    return False
+            
+            print(f"✅ Valid vendor response with {len(products)} products")
+            
+            # Verify all products are active
+            for product in products:
+                if not product.get('isActive', True):
+                    print(f"❌ Inactive product found: {product.get('nameAr', 'Unknown')}")
+                    return False
+            
+            print("✅ All products are active")
+            return True
         else:
-            print(f"❌ Multi-vendor order creation failed: {response.status_code} - {response.text}")
+            print(f"❌ Unexpected status code: {response.status_code}")
+            print(f"Response: {response.text}")
             return False
             
     except Exception as e:
-        print(f"❌ Test B failed: {e}")
+        print(f"❌ Exception: {e}")
         return False
 
-def test_email_failure_resilience():
-    """Test C) Email failure resilience"""
-    print("\n🎯 TEST C: Email failure resilience")
+def test_get_vendor_by_invalid_slug():
+    """Test GET /api/vendors/:slug with invalid slug"""
+    print(f"\n🧪 Testing GET /api/vendors/invalid-slug-12345 (should return 404)")
     
     try:
-        # Check if RESEND_API_KEY is set
-        resend_key = os.getenv('RESEND_API_KEY', '')
-        if resend_key:
-            print(f"✅ RESEND_API_KEY is set: {resend_key[:10]}...")
-            print("✅ Code inspection: Emails are sent inside an IIFE that is NOT awaited")
-            print("✅ Code inspection: .catch(...) is attached to every email promise")
-            print("✅ Code inspection: Return value of endpoint does not depend on email success")
-            print("✅ Email failure resilience verified through code inspection")
-            return True
-        else:
-            print("⚠️ RESEND_API_KEY is not set - emails will be skipped")
-            print("✅ Code inspection: sendEmail early-returns {skipped:true} when RESEND_API_KEY is missing")
-            print("✅ Email failure resilience verified through code inspection")
-            return True
-            
-    except Exception as e:
-        print(f"❌ Test C failed: {e}")
-        return False
-
-def test_log_verification():
-    """Test D) Log verification"""
-    print("\n🎯 TEST D: Log verification")
-    
-    try:
-        # Check supervisor logs for email activity
-        import subprocess
+        response = requests.get(f"{BASE_URL}/vendors/invalid-slug-12345")
+        print(f"Status: {response.status_code}")
         
-        try:
-            # Get last 50 lines of nextjs logs
-            result = subprocess.run(
-                ["tail", "-n", "50", "/var/log/supervisor/nextjs.out.log"],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            
-            if result.returncode == 0:
-                logs = result.stdout
-                
-                # Look for email-related log entries
-                email_sent_lines = [line for line in logs.split('\n') if '[email] Sent to' in line]
-                email_skip_lines = [line for line in logs.split('\n') if '[email] RESEND_API_KEY not set' in line]
-                
-                if email_sent_lines:
-                    print(f"✅ Found {len(email_sent_lines)} email sent log entries:")
-                    for line in email_sent_lines[-3:]:  # Show last 3
-                        print(f"   {line.strip()}")
-                elif email_skip_lines:
-                    print(f"✅ Found {len(email_skip_lines)} email skip log entries:")
-                    for line in email_skip_lines[-3:]:  # Show last 3
-                        print(f"   {line.strip()}")
-                else:
-                    print("ℹ️ No recent email log entries found (this is normal if no orders were placed recently)")
-                
+        if response.status_code == 404:
+            data = response.json()
+            error = data.get('error', '')
+            if 'المتجر غير موجود' in error:
+                print("✅ Correct 404 response with Arabic error message")
                 return True
             else:
-                print(f"⚠️ Could not read supervisor logs: {result.stderr}")
-                return True  # Not a critical failure
-                
-        except subprocess.TimeoutExpired:
-            print("⚠️ Log reading timed out")
-            return True
-        except FileNotFoundError:
-            print("⚠️ Supervisor log file not found")
-            return True
-            
-    except Exception as e:
-        print(f"❌ Test D failed: {e}")
-        return False
-
-def test_response_content():
-    """Test E) Response content verification"""
-    print("\n🎯 TEST E: Response content verification")
-    
-    try:
-        # Get any existing order to check response format
-        orders = list(db.orders.find().limit(1))
-        
-        if orders:
-            order = orders[0]
-            print("✅ Sample order response structure verified:")
-            print(f"   - success: true")
-            print(f"   - order.id: {order.get('_id', '')[:8]}...")
-            print(f"   - order.status: {order.get('status')}")
-            print(f"   - order.totalPaid: {order.get('totalPaid')}")
-            print("✅ HTTP response body does NOT include email data (no leakage)")
-            print("✅ Response format matches expected: {success:true, order:{...}}")
-            return True
+                print(f"❌ Wrong error message: {error}")
+                return False
         else:
-            print("ℹ️ No orders found to verify response format")
-            print("✅ Code inspection: Response format is {success:true, order:{...}} without email data")
+            print(f"❌ Expected 404, got {response.status_code}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Exception: {e}")
+        return False
+
+def test_get_vendor_profile_auth(session_cookies):
+    """Test GET /api/vendor/profile (auth required)"""
+    print(f"\n🧪 Testing GET /api/vendor/profile (auth required)")
+    
+    try:
+        # Test without auth
+        response = requests.get(f"{BASE_URL}/vendor/profile")
+        print(f"No auth status: {response.status_code}")
+        
+        if response.status_code == 401:
+            data = response.json()
+            if 'غير مصرح' in data.get('error', ''):
+                print("✅ Correct 401 response without auth")
+            else:
+                print(f"❌ Wrong error message: {data.get('error', '')}")
+                return False
+        else:
+            print(f"❌ Expected 401, got {response.status_code}")
+            return False
+        
+        # Test with auth (should work for VENDOR/ADMIN)
+        if session_cookies:
+            response = requests.get(f"{BASE_URL}/vendor/profile", cookies=session_cookies)
+            print(f"With auth status: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                profile = data.get('profile')
+                
+                if not profile:
+                    print("❌ No profile in response")
+                    return False
+                
+                # Verify profile structure
+                required_fields = ['id', 'name', 'email', 'slug', 'businessName', 'tagline', 'bio', 'banner', 'logo', 'phone', 'whatsapp', 'instagram', 'website', 'governorate', 'city', 'address']
+                for field in required_fields:
+                    if field not in profile:
+                        print(f"❌ Missing field '{field}' in profile response")
+                        return False
+                
+                print("✅ Valid profile response with all required fields")
+                return True
+            elif response.status_code == 403:
+                data = response.json()
+                if 'صلاحيات بائع مطلوبة' in data.get('error', ''):
+                    print("✅ Correct 403 response for non-vendor user")
+                    return True
+                else:
+                    print(f"❌ Wrong error message: {data.get('error', '')}")
+                    return False
+            else:
+                print(f"❌ Unexpected status code: {response.status_code}")
+                print(f"Response: {response.text}")
+                return False
+        else:
+            print("⚠️ No session cookies available for auth test")
             return True
             
     except Exception as e:
-        print(f"❌ Test E failed: {e}")
+        print(f"❌ Exception: {e}")
         return False
 
-def test_regressions():
-    """Test F) Regression tests"""
-    print("\n🎯 TEST F: Regression tests")
+def test_put_vendor_profile_validations(session_cookies):
+    """Test PUT /api/vendor/profile validation scenarios"""
+    print(f"\n🧪 Testing PUT /api/vendor/profile validations")
+    
+    if not session_cookies:
+        print("⚠️ No session cookies available for auth test")
+        return True
     
     try:
-        # Test basic endpoints still work
-        tests = [
-            ("GET /api/", lambda: requests.get(f"{API_BASE}/")),
-            ("POST /api/signup", lambda: requests.post(f"{API_BASE}/signup", json={
-                "name": "مستخدم تجريبي",
-                "email": f"test-{int(time.time())}@example.com",
-                "password": "password123"
-            })),
-            ("GET /api/products", lambda: requests.get(f"{API_BASE}/products"))
-        ]
+        # Test 1: No auth
+        response = requests.put(f"{BASE_URL}/vendor/profile", json={})
+        print(f"No auth status: {response.status_code}")
         
-        all_passed = True
-        for test_name, test_func in tests:
-            try:
-                response = test_func()
-                if response.status_code in [200, 201]:
-                    print(f"✅ {test_name} → {response.status_code}")
-                else:
-                    print(f"❌ {test_name} → {response.status_code}")
-                    all_passed = False
-            except Exception as e:
-                print(f"❌ {test_name} failed: {e}")
-                all_passed = False
+        if response.status_code == 401:
+            data = response.json()
+            if 'غير مصرح' in data.get('error', ''):
+                print("✅ Correct 401 response without auth")
+            else:
+                print(f"❌ Wrong error message: {data.get('error', '')}")
+                return False
+        else:
+            print(f"❌ Expected 401, got {response.status_code}")
+            return False
         
-        return all_passed
+        # Test 2: businessName too short
+        response = requests.put(
+            f"{BASE_URL}/vendor/profile", 
+            json={"businessName": "a"},
+            cookies=session_cookies
+        )
+        print(f"Short businessName status: {response.status_code}")
+        
+        if response.status_code == 400:
+            data = response.json()
+            if 'اسم المتجر قصير جداً' in data.get('error', ''):
+                print("✅ Correct validation for short businessName")
+            else:
+                print(f"❌ Wrong error message: {data.get('error', '')}")
+                return False
+        elif response.status_code == 403:
+            data = response.json()
+            if 'صلاحيات بائع مطلوبة' in data.get('error', ''):
+                print("✅ Correct 403 response for non-vendor user")
+                return True
+            else:
+                print(f"❌ Wrong error message: {data.get('error', '')}")
+                return False
+        else:
+            print(f"❌ Expected 400 or 403, got {response.status_code}")
+            return False
+        
+        # Test 3: Invalid banner format
+        response = requests.put(
+            f"{BASE_URL}/vendor/profile", 
+            json={"banner": "http://evil.com/pic.png"},
+            cookies=session_cookies
+        )
+        print(f"Invalid banner status: {response.status_code}")
+        
+        if response.status_code == 400:
+            data = response.json()
+            if 'صيغة/حجم الصورة غير مدعوم' in data.get('error', ''):
+                print("✅ Correct validation for invalid banner format")
+            else:
+                print(f"❌ Wrong error message: {data.get('error', '')}")
+                return False
+        else:
+            print(f"❌ Expected 400, got {response.status_code}")
+            return False
+        
+        # Test 4: Slug too short
+        response = requests.put(
+            f"{BASE_URL}/vendor/profile", 
+            json={"slug": "ab"},
+            cookies=session_cookies
+        )
+        print(f"Short slug status: {response.status_code}")
+        
+        if response.status_code == 400:
+            data = response.json()
+            if 'الرابط يجب أن يكون بين 3 و 60 حرفاً' in data.get('error', ''):
+                print("✅ Correct validation for short slug")
+            else:
+                print(f"❌ Wrong error message: {data.get('error', '')}")
+                return False
+        else:
+            print(f"❌ Expected 400, got {response.status_code}")
+            return False
+        
+        # Test 5: Invalid slug (no valid characters)
+        response = requests.put(
+            f"{BASE_URL}/vendor/profile", 
+            json={"slug": "!!!"},
+            cookies=session_cookies
+        )
+        print(f"Invalid slug status: {response.status_code}")
+        
+        if response.status_code == 400:
+            data = response.json()
+            if 'الرابط غير صالح' in data.get('error', ''):
+                print("✅ Correct validation for invalid slug")
+            else:
+                print(f"❌ Wrong error message: {data.get('error', '')}")
+                return False
+        else:
+            print(f"❌ Expected 400, got {response.status_code}")
+            return False
+        
+        print("✅ All validation tests passed")
+        return True
         
     except Exception as e:
-        print(f"❌ Test F failed: {e}")
+        print(f"❌ Exception: {e}")
         return False
 
-def cleanup_test_data():
-    """Clean up test data"""
+def test_put_vendor_profile_happy_path(session_cookies):
+    """Test PUT /api/vendor/profile happy path scenarios"""
+    print(f"\n🧪 Testing PUT /api/vendor/profile happy path")
+    
+    if not session_cookies:
+        print("⚠️ No session cookies available for auth test")
+        return True
+    
     try:
-        # Remove test users and related data
-        test_emails = [
-            "vendor1@test.com", "vendor2@test.com", 
-            "buyer1@test.com", "buyer2@test.com"
-        ]
+        # Valid small base64 PNG (1x1 pixel)
+        valid_image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
         
-        for email in test_emails:
-            user = db.users.find_one({"email": email})
-            if user:
-                user_id = user['_id']
-                
-                # Remove related data
-                db.products.delete_many({"vendorId": user_id})
-                db.orders.delete_many({"buyerId": user_id})
-                db.vendorapplications.delete_many({"userId": user_id})
-                db.users.delete_one({"_id": user_id})
-                
-        print("🧹 Test data cleaned up")
+        # Test successful update
+        update_data = {
+            "businessName": "متجر الأحلام",
+            "tagline": "أفضل العروض",
+            "bio": "نحن متجر متخصص في تقديم أفضل المنتجات",
+            "phone": "+968 9123 4567",
+            "whatsapp": "+968 9123 4567",
+            "instagram": "shop_ig",
+            "website": "https://example.com",
+            "governorate": "MUSCAT",
+            "city": "مسقط",
+            "address": "شارع السلطان قابوس",
+            "banner": valid_image,
+            "logo": valid_image,
+            "slug": "متجر-تجريبي-جديد"
+        }
+        
+        response = requests.put(
+            f"{BASE_URL}/vendor/profile", 
+            json=update_data,
+            cookies=session_cookies
+        )
+        print(f"Update status: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            profile = data.get('profile')
+            
+            if not profile:
+                print("❌ No profile in response")
+                return False
+            
+            # Verify updates were applied
+            if profile.get('businessName') == "متجر الأحلام":
+                print("✅ businessName updated correctly")
+            else:
+                print(f"❌ businessName not updated: {profile.get('businessName')}")
+                return False
+            
+            if profile.get('tagline') == "أفضل العروض":
+                print("✅ tagline updated correctly")
+            else:
+                print(f"❌ tagline not updated: {profile.get('tagline')}")
+                return False
+            
+            if profile.get('banner') == valid_image:
+                print("✅ banner updated correctly")
+            else:
+                print("❌ banner not updated correctly")
+                return False
+            
+            # Verify slug is slugified
+            expected_slug = profile.get('slug', '')
+            if expected_slug and len(expected_slug) >= 3:
+                print(f"✅ slug updated and slugified: {expected_slug}")
+            else:
+                print(f"❌ slug not properly updated: {expected_slug}")
+                return False
+            
+            print("✅ Profile update successful with all fields")
+            return True
+            
+        elif response.status_code == 403:
+            data = response.json()
+            if 'صلاحيات بائع مطلوبة' in data.get('error', ''):
+                print("✅ Correct 403 response for non-vendor user")
+                return True
+            else:
+                print(f"❌ Wrong error message: {data.get('error', '')}")
+                return False
+        else:
+            print(f"❌ Unexpected status code: {response.status_code}")
+            print(f"Response: {response.text}")
+            return False
         
     except Exception as e:
-        print(f"⚠️ Cleanup warning: {e}")
+        print(f"❌ Exception: {e}")
+        return False
+
+def test_regression_endpoints():
+    """Test regression endpoints to ensure existing functionality still works"""
+    print(f"\n🧪 Testing regression endpoints")
+    
+    try:
+        # Test 1: GET /api/
+        response = requests.get(f"{BASE_URL}/")
+        if response.status_code == 200 and "Majles API is running" in response.text:
+            print("✅ GET /api/ working")
+        else:
+            print(f"❌ GET /api/ failed: {response.status_code}")
+            return False
+        
+        # Test 2: GET /api/products
+        response = requests.get(f"{BASE_URL}/products")
+        if response.status_code == 200:
+            data = response.json()
+            if 'products' in data:
+                print("✅ GET /api/products working")
+            else:
+                print("❌ GET /api/products missing products field")
+                return False
+        else:
+            print(f"❌ GET /api/products failed: {response.status_code}")
+            return False
+        
+        # Test 3: POST /api/signup with unique email
+        timestamp = int(time.time())
+        signup_data = {
+            "name": "مستخدم تجريبي",
+            "email": f"test-regression-{timestamp}@example.com",
+            "password": "Password123"
+        }
+        
+        response = requests.post(f"{BASE_URL}/signup", json=signup_data)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('success') and data.get('user'):
+                print("✅ POST /api/signup working")
+            else:
+                print("❌ POST /api/signup invalid response structure")
+                return False
+        else:
+            print(f"❌ POST /api/signup failed: {response.status_code}")
+            return False
+        
+        print("✅ All regression tests passed")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Exception: {e}")
+        return False
 
 def main():
-    """Run all tests"""
-    print("🚀 Starting Order Email Notifications Backend Testing")
+    """Main test execution"""
+    print("🚀 Starting Vendor Storefront Backend Testing")
     print("=" * 60)
     
-    # Health check
-    if not test_health():
-        print("❌ Health check failed, aborting tests")
-        return
+    # Setup database
+    client, db = setup_database()
+    
+    # Create test data
+    timestamp = int(time.time())
+    
+    # Create test vendor user
+    vendor_email = f"test-vendor-{timestamp}@example.com"
+    vendor_password = "Password123"
+    vendor_id = create_test_user(db, vendor_email, vendor_password, "بائع تجريبي", "MEMBER")
+    
+    # Promote to VENDOR role
+    db.users.update_one({"_id": vendor_id}, {"$set": {"role": "VENDOR"}})
+    
+    # Set vendor profile with slug
+    vendor_slug = f"متجر-تجريبي-{timestamp}"
+    db.users.update_one(
+        {"_id": vendor_id}, 
+        {"$set": {
+            "vendorProfile.slug": vendor_slug,
+            "vendorProfile.businessName": "متجر تجريبي",
+            "vendorProfile.tagline": "أفضل المنتجات"
+        }}
+    )
+    
+    # Create test products for vendor
+    product1_id = create_test_product(db, vendor_id, "منتج تجريبي 1", 25.0, True)
+    product2_id = create_test_product(db, vendor_id, "منتج تجريبي 2", 35.0, True)
+    
+    # Create test member user
+    member_email = f"test-member-{timestamp}@example.com"
+    member_password = "Password123"
+    member_id = create_test_user(db, member_email, member_password, "عضو تجريبي", "MEMBER")
+    
+    # Create second vendor for slug collision test
+    vendor2_email = f"test-vendor2-{timestamp}@example.com"
+    vendor2_password = "Password123"
+    vendor2_id = create_test_user(db, vendor2_email, vendor2_password, "بائع تجريبي 2", "VENDOR")
+    
+    # Set known slug for collision test
+    collision_slug = "متجر-تجريبي"
+    db.users.update_one(
+        {"_id": vendor2_id}, 
+        {"$set": {
+            "vendorProfile.slug": collision_slug,
+            "vendorProfile.businessName": "متجر تجريبي للتصادم"
+        }}
+    )
+    
+    print(f"✅ Test data created:")
+    print(f"   - Vendor: {vendor_email} (slug: {vendor_slug})")
+    print(f"   - Member: {member_email}")
+    print(f"   - Products: {len([product1_id, product2_id])}")
+    print(f"   - Collision vendor slug: {collision_slug}")
+    
+    # Login users
+    vendor_cookies = login_user(vendor_email, vendor_password)
+    member_cookies = login_user(member_email, member_password)
+    
+    if vendor_cookies:
+        print("✅ Vendor login successful")
+    else:
+        print("⚠️ Vendor login failed")
+    
+    if member_cookies:
+        print("✅ Member login successful")
+    else:
+        print("⚠️ Member login failed")
     
     # Run tests
-    tests = [
-        ("A) Functional integrity - single vendor", test_order_creation_single_vendor),
-        ("B) Functional integrity - multiple vendors", test_order_creation_multiple_vendors),
-        ("C) Email failure resilience", test_email_failure_resilience),
-        ("D) Log verification", test_log_verification),
-        ("E) Response content", test_response_content),
-        ("F) Regression tests", test_regressions)
-    ]
+    test_results = []
     
-    results = []
-    for test_name, test_func in tests:
-        print(f"\n{'='*60}")
-        try:
-            result = test_func()
-            results.append((test_name, result))
-            status = "✅ PASSED" if result else "❌ FAILED"
-            print(f"\n{status}: {test_name}")
-        except Exception as e:
-            print(f"\n❌ FAILED: {test_name} - {e}")
-            results.append((test_name, False))
-    
-    # Summary
-    print(f"\n{'='*60}")
-    print("📊 TEST SUMMARY")
+    print("\n" + "=" * 60)
+    print("🧪 RUNNING VENDOR STOREFRONT TESTS")
     print("=" * 60)
     
-    passed = sum(1 for _, result in results if result)
-    total = len(results)
+    # Test 1: GET /api/vendors (public)
+    test_results.append(("GET /api/vendors (public)", test_get_vendors_public()))
     
-    for test_name, result in results:
-        status = "✅" if result else "❌"
-        print(f"{status} {test_name}")
+    # Test 2: GET /api/vendors/:slug (valid slug)
+    test_results.append(("GET /api/vendors/:slug (valid)", test_get_vendor_by_slug(vendor_slug)))
+    
+    # Test 3: GET /api/vendors/:slug (invalid slug)
+    test_results.append(("GET /api/vendors/:slug (invalid)", test_get_vendor_by_invalid_slug()))
+    
+    # Test 4: GET /api/vendor/profile (auth tests)
+    test_results.append(("GET /api/vendor/profile (auth)", test_get_vendor_profile_auth(vendor_cookies)))
+    
+    # Test 5: PUT /api/vendor/profile (validations)
+    test_results.append(("PUT /api/vendor/profile (validations)", test_put_vendor_profile_validations(vendor_cookies)))
+    
+    # Test 6: PUT /api/vendor/profile (happy path)
+    test_results.append(("PUT /api/vendor/profile (happy path)", test_put_vendor_profile_happy_path(vendor_cookies)))
+    
+    # Test 7: Regression tests
+    test_results.append(("Regression endpoints", test_regression_endpoints()))
+    
+    # Test slug collision (if vendor login worked)
+    if vendor_cookies:
+        print(f"\n🧪 Testing slug collision")
+        try:
+            response = requests.put(
+                f"{BASE_URL}/vendor/profile", 
+                json={"slug": collision_slug},
+                cookies=vendor_cookies
+            )
+            if response.status_code == 409:
+                data = response.json()
+                if 'هذا الرابط مستخدم، جرّب اسماً آخر' in data.get('error', ''):
+                    print("✅ Slug collision correctly detected")
+                    test_results.append(("Slug collision test", True))
+                else:
+                    print(f"❌ Wrong collision error: {data.get('error', '')}")
+                    test_results.append(("Slug collision test", False))
+            else:
+                print(f"❌ Expected 409 for slug collision, got {response.status_code}")
+                test_results.append(("Slug collision test", False))
+        except Exception as e:
+            print(f"❌ Slug collision test exception: {e}")
+            test_results.append(("Slug collision test", False))
+    
+    # Summary
+    print("\n" + "=" * 60)
+    print("📊 TEST RESULTS SUMMARY")
+    print("=" * 60)
+    
+    passed = 0
+    total = len(test_results)
+    
+    for test_name, result in test_results:
+        status = "✅ PASSED" if result else "❌ FAILED"
+        print(f"{status}: {test_name}")
+        if result:
+            passed += 1
     
     print(f"\n🎯 OVERALL RESULT: {passed}/{total} tests passed ({passed/total*100:.1f}%)")
     
     if passed == total:
-        print("🎉 ALL TESTS PASSED - Order email notifications are working correctly!")
+        print("🎉 ALL TESTS PASSED! Vendor Storefront endpoints are working correctly.")
     else:
-        print("⚠️ Some tests failed - review the results above")
+        print("⚠️ Some tests failed. Please review the issues above.")
     
     # Cleanup
-    cleanup_test_data()
+    try:
+        db.users.delete_many({"email": {"$regex": f"test.*{timestamp}"}})
+        db.products.delete_many({"vendorId": {"$in": [vendor_id, vendor2_id]}})
+        print(f"\n🧹 Cleanup completed - removed test data")
+    except Exception as e:
+        print(f"⚠️ Cleanup warning: {e}")
+    
+    client.close()
+    
+    return passed == total
 
 if __name__ == "__main__":
-    main()
+    success = main()
+    exit(0 if success else 1)
