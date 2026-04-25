@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import Image from 'next/image'
 import {
   ShoppingBag,
   Users,
@@ -61,6 +62,20 @@ export default async function LandingPage() {
         />
         <div className="relative container mx-auto px-4 py-20 lg:py-28">
           <div className="mx-auto max-w-4xl text-center">
+            {/* Prominent Logo */}
+            <div className="mb-8 flex justify-center">
+              <div className="relative h-32 w-32 drop-shadow-[0_8px_24px_rgba(201,168,76,0.35)] md:h-40 md:w-40">
+                <Image
+                  src="/logo.png"
+                  alt="شعار مجلس رواد الأعمال العماني"
+                  fill
+                  sizes="(max-width: 768px) 128px, 160px"
+                  className="object-contain"
+                  priority
+                />
+              </div>
+            </div>
+
             <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-[#C9A84C]/40 bg-[#C9A84C]/10 px-4 py-1.5 text-sm text-[#E8D08C]">
               <span className="h-2 w-2 rounded-full bg-[#C9A84C]" />
               منصة رواد الأعمال الأولى في سلطنة عُمان
