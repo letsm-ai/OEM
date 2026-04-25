@@ -305,7 +305,7 @@ function StoreInner({ initialProducts }) {
                 <p className="mt-1 text-sm text-gray-500">جرّب صياغة الاستعلام بشكل مختلف أو امسح البحث الذكي</p>
               </div>
             ) : (
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
                 {aiResults.products.map((p) => (
                   <ProductCard key={p.id} product={p} />
                 ))}
@@ -319,7 +319,7 @@ function StoreInner({ initialProducts }) {
             <p className="mt-1 text-sm text-gray-500">جرِّب تعديل البحث أو مسح الفلتر</p>
           </div>
         ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
             {initialProducts.map((p) => (
               <ProductCard key={p.id} product={p} />
             ))}

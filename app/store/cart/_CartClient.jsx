@@ -129,12 +129,17 @@ export default function CartClient({ tier, authed }) {
             )}
 
             <button
-              onClick={() => router.push(authed ? '/store/checkout' : '/login?callbackUrl=/store/checkout')}
+              onClick={() => router.push('/store/checkout')}
               className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#1B3A6B] py-3 text-sm font-semibold text-white hover:bg-[#152c52]"
             >
               متابعة الدفع
               <ArrowLeft className="h-4 w-4" />
             </button>
+            {!authed && (
+              <p className="mt-2 text-center text-[11px] text-gray-500">
+                يمكنك الشراء كضيف بدون إنشاء حساب 🛒
+              </p>
+            )}
             <Link
               href="/store"
               className="mt-2 inline-flex w-full items-center justify-center rounded-xl border border-gray-300 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
