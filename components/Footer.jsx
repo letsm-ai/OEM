@@ -49,9 +49,18 @@ export default function Footer() {
           <div>
             <h4 className="mb-3 text-sm font-bold text-[#C9A84C]">تواصل معنا</h4>
             <ul className="space-y-2 text-sm">
-              <li className="flex items-center gap-2"><MapPin className="h-4 w-4 text-[#C9A84C]" /> مسقط، سلطنة عُمان</li>
-              <li className="flex items-center gap-2"><Mail className="h-4 w-4 text-[#C9A84C]" /> info@majles-oman.om</li>
-              <li className="flex items-center gap-2"><Phone className="h-4 w-4 text-[#C9A84C]" /> +968 9000 0000</li>
+              <li className="flex items-center gap-2">
+                <MapPin className="h-4 w-4 text-[#C9A84C]" />
+                <span>مسقط، سلطنة عُمان</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <Mail className="h-4 w-4 text-[#C9A84C]" />
+                <span dir="ltr">info@majles-oman.om</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <Phone className="h-4 w-4 text-[#C9A84C]" />
+                <span dir="ltr">+968 9000 0000</span>
+              </li>
             </ul>
             <div className="mt-4 flex items-center gap-2">
               {[
