@@ -64,12 +64,12 @@ export default async function LandingPage() {
           <div className="mx-auto max-w-4xl text-center">
             {/* Prominent Logo */}
             <div className="mb-8 flex justify-center">
-              <div className="relative h-32 w-32 drop-shadow-[0_8px_24px_rgba(201,168,76,0.35)] md:h-40 md:w-40">
+              <div className="relative h-28 w-[260px] drop-shadow-[0_8px_24px_rgba(201,168,76,0.45)] sm:h-36 sm:w-[340px] md:h-44 md:w-[420px] lg:h-52 lg:w-[500px]">
                 <Image
                   src="/logo.png"
                   alt="شعار مجلس رواد الأعمال العماني"
                   fill
-                  sizes="(max-width: 768px) 128px, 160px"
+                  sizes="(max-width: 640px) 260px, (max-width: 768px) 340px, (max-width: 1024px) 420px, 500px"
                   className="object-contain"
                   priority
                 />

@@ -11,18 +11,14 @@ export default function Footer() {
           {/* Brand */}
           <div>
             <div className="mb-4 flex items-center gap-3">
-              <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-xl bg-white/95 p-1.5">
+              <div className="relative h-14 w-[170px] shrink-0">
                 <Image
                   src="/logo.png"
                   alt="شعار مجلس رواد الأعمال العماني"
                   fill
-                  sizes="56px"
-                  className="object-contain"
+                  sizes="170px"
+                  className="object-contain object-right"
                 />
-              </div>
-              <div>
-                <div className="font-extrabold text-white">مجلس رواد الأعمال</div>
-                <div className="-mt-0.5 text-xs text-[#C9A84C]">العماني</div>
               </div>
             </div>
             <p className="text-sm leading-relaxed text-gray-300">

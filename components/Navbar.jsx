@@ -42,19 +42,15 @@ export default function Navbar() {
       <div className="container mx-auto flex h-16 items-center justify-between px-4">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2.5">
-          <div className="relative h-12 w-12 shrink-0 overflow-hidden">
+          <div className="relative h-10 w-[110px] shrink-0 sm:w-[140px]">
             <Image
               src="/logo.png"
               alt="شعار مجلس رواد الأعمال العماني"
               fill
-              sizes="48px"
-              className="object-contain"
+              sizes="(max-width: 640px) 110px, 140px"
+              className="object-contain object-right"
               priority
             />
-          </div>
-          <div className="hidden flex-col leading-tight sm:flex">
-            <span className="text-sm font-bold text-[#1B3A6B]">مجلس رواد الأعمال</span>
-            <span className="text-[10px] text-gray-500">العماني</span>
           </div>
         </Link>
 
