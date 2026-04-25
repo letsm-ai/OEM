@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { connectDB } from '@/lib/db'
 import { Product, Expert, Company } from '@/lib/models'
+import { TIER_META } from '@/lib/membership'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -285,19 +286,21 @@ export default async function LandingPage() {
               <div className="relative overflow-hidden rounded-2xl bg-gradient-to-bl from-[#1B3A6B] to-[#152c52] p-8 text-white shadow-2xl">
                 <div className="mb-6 text-sm font-medium text-[#C9A84C]">مستوى العضوية</div>
                 <div className="space-y-3">
-                  {[
-                    { tier: 'مجاني', price: '0', color: 'bg-white/10' },
-                    { tier: 'أساسي', price: '25', color: 'bg-white/10' },
-                    { tier: 'ذهبي', price: '75', color: 'bg-[#C9A84C]/20 border border-[#C9A84C]/50' },
-                    { tier: 'بلاتيني', price: '150', color: 'bg-white/10' },
-                  ].map((p) => (
-                    <div key={p.tier} className={`flex items-center justify-between rounded-lg ${p.color} px-4 py-3`}>
-                      <span className="font-semibold">{p.tier}</span>
-                      <span className="text-sm">
-                        <span className="text-lg font-bold text-[#C9A84C]">{p.price}</span> ر.ع / شهرياً
-                      </span>
-                    </div>
-                  ))}
+                  {(['FREE', 'BASIC', 'GOLD', 'PLATINUM']).map((key) => {
+                    const t = TIER_META[key]
+                    const isHighlighted = key === 'GOLD'
+                    return (
+                      <div
+                        key={key}
+                        className={`flex items-center justify-between rounded-lg ${isHighlighted ? 'bg-[#C9A84C]/20 border border-[#C9A84C]/50' : 'bg-white/10'} px-4 py-3`}
+                      >
+                        <span className="font-semibold">{t.nameAr}</span>
+                        <span className="text-sm">
+                          <span className="text-lg font-bold text-[#C9A84C]">{t.price}</span> ر.ع / شهرياً
+                        </span>
+                      </div>
+                    )
+                  })}
                 </div>
                 <Link href="/signup" className="mt-6 block w-full rounded-lg bg-[#C9A84C] py-3 text-center font-semibold text-[#1B3A6B] transition hover:bg-[#b89440]">
                   ابدأ بالعضوية المجانية
