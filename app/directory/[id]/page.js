@@ -9,6 +9,7 @@ import {
   STATUS_BADGE,
 } from '@/lib/directory'
 import { TIER_META } from '@/lib/membership'
+import SocialIcons from '@/components/SocialIcons'
 import {
   Phone,
   Mail,
@@ -222,6 +223,14 @@ export default async function CompanyProfilePage({ params }) {
                   <li className="text-xs text-gray-400">لا توجد معلومات تواصل مدرجة</li>
                 )}
               </ul>
+
+              {/* Social media links — large icons */}
+              {company.social && Object.values(company.social).some((v) => v) && (
+                <div className="mt-4 border-t border-gray-100 pt-4">
+                  <div className="mb-2 text-xs font-semibold text-gray-500">تابعنا على</div>
+                  <SocialIcons links={company.social} size="lg" />
+                </div>
+              )}
 
               {owner?.name && (
                 <div className="mt-4 border-t border-gray-100 pt-3 text-xs text-gray-500">

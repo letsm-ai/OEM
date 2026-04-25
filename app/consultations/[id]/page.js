@@ -7,6 +7,7 @@ import { Expert, User, Appointment } from '@/lib/models'
 import { specialtyLabel } from '@/lib/experts'
 import { TIER_DISCOUNT } from '@/lib/membership'
 import BookingWidget from './_BookingWidget'
+import SocialIcons from '@/components/SocialIcons'
 import { Star, Clock, Award, ArrowRight, Percent, MessageSquare } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
@@ -207,6 +208,37 @@ export default async function ExpertProfilePage({ params }) {
               clientTier={clientTier}
               authenticated={!!session?.user}
             />
+
+            {/* Contact + social */}
+            {(expert.phone || expert.email || expert.website || (expert.social && Object.values(expert.social).some((v) => v))) && (
+              <div className="mt-5 border-t border-gray-100 pt-5">
+                <div className="mb-3 text-sm font-bold text-[#1B3A6B]">معلومات التواصل</div>
+                <ul className="space-y-2 text-sm">
+                  {expert.phone && (
+                    <li className="flex items-center gap-2 text-gray-700">
+                      <span className="text-xs text-gray-400">الهاتف:</span>
+                      <a href={`tel:${expert.phone}`} dir="ltr" className="font-semibold text-[#1B3A6B] hover:text-[#C9A84C]">
+                        {expert.phone}
+                      </a>
+                    </li>
+                  )}
+                  {expert.email && (
+                    <li className="flex items-center gap-2 text-gray-700">
+                      <span className="text-xs text-gray-400">البريد:</span>
+                      <a href={`mailto:${expert.email}`} dir="ltr" className="font-semibold text-[#1B3A6B] hover:text-[#C9A84C]">
+                        {expert.email}
+                      </a>
+                    </li>
+                  )}
+                </ul>
+                {(expert.website || (expert.social && Object.values(expert.social).some((v) => v))) && (
+                  <div className="mt-3">
+                    <div className="mb-2 text-xs font-semibold text-gray-500">تابعني على</div>
+                    <SocialIcons links={expert.social || {}} extraWebsite={expert.website} size="lg" />
+                  </div>
+                )}
+              </div>
+            )}
           </aside>
         </div>
       </div>

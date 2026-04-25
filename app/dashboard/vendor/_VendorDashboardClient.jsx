@@ -44,6 +44,7 @@ import {
   ORDER_STATUS_BADGE,
   COMMISSION_PERCENT,
 } from '@/lib/store'
+import { SocialFormFields } from '@/components/SocialIcons'
 
 export default function VendorDashboardClient() {
   const [tab, setTab] = useState('analytics')
@@ -2072,6 +2073,10 @@ function ProfileTab() {
     city: '',
     address: '',
     vendorAbsorbsShipping: false,
+    social: {
+      instagram: '', facebook: '', twitter: '', linkedin: '',
+      whatsapp: '', tiktok: '', snapchat: '', youtube: '',
+    },
   })
 
   useEffect(() => {
@@ -2247,6 +2252,16 @@ function ProfileTab() {
             </F>
           </div>
         </div>
+      </section>
+
+      {/* Social media links */}
+      <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+        <h2 className="mb-1 text-base font-extrabold text-[#1B3A6B]">روابط التواصل الاجتماعي</h2>
+        <p className="mb-4 text-xs text-gray-500">اختياري — تظهر كأيقونات لطيفة في صفحة متجرك العامة وبطاقات منتجاتك.</p>
+        <SocialFormFields
+          value={f.social}
+          onChange={(s) => setF({ ...f, social: s })}
+        />
       </section>
 
       {/* Shipping policy section */}

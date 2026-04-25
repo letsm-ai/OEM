@@ -4575,6 +4575,10 @@ async function handleRoute(request, { params }) {
             governorate: user.vendorProfile?.governorate || '',
             city: user.vendorProfile?.city || '',
             address: user.vendorProfile?.address || '',
+            social: user.vendorProfile?.social || {
+              instagram: '', facebook: '', twitter: '', linkedin: '',
+              whatsapp: '', tiktok: '', snapchat: '', youtube: '',
+            },
             vendorAbsorbsShipping: user.vendorAbsorbsShipping === true,
           },
         })
@@ -4699,6 +4703,11 @@ async function handleRoute(request, { params }) {
       // Toggle: vendor absorbs shipping cost (free shipping for customer)
       if (body.vendorAbsorbsShipping !== undefined) {
         user.vendorAbsorbsShipping = body.vendorAbsorbsShipping === true
+      }
+
+      // Social media links (sanitized)
+      if (body.social !== undefined) {
+        prof.social = sanitizeSocial(body.social)
       }
 
       user.vendorProfile = prof
