@@ -3,7 +3,9 @@ import { connectDB } from '@/lib/db'
 import { Company, User } from '@/lib/models'
 import DirectoryFilters from './_DirectoryFilters'
 import DirectoryClient from './_DirectoryClient'
-import { Search, Building2, Plus } from 'lucide-react'
+import { Search, Building2, Plus, Lock, Sparkles } from 'lucide-react'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
 import {
   SECTOR_KEYS,
   GOVERNORATE_KEYS,
@@ -20,6 +22,9 @@ const SORT_MAP = {
   name_desc: { nameAr: -1 },
 }
 
+const PAID_TIERS = ['BASIC', 'GOLD', 'PLATINUM']
+const FREE_PER_SECTOR_LIMIT = 5
+
 export default async function DirectoryPage({ searchParams }) {
   const params = searchParams || {}
   const search = (params.search || '').toString().trim()
@@ -28,6 +33,15 @@ export default async function DirectoryPage({ searchParams }) {
   const sortKey = SORT_MAP[params.sort] ? params.sort : 'newest'
 
   await connectDB()
+
+  // Determine viewer's access tier
+  const session = await getServerSession(authOptions)
+  let viewerTier = 'GUEST'
+  if (session?.user?.id) {
+    const me = await User.findById(session.user.id).select('membershipTier role').lean()
+    viewerTier = me?.role === 'ADMIN' ? 'ADMIN' : (me?.membershipTier || 'FREE')
+  }
+  const hasFullAccess = viewerTier === 'ADMIN' || PAID_TIERS.includes(viewerTier)
 
   const query = { status: 'APPROVED' }
   if (sector) query.sector = sector
@@ -75,6 +89,32 @@ export default async function DirectoryPage({ searchParams }) {
     .filter((c) => isFeatured(tierByUser[c.userId]))
     .map((c) => c.id)
 
+  // Apply per-sector cap for guests + FREE-tier viewers (5 per sector).
+  // Priority within each sector: featured (GOLD/PLATINUM) first, then by current sort order.
+  let visible = mapped
+  let totalCount = mapped.length
+  let hiddenCount = 0
+  if (!hasFullAccess) {
+    const bucketsBySector = new Map()
+    for (const c of mapped) {
+      const key = c.sector || 'OTHER'
+      if (!bucketsBySector.has(key)) bucketsBySector.set(key, [])
+      bucketsBySector.get(key).push(c)
+    }
+    const limited = []
+    for (const [, list] of bucketsBySector) {
+      // Sort: featured first, then keep existing relative order
+      const sorted = [...list].sort((a, b) => {
+        const af = isFeatured(tierByUser[a.userId]) ? 1 : 0
+        const bf = isFeatured(tierByUser[b.userId]) ? 1 : 0
+        return bf - af
+      })
+      limited.push(...sorted.slice(0, FREE_PER_SECTOR_LIMIT))
+    }
+    hiddenCount = mapped.length - limited.length
+    visible = limited
+  }
+
   const hasFilter = !!(sector || gov || search)
 
   return (
@@ -91,8 +131,14 @@ export default async function DirectoryPage({ searchParams }) {
               شركات رواد الأعمال العمانيين
             </h1>
             <p className="mt-1 text-sm text-gray-600">
-              {mapped.length} شركة معتمدة
+              {visible.length} شركة معتمدة
               {hasFilter && ' بعد التصفية'}
+              {hiddenCount > 0 && (
+                <span className="ms-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                  <Lock className="h-3 w-3" />
+                  +{hiddenCount} شركة مخفية
+                </span>
+              )}
             </p>
           </div>
           <Link
@@ -141,10 +187,54 @@ export default async function DirectoryPage({ searchParams }) {
             )}
 
             <DirectoryClient
-              companies={mapped}
+              companies={visible}
               featuredIds={featuredIds}
               filtered={hasFilter}
             />
+
+            {/* Upgrade CTA banner for guests / FREE viewers when companies are hidden */}
+            {!hasFullAccess && hiddenCount > 0 && (
+              <div className="mt-6 overflow-hidden rounded-2xl border border-[#C9A84C]/40 bg-gradient-to-bl from-[#C9A84C]/15 to-[#C9A84C]/5 p-5">
+                <div className="flex flex-wrap items-center gap-4">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#C9A84C] text-[#1B3A6B]">
+                    <Sparkles className="h-6 w-6" />
+                  </div>
+                  <div className="flex-1 min-w-[220px]">
+                    <h3 className="text-base font-extrabold text-[#1B3A6B]">
+                      اكتشف {hiddenCount} شركة إضافية
+                    </h3>
+                    <p className="mt-0.5 text-sm text-gray-700">
+                      نعرض الآن 5 شركات فقط من كل قطاع للزوار. اشترك بالعضوية الأساسية فما فوق لرؤية الدليل كاملاً.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {viewerTier === 'GUEST' ? (
+                      <>
+                        <Link
+                          href="/signup"
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-[#1B3A6B] px-4 py-2 text-sm font-bold text-white hover:bg-[#152c52]"
+                        >
+                          أنشئ حساباً مجاناً
+                        </Link>
+                        <Link
+                          href="/membership"
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-[#C9A84C] px-4 py-2 text-sm font-bold text-[#1B3A6B] hover:bg-[#b89440]"
+                        >
+                          تصفّح العضويات
+                        </Link>
+                      </>
+                    ) : (
+                      <Link
+                        href="/membership"
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-[#C9A84C] px-4 py-2 text-sm font-bold text-[#1B3A6B] hover:bg-[#b89440]"
+                      >
+                        رقّ عضويتك الآن
+                      </Link>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
         </div>
       </div>

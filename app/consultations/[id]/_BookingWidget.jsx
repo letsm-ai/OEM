@@ -47,6 +47,8 @@ export default function BookingWidget({
   const [booking, setBooking] = useState(false)
   const [success, setSuccess] = useState(null)
   const [error, setError] = useState('')
+  // Guest fields (only used if not authenticated)
+  const [guest, setGuest] = useState({ name: '', email: '', phone: '' })
 
   // Load weekly availability to highlight clickable days
   useEffect(() => {
@@ -85,6 +87,19 @@ export default function BookingWidget({
 
   const confirm = async () => {
     if (!selectedDate || !selectedSlot) return
+    // Validate guest info if not authenticated
+    if (!authenticated) {
+      const gName = guest.name.trim()
+      const gEmail = guest.email.trim()
+      if (!gName || !gEmail) {
+        setError('للحجز كضيف، الاسم والبريد الإلكتروني مطلوبان')
+        return
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(gEmail)) {
+        setError('صيغة البريد الإلكتروني غير صحيحة')
+        return
+      }
+    }
     setBooking(true)
     setError('')
     try {
@@ -96,6 +111,7 @@ export default function BookingWidget({
           date: isoDate(selectedDate),
           startTime: selectedSlot.startTime,
           endTime: selectedSlot.endTime,
+          ...(authenticated ? {} : { guest }),
         }),
       })
       const data = await res.json()
@@ -111,17 +127,7 @@ export default function BookingWidget({
     }
   }
 
-  if (!authenticated) {
-    return (
-      <Link
-        href={`/login?callbackUrl=/consultations/${expertId}`}
-        className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#1B3A6B] py-3 text-sm font-semibold text-white hover:bg-[#152c52]"
-      >
-        <CalendarIcon className="h-4 w-4" />
-        سجّل الدخول للحجز
-      </Link>
-    )
-  }
+  // (Guests CAN now book — no early return for unauthenticated users.)
 
   if (availableDayOfWeek.size === 0) {
     return (
@@ -286,6 +292,49 @@ export default function BookingWidget({
                         })}
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* Step 2.5: Guest info (if not authenticated) */}
+                {selectedDate && selectedSlot && !authenticated && (
+                  <div className="border-b border-gray-100 px-6 py-4">
+                    <div className="mb-2 flex items-center justify-between">
+                      <div className="text-sm font-bold text-[#1B3A6B]">3. بياناتك</div>
+                      <Link
+                        href={`/login?callbackUrl=/consultations/${expertId}`}
+                        className="text-xs font-semibold text-[#C9A84C] hover:underline"
+                      >
+                        لديك حساب؟ سجّل دخول
+                      </Link>
+                    </div>
+                    <div className="mb-2 rounded-md bg-blue-50 px-3 py-1.5 text-[11px] text-blue-800">
+                      🛒 يمكنك إكمال الحجز كضيف بدون إنشاء حساب
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      <input
+                        type="text"
+                        value={guest.name}
+                        onChange={(e) => setGuest({ ...guest, name: e.target.value })}
+                        placeholder="الاسم الكامل *"
+                        className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-[#1B3A6B] focus:outline-none"
+                      />
+                      <input
+                        type="email"
+                        value={guest.email}
+                        onChange={(e) => setGuest({ ...guest, email: e.target.value })}
+                        placeholder="البريد الإلكتروني *"
+                        dir="ltr"
+                        className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-right focus:border-[#1B3A6B] focus:outline-none"
+                      />
+                      <input
+                        type="tel"
+                        value={guest.phone}
+                        onChange={(e) => setGuest({ ...guest, phone: e.target.value })}
+                        placeholder="رقم الهاتف"
+                        dir="ltr"
+                        className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-right focus:border-[#1B3A6B] focus:outline-none"
+                      />
+                    </div>
                   </div>
                 )}
 

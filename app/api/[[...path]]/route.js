@@ -1786,15 +1786,62 @@ async function handleRoute(request, { params }) {
       )
     }
 
-    // ---- POST /appointments (book) ----
+    // ---- POST /appointments (book) — supports guest booking ----
     if (route === '/appointments' && method === 'POST') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'يجب تسجيل الدخول أولاً' }, { status: 401 })
-        )
-      }
+      let session = await getServerSession(authOptions)
+      await connectDB()
       const body = await request.json().catch(() => ({}))
+
+      // Guest booking support: if no session, require guest info to auto-create a user.
+      let clientId = session?.user?.id
+      if (!session?.user) {
+        const guest = body?.guest || {}
+        const gEmail = String(guest.email || '').trim().toLowerCase()
+        const gName = String(guest.name || '').trim()
+        const gPhone = String(guest.phone || '').trim()
+        if (!gEmail || !gName) {
+          return handleCORS(
+            NextResponse.json(
+              { error: 'للحجز كضيف، الاسم والبريد الإلكتروني مطلوبان' },
+              { status: 400 }
+            )
+          )
+        }
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(gEmail)) {
+          return handleCORS(
+            NextResponse.json({ error: 'صيغة البريد الإلكتروني غير صحيحة' }, { status: 400 })
+          )
+        }
+        let existingUser = await User.findOne({ email: gEmail })
+        if (existingUser && existingUser.password && !existingUser.isGuest) {
+          return handleCORS(
+            NextResponse.json(
+              { error: 'هذا البريد مسجّل مسبقاً، يُرجى تسجيل الدخول لإتمام الحجز' },
+              { status: 409 }
+            )
+          )
+        }
+        if (existingUser) {
+          clientId = existingUser._id
+          if (gName && !existingUser.name) existingUser.name = gName
+          if (gPhone && !existingUser.phone) existingUser.phone = gPhone
+          await existingUser.save()
+        } else {
+          const guestUser = await User.create({
+            name: gName,
+            email: gEmail,
+            password: '',
+            phone: gPhone,
+            role: 'MEMBER',
+            membershipTier: 'FREE',
+            isGuest: true,
+          })
+          clientId = guestUser._id
+        }
+        // create shim session
+        session = { user: { id: clientId, role: 'MEMBER' } }
+      }
+
       const { expertId, date, startTime, endTime } = body || {}
       if (!expertId || !date || !startTime || !endTime) {
         return handleCORS(
@@ -1806,14 +1853,13 @@ async function handleRoute(request, { params }) {
           NextResponse.json({ error: 'تاريخ غير صحيح' }, { status: 400 })
         )
       }
-      await connectDB()
       const expert = await Expert.findById(expertId).lean()
       if (!expert || expert.status !== 'APPROVED') {
         return handleCORS(
           NextResponse.json({ error: 'الخبير غير متاح' }, { status: 404 })
         )
       }
-      if (expert.userId === session.user.id) {
+      if (expert.userId === clientId) {
         return handleCORS(
           NextResponse.json(
             { error: 'لا يمكنك حجز جلسة مع نفسك' },
@@ -1849,14 +1895,14 @@ async function handleRoute(request, { params }) {
         )
       }
       // pricing
-      const client = await User.findById(session.user.id).lean()
+      const client = await User.findById(clientId).lean()
       const clientTier = client?.membershipTier || 'FREE'
       const price = computeSessionPrice(
         expert.hourlyRate,
         TIER_DISCOUNT[clientTier] || 0
       )
       const appt = await Appointment.create({
-        clientId: session.user.id,
+        clientId: clientId,
         expertId,
         date: day,
         startTime,
@@ -2454,7 +2500,7 @@ async function handleRoute(request, { params }) {
       )
     }
 
-    // ---- POST /vendor/apply (GOLD/PLATINUM only) ----
+    // ---- POST /vendor/apply (any logged-in user can apply) ----
     if (route === '/vendor/apply' && method === 'POST') {
       const session = await getServerSession(authOptions)
       if (!session?.user) {
@@ -2477,14 +2523,7 @@ async function handleRoute(request, { params }) {
           )
         )
       }
-      if (!['GOLD', 'PLATINUM'].includes(dbUser.membershipTier)) {
-        return handleCORS(
-          NextResponse.json(
-            { error: 'تحتاج إلى عضوية ذهبية أو بلاتينية للتقديم كبائع' },
-            { status: 403 }
-          )
-        )
-      }
+      // Open to ALL membership tiers (FREE, BASIC, GOLD, PLATINUM) — no tier gate.
       const body = await request.json().catch(() => ({}))
       const businessName = String(body?.businessName || '').trim()
       if (!businessName || businessName.length < 2) {
