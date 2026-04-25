@@ -73,7 +73,7 @@ export default async function ConsultationsPage({ searchParams }) {
                 </p>
               </div>
             ) : (
-              <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
                 {enriched.map((e) => (
                   <ExpertCard key={e._id} expert={e} />
                 ))}

@@ -10,6 +10,7 @@ import { User, Membership, PasswordResetToken, Company, Expert, Availability, Ap
 import {
   handleShippingQuote,
 } from '@/lib/api/shipping'
+import { sanitizeSocial } from '@/lib/social'
 import {
   handleWishlistList,
   handleWishlistAdd,
@@ -858,6 +859,7 @@ async function handleRoute(request, { params }) {
         phone: body.phone || '',
         email: body.email || '',
         website: body.website || '',
+        social: sanitizeSocial(body.social),
         location: body.location || '',
         lat: latVal,
         lng: lngVal,
@@ -954,6 +956,10 @@ async function handleRoute(request, { params }) {
       ]
       for (const k of allowed) {
         if (body[k] !== undefined) company[k] = body[k]
+      }
+      // Social links (sanitized)
+      if (body.social !== undefined) {
+        company.social = sanitizeSocial(body.social)
       }
       if (body.sector && !SECTOR_KEYS.includes(body.sector)) {
         return handleCORS(
@@ -1544,6 +1550,10 @@ async function handleRoute(request, { params }) {
         hourlyRate: Number(hourlyRate),
         photo: photo || '',
         cv: cv || '',
+        phone: body.phone || '',
+        email: body.email || '',
+        website: body.website || '',
+        social: sanitizeSocial(body.social),
         status: 'PENDING',
         isApproved: false,
       })
@@ -1572,6 +1582,42 @@ async function handleRoute(request, { params }) {
       }
       const { _id, ...rest } = expert
       return handleCORS(NextResponse.json({ id: _id, ...rest }))
+    }
+
+    // ---- PUT /experts/me  (expert updates their own profile) ----
+    if (route === '/experts/me' && method === 'PUT') {
+      const session = await getServerSession(authOptions)
+      if (!session?.user) {
+        return handleCORS(
+          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+        )
+      }
+      await connectDB()
+      const expert = await Expert.findOne({ userId: session.user.id })
+      if (!expert) {
+        return handleCORS(
+          NextResponse.json({ error: 'لست خبيراً' }, { status: 404 })
+        )
+      }
+      const body = await request.json().catch(() => ({}))
+      const editable = ['bio', 'experienceYears', 'hourlyRate', 'photo', 'cv', 'specialty', 'specialtyAr', 'phone', 'email', 'website']
+      for (const k of editable) {
+        if (body[k] !== undefined) {
+          if (k === 'specialty' && !SPECIALTY_KEYS.includes(body[k])) continue
+          if (k === 'experienceYears') expert[k] = Number(body[k]) || 0
+          else if (k === 'hourlyRate') expert[k] = Number(body[k]) || expert[k]
+          else expert[k] = body[k]
+        }
+      }
+      if (body.social !== undefined) {
+        expert.social = sanitizeSocial(body.social)
+      }
+      expert.updatedAt = new Date()
+      await expert.save()
+      const obj = expert.toObject()
+      return handleCORS(
+        NextResponse.json({ success: true, expert: { id: obj._id, ...obj, _id: undefined } })
+      )
     }
 
     // ---- PUT /experts/me/availability ----

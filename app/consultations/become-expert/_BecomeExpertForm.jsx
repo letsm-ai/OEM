@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2, Upload, X, CheckCircle2 } from 'lucide-react'
 import { SPECIALTIES } from '@/lib/experts'
+import { SocialFormFields } from '@/components/SocialIcons'
 
 const MAX_PHOTO = 500 * 1024
 const MAX_CV = 2 * 1024 * 1024 // 2MB for CV
@@ -19,6 +20,13 @@ export default function BecomeExpertForm() {
     photo: '',
     cv: '',
     cvName: '',
+    phone: '',
+    email: '',
+    website: '',
+    social: {
+      instagram: '', facebook: '', twitter: '', linkedin: '',
+      whatsapp: '', tiktok: '', snapchat: '', youtube: '',
+    },
   })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -68,6 +76,10 @@ export default function BecomeExpertForm() {
       hourlyRate: rate,
       photo: form.photo,
       cv: form.cv,
+      phone: form.phone,
+      email: form.email,
+      website: form.website,
+      social: form.social,
     }
     try {
       const res = await fetch('/api/experts/apply', {
@@ -224,6 +236,45 @@ export default function BecomeExpertForm() {
               حذف
             </button>
           )}
+        </div>
+      </div>
+
+      {/* Contact + social */}
+      <div className="rounded-xl border border-gray-200 bg-white p-4">
+        <div className="mb-3">
+          <h3 className="text-sm font-bold text-[#1B3A6B]">معلومات التواصل (اختياري)</h3>
+          <p className="mt-0.5 text-xs text-gray-500">للتواصل المباشر مع العملاء</p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <input
+            value={form.phone}
+            onChange={(e) => setForm({ ...form, phone: e.target.value })}
+            placeholder="رقم الهاتف"
+            dir="ltr"
+            className="input text-right"
+          />
+          <input
+            value={form.email}
+            onChange={(e) => setForm({ ...form, email: e.target.value })}
+            placeholder="البريد الإلكتروني"
+            type="email"
+            dir="ltr"
+            className="input text-right"
+          />
+          <input
+            value={form.website}
+            onChange={(e) => setForm({ ...form, website: e.target.value })}
+            placeholder="https://yourwebsite.com"
+            dir="ltr"
+            className="input text-right"
+          />
+        </div>
+        <div className="mt-3">
+          <h3 className="mb-2 text-xs font-bold text-[#1B3A6B]">روابط التواصل الاجتماعي</h3>
+          <SocialFormFields
+            value={form.social}
+            onChange={(s) => setForm({ ...form, social: s })}
+          />
         </div>
       </div>
 

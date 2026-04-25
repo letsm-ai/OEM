@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2, Upload, X, CheckCircle2 } from 'lucide-react'
 import { SECTORS, GOVERNORATES } from '@/lib/directory'
+import { SocialFormFields } from '@/components/SocialIcons'
 
 const MAX_LOGO_BYTES = 500 * 1024 // 500KB raw
 
@@ -23,6 +24,10 @@ export default function AddCompanyForm({ initial = null, companyId = null }) {
     lat: typeof initial?.lat === 'number' ? String(initial.lat) : '',
     lng: typeof initial?.lng === 'number' ? String(initial.lng) : '',
     logo: initial?.logo || '',
+    social: initial?.social || {
+      instagram: '', facebook: '', twitter: '', linkedin: '',
+      whatsapp: '', tiktok: '', snapchat: '', youtube: '',
+    },
   })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -288,6 +293,18 @@ export default function AddCompanyForm({ initial = null, companyId = null }) {
             placeholder="مثال: الحي التجاري، الغبرة"
           />
         </Field>
+      </div>
+
+      {/* Social media links */}
+      <div className="rounded-xl border border-gray-200 bg-white p-4">
+        <div className="mb-3">
+          <h3 className="text-sm font-bold text-[#1B3A6B]">روابط التواصل الاجتماعي</h3>
+          <p className="mt-0.5 text-xs text-gray-500">اختياري — تظهر كأيقونات على بطاقة الشركة</p>
+        </div>
+        <SocialFormFields
+          value={form.social}
+          onChange={(s) => setForm({ ...form, social: s })}
+        />
       </div>
 
       {/* Location coordinates */}

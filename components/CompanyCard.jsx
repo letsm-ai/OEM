@@ -1,17 +1,16 @@
 import Link from 'next/link'
-import { MapPin, ChevronLeft, Building2, Star } from 'lucide-react'
+import { MapPin, Building2, Star } from 'lucide-react'
 import {
   sectorLabel,
   governorateLabel,
   STATUS_LABELS,
   STATUS_BADGE,
 } from '@/lib/directory'
+import SocialIcons from '@/components/SocialIcons'
 
 /**
- * Compact company card: horizontal layout, logo on one side and content on
- * the other. Designed to pack more cards per viewport while remaining
- * scannable. Used both in the public directory grid and in the owner/admin
- * views (toggle via `showStatus`).
+ * Compact vertical company card — fits up to 8 per row on xl screens.
+ * Used in the public directory grid + owner/admin views.
  */
 export default function CompanyCard({
   company,
@@ -20,104 +19,81 @@ export default function CompanyCard({
 }) {
   const sector = sectorLabel(company.sector)
   const gov = governorateLabel(company.governorate)
+  const social = company.social || {}
 
   return (
     <Link
       href={`/directory/${company.id || company._id}`}
-      className={`group relative flex overflow-hidden rounded-xl border bg-white transition-all hover:-translate-y-0.5 hover:shadow-md ${
+      className={`group relative flex flex-col overflow-hidden rounded-lg border bg-white transition hover:-translate-y-0.5 hover:shadow-md ${
         featured
           ? 'border-[#C9A84C]/60 ring-1 ring-[#C9A84C]/30'
           : 'border-gray-200 hover:border-gray-300'
       }`}
     >
-      {/* Gold strip for featured */}
+      {/* Gold corner ribbon for featured */}
       {featured && (
         <span
-          className="absolute inset-y-0 right-0 w-1 bg-gradient-to-b from-[#C9A84C] to-[#a78a38]"
+          className="absolute top-0 left-0 inline-flex items-center gap-0.5 rounded-br-md bg-[#C9A84C] px-1.5 py-0.5 text-[9px] font-bold text-[#1B3A6B]"
           aria-hidden
-        />
+        >
+          <Star className="h-2.5 w-2.5 fill-[#1B3A6B]" />
+          ذهبي
+        </span>
       )}
 
-      {/* Logo / initial */}
-      <div
-        className={`flex h-full w-20 flex-shrink-0 items-center justify-center ${
-          featured ? 'bg-[#1B3A6B]/5' : 'bg-[#F8F9FA]'
-        }`}
-      >
+      {/* Status badge (admin/owner views) */}
+      {showStatus && company.status && (
+        <span
+          className={`absolute top-1 right-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${STATUS_BADGE[company.status]}`}
+        >
+          {STATUS_LABELS[company.status]}
+        </span>
+      )}
+
+      {/* Logo area */}
+      <div className={`flex h-24 items-center justify-center ${featured ? 'bg-[#1B3A6B]/5' : 'bg-gradient-to-br from-[#F8F9FA] to-white'}`}>
         {company.logo ? (
+          // eslint-disable-next-line @next/next/no-img-element
           <img
             src={company.logo}
             alt={company.nameAr}
-            className="h-14 w-14 rounded-lg border border-gray-200 object-cover"
+            className="h-16 w-16 rounded-lg border border-gray-200 bg-white object-cover"
+            loading="lazy"
           />
         ) : (
           <div
-            className={`flex h-14 w-14 items-center justify-center rounded-lg text-xl font-extrabold ${
+            className={`flex h-16 w-16 items-center justify-center rounded-lg text-2xl font-extrabold ${
               featured
                 ? 'bg-[#C9A84C]/15 text-[#8a6f2d]'
                 : 'bg-[#1B3A6B]/10 text-[#1B3A6B]'
             }`}
           >
-            {company.nameAr?.charAt(0) || <Building2 className="h-6 w-6" />}
+            {company.nameAr?.charAt(0) || <Building2 className="h-7 w-7" />}
           </div>
         )}
       </div>
 
       {/* Content */}
-      <div className="flex min-w-0 flex-1 flex-col justify-between p-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5">
-            <h3 className="truncate text-sm font-bold text-[#1B3A6B] group-hover:text-[#152c52]">
-              {company.nameAr}
-            </h3>
-            {featured && (
-              <span
-                title="عضو ذهبي"
-                className="inline-flex h-4 items-center rounded-full bg-[#C9A84C] px-1.5 text-[9px] font-bold text-[#1B3A6B]"
-              >
-                <Star className="ml-0.5 h-2.5 w-2.5 fill-[#1B3A6B]" />
-                ذهبي
-              </span>
-            )}
-            {showStatus && company.status && (
-              <span
-                className={`ms-auto inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                  STATUS_BADGE[company.status]
-                }`}
-              >
-                {STATUS_LABELS[company.status]}
-              </span>
-            )}
-          </div>
-          {company.nameEn && (
-            <div
-              dir="ltr"
-              className="truncate text-right text-[11px] text-gray-400"
-            >
-              {company.nameEn}
-            </div>
-          )}
+      <div className="flex flex-1 flex-col gap-1 p-2.5">
+        <h3 className="line-clamp-2 min-h-[2.4em] text-[12px] font-bold leading-tight text-[#1B3A6B] group-hover:text-[#152c52]">
+          {company.nameAr}
+        </h3>
 
-          {company.description && (
-            <p className="mt-1 line-clamp-1 text-[12px] leading-snug text-gray-600">
-              {company.description}
-            </p>
+        <div className="flex flex-wrap items-center gap-1 text-[10px]">
+          <span className="inline-flex rounded-full bg-[#1B3A6B]/8 px-1.5 py-0.5 font-semibold text-[#1B3A6B]">
+            {sector}
+          </span>
+          {gov && (
+            <span className="inline-flex items-center gap-0.5 text-gray-500">
+              <MapPin className="h-2.5 w-2.5" />
+              {gov}
+            </span>
           )}
         </div>
 
-        <div className="mt-2 flex items-center justify-between gap-2 text-[11px]">
-          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <span className="inline-flex shrink-0 rounded-full bg-[#1B3A6B]/8 px-2 py-0.5 font-semibold text-[#1B3A6B]">
-              {sector}
-            </span>
-            {gov && (
-              <span className="inline-flex shrink-0 items-center gap-0.5 text-gray-500">
-                <MapPin className="h-3 w-3" />
-                {gov}
-              </span>
-            )}
-          </div>
-          <ChevronLeft className="h-4 w-4 flex-shrink-0 text-gray-300 transition group-hover:-translate-x-0.5 group-hover:text-[#C9A84C]" />
+        {/* Social icons (if any) */}
+        <div className="mt-auto pt-1.5">
+          <SocialIcons links={social} extraWebsite={company.website} size="sm" />
         </div>
       </div>
     </Link>
