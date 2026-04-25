@@ -4529,6 +4529,7 @@ async function handleRoute(request, { params }) {
             governorate: user.vendorProfile?.governorate || '',
             city: user.vendorProfile?.city || '',
             address: user.vendorProfile?.address || '',
+            vendorAbsorbsShipping: user.vendorAbsorbsShipping === true,
           },
         })
       )
@@ -4649,13 +4650,24 @@ async function handleRoute(request, { params }) {
         )
       }
 
+      // Toggle: vendor absorbs shipping cost (free shipping for customer)
+      if (body.vendorAbsorbsShipping !== undefined) {
+        user.vendorAbsorbsShipping = body.vendorAbsorbsShipping === true
+      }
+
       user.vendorProfile = prof
       user.updatedAt = new Date()
       await user.save()
       return handleCORS(
         NextResponse.json({
           success: true,
-          profile: { ...prof, id: user._id, name: user.name, email: user.email },
+          profile: {
+            ...prof,
+            id: user._id,
+            name: user.name,
+            email: user.email,
+            vendorAbsorbsShipping: user.vendorAbsorbsShipping === true,
+          },
         })
       )
     }

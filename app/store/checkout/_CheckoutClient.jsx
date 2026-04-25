@@ -70,24 +70,30 @@ export default function CheckoutClient({ tier, user, isLoggedIn = true }) {
   }
 
   // Shipping state — fetched whenever governorate or totals change
-  const [shipping, setShipping] = useState({ fee: 0, isFree: false, freeThreshold: 30, freeThresholdReached: false })
+  const [shipping, setShipping] = useState({ fee: 0, isFree: false, freeThreshold: 30, freeThresholdReached: false, absorbedByVendor: false })
   const amountForShipping = coupon ? coupon.finalTotal : totals.totalPaid
 
   useEffect(() => {
     let ignore = false
     ;(async () => {
       try {
+        // Pass cart items so the API can check if all vendors absorb shipping.
+        const cartItems = items.map((it) => ({ productId: it.productId, vendorId: it.vendorId }))
         const r = await fetch('/api/shipping/quote', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ governorate: addr.governorate, amount: amountForShipping }),
+          body: JSON.stringify({
+            governorate: addr.governorate,
+            amount: amountForShipping,
+            items: cartItems,
+          }),
         })
         const d = await r.json()
         if (!ignore && r.ok) setShipping(d)
       } catch (e) { /* noop */ }
     })()
     return () => { ignore = true }
-  }, [addr.governorate, amountForShipping])
+  }, [addr.governorate, amountForShipping, items])
 
   const couponDiscount = coupon ? coupon.couponDiscountAmount : 0
   const [paymentMethod, setPaymentMethod] = useState('CARD') // 'CARD' (Thawani) or 'COD'
@@ -282,11 +288,13 @@ export default function CheckoutClient({ tier, user, isLoggedIn = true }) {
               <SumRow
                 label="الشحن"
                 value={
-                  shipping.isFree
-                    ? 'مجاني 🎉'
-                    : `${formatOMR(shipping.fee)} ر.ع`
+                  shipping.absorbedByVendor
+                    ? 'مجاني (يتحمّله البائع) 🎁'
+                    : shipping.isFree
+                      ? 'مجاني 🎉'
+                      : `${formatOMR(shipping.fee)} ر.ع`
                 }
-                color={shipping.isFree ? 'text-green-600' : 'text-gray-700'}
+                color={shipping.isFree || shipping.absorbedByVendor ? 'text-green-600' : 'text-gray-700'}
               />
               {paymentMethod === 'COD' && codFee > 0 && (
                 <SumRow

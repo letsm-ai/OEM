@@ -1731,6 +1731,7 @@ function ProductFormModal({ product, onClose, onSaved }) {
           </div>
 
           <div className="hidden">{/* keep spacing */}</div>
+          <div className="grid gap-3 sm:grid-cols-2">
             <F label="الفئة">
               <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value, subcategory: '' })} className="input">
                 {PRODUCT_CATEGORIES.map((c) => (
@@ -2070,6 +2071,7 @@ function ProfileTab() {
     governorate: '',
     city: '',
     address: '',
+    vendorAbsorbsShipping: false,
   })
 
   useEffect(() => {
@@ -2245,6 +2247,33 @@ function ProfileTab() {
             </F>
           </div>
         </div>
+      </section>
+
+      {/* Shipping policy section */}
+      <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+        <h2 className="mb-1 text-base font-extrabold text-[#1B3A6B]">سياسة الشحن</h2>
+        <p className="mb-4 text-xs text-gray-500">حدّد ما إذا كنت ستتحمّل تكلفة الشحن بدلاً من تحميلها على العميل.</p>
+
+        <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-gray-200 bg-gray-50 p-4 transition hover:bg-gray-100">
+          <input
+            type="checkbox"
+            checked={!!f.vendorAbsorbsShipping}
+            onChange={(e) => setF({ ...f, vendorAbsorbsShipping: e.target.checked })}
+            className="mt-0.5 h-5 w-5 cursor-pointer accent-[#1B3A6B]"
+          />
+          <div className="flex-1">
+            <div className="font-bold text-[#1B3A6B]">أتحمّل تكلفة الشحن (شحن مجاني للعميل)</div>
+            <p className="mt-1 text-xs text-gray-600 leading-relaxed">
+              عند تفعيل هذا الخيار، سيظهر للعميل <span className="font-bold text-green-700">&ldquo;شحن مجاني&rdquo;</span> عند الدفع، وستُخصم تكلفة الشحن من أرباحك. <br />
+              <span className="text-gray-500">إذا تركت الخيار مغلقاً، سيدفع العميل رسوم الشحن: <strong>2 ر.ع</strong> لمسقط أو <strong>3 ر.ع</strong> لباقي المحافظات.</span>
+            </p>
+            {f.vendorAbsorbsShipping && (
+              <div className="mt-2 inline-flex items-center gap-1 rounded-md bg-green-100 px-2 py-1 text-[11px] font-bold text-green-800">
+                ✓ مفعّل — العميل لا يدفع رسوم شحن
+              </div>
+            )}
+          </div>
+        </label>
       </section>
 
       {msg && (
