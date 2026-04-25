@@ -1,480 +1,684 @@
 #!/usr/bin/env python3
 """
-Backend testing for NEW shipping policy + per-vendor shipping absorption.
-
-Tests the following endpoints:
-1. POST /api/shipping/quote - Updated with vendor absorption logic
-2. GET /api/vendor/profile - Now includes vendorAbsorbsShipping
-3. PUT /api/vendor/profile - Now accepts vendorAbsorbsShipping
-
-Test scenarios from review request:
-- New shipping fees: 2 OMR for MUSCAT, 3 OMR for all other governorates
-- Vendor absorption: when ALL vendors in cart have vendorAbsorbsShipping=true, fee=0
-- Mixed vendors: when some absorb and some don't, customer pays regional fee
+Backend testing for Social Media Links feature
+Tests all scenarios from the review request
 """
 
 import requests
 import json
 import time
 import uuid
-from datetime import datetime
+from pymongo import MongoClient
+import bcrypt
+import os
 
 # Configuration
-BASE_URL = "https://omani-startup-hub.preview.emergentagent.com/api"
-TEST_PASSWORD = "Password123"
+BASE_URL = os.getenv('NEXT_PUBLIC_BASE_URL', 'https://6f3dfdf5-cfdd-488c-a9a0-63f293d4ee0d.preview.emergentagent.com')
+API_BASE = f"{BASE_URL}/api"
 
-class ShippingPolicyTester:
-    def __init__(self):
-        self.session = requests.Session()
-        self.test_users = {}
-        self.test_vendors = {}
-        self.test_products = {}
-        
-    def log(self, message):
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        print(f"[{timestamp}] {message}")
-        
-    def create_test_user(self, role="MEMBER", suffix=""):
-        """Create a test user and return credentials"""
-        timestamp = int(time.time())
-        email = f"shipping_test_{role.lower()}_{timestamp}{suffix}@example.com"
-        name = f"Test {role} {timestamp}"
-        
-        # Create user via signup
-        response = self.session.post(f"{BASE_URL}/signup", json={
-            "name": name,
-            "email": email,
-            "password": TEST_PASSWORD
-        })
-        
-        if response.status_code != 200:
-            self.log(f"❌ Failed to create user {email}: {response.status_code} {response.text}")
-            return None
-            
-        user_data = response.json()
-        user_id = user_data["user"]["id"]
-        
-        # Promote to desired role if not MEMBER
-        if role != "MEMBER":
-            import pymongo
-            client = pymongo.MongoClient("mongodb://localhost:27017")
-            db = client["majles"]
-            db.users.update_one(
-                {"_id": user_id},
-                {"$set": {"role": role}}
-            )
-            client.close()
-            
-        self.test_users[role] = {
-            "email": email,
-            "password": TEST_PASSWORD,
-            "name": name,
-            "id": user_id
-        }
-        
-        self.log(f"✅ Created {role} user: {email}")
-        return self.test_users[role]
-        
-    def login_user(self, email, password):
-        """Login user and set session cookies"""
-        # Get CSRF token
-        csrf_response = self.session.get(f"{BASE_URL}/auth/csrf")
-        if csrf_response.status_code != 200:
-            self.log(f"❌ Failed to get CSRF token: {csrf_response.status_code}")
-            return False
-            
-        csrf_token = csrf_response.json().get("csrfToken")
-        if not csrf_token:
-            self.log("❌ No CSRF token in response")
-            return False
-            
-        # Login with credentials
-        login_data = {
-            "csrfToken": csrf_token,
-            "email": email,
-            "password": password,
-            "callbackUrl": "/",
-            "json": "true"
-        }
-        
-        login_response = self.session.post(
-            f"{BASE_URL}/auth/callback/credentials",
-            data=login_data,
-            headers={"Content-Type": "application/x-www-form-urlencoded"}
-        )
-        
-        if login_response.status_code == 200:
-            # Verify login by checking /api/me
-            me_response = self.session.get(f"{BASE_URL}/me")
-            if me_response.status_code == 200:
-                user_data = me_response.json()
-                self.log(f"✅ Logged in as: {user_data.get('name')} ({user_data.get('role')})")
-                return True
-                
-        self.log(f"❌ Login failed for {email}: {login_response.status_code}")
+# MongoDB connection
+MONGO_URL = os.getenv('MONGO_URL', 'mongodb://localhost:27017/majles')
+mongo_client = MongoClient(MONGO_URL)
+db = mongo_client.majles
+
+def create_test_user(email, password="Password123", role="MEMBER", tier="FREE"):
+    """Create a test user directly in MongoDB"""
+    user_id = str(uuid.uuid4())
+    hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    
+    user_doc = {
+        "_id": user_id,
+        "name": f"Test User {int(time.time())}",
+        "email": email,
+        "password": hashed_password,
+        "role": role,
+        "membershipTier": tier,
+        "membershipExpiry": None,
+        "phone": "",
+        "photo": "",
+        "wishlist": [],
+        "isGuest": False,
+        "vendorAbsorbsShipping": False,
+        "isSuspended": False,
+        "suspendedReason": "",
+        "suspendedAt": None,
+        "vendorProfile": {
+            "slug": "",
+            "businessName": "",
+            "tagline": "",
+            "bio": "",
+            "banner": "",
+            "logo": "",
+            "phone": "",
+            "whatsapp": "",
+            "instagram": "",
+            "website": "",
+            "governorate": "",
+            "city": "",
+            "address": ""
+        },
+        "createdAt": time.time() * 1000
+    }
+    
+    db.users.insert_one(user_doc)
+    return user_id, email, password
+
+def login_user(email, password):
+    """Login user using NextAuth credentials flow"""
+    session = requests.Session()
+    
+    # Get CSRF token
+    csrf_response = session.get(f"{API_BASE}/auth/csrf")
+    csrf_token = csrf_response.json().get('csrfToken')
+    
+    # Login
+    login_data = {
+        'csrfToken': csrf_token,
+        'email': email,
+        'password': password,
+        'callbackUrl': f"{BASE_URL}/dashboard",
+        'json': 'true'
+    }
+    
+    login_response = session.post(
+        f"{API_BASE}/auth/callback/credentials",
+        data=login_data,
+        headers={'Content-Type': 'application/x-www-form-urlencoded'}
+    )
+    
+    # Verify login by checking /api/me
+    me_response = session.get(f"{API_BASE}/me")
+    if me_response.status_code == 200:
+        return session
+    else:
+        print(f"Login failed for {email}: {me_response.status_code} {me_response.text}")
+        return None
+
+def test_sanitize_social_via_company():
+    """Test sanitizeSocial behavior via POST /api/companies"""
+    print("\n=== Testing sanitizeSocial behavior via POST /api/companies ===")
+    
+    # Create a test user with BASIC tier
+    timestamp = int(time.time())
+    email = f"test_company_{timestamp}@test.com"
+    user_id, email, password = create_test_user(email, role="MEMBER", tier="BASIC")
+    
+    session = login_user(email, password)
+    if not session:
+        print("❌ Failed to login user for company test")
         return False
+    
+    test_cases = [
+        {
+            "name": "URL with scheme passes through",
+            "input": {"instagram": "https://www.instagram.com/oem/"},
+            "expected": {"instagram": "https://www.instagram.com/oem/"}
+        },
+        {
+            "name": "URL without scheme gets https prefix",
+            "input": {"instagram": "instagram.com/oem"},
+            "expected": {"instagram": "https://instagram.com/oem"}
+        },
+        {
+            "name": "@handle for instagram",
+            "input": {"instagram": "@oem"},
+            "expected": {"instagram": "https://www.instagram.com/oem/"}
+        },
+        {
+            "name": "@handle for twitter",
+            "input": {"twitter": "@oem"},
+            "expected": {"twitter": "https://twitter.com/oem"}
+        },
+        {
+            "name": "@handle for tiktok",
+            "input": {"tiktok": "@oem"},
+            "expected": {"tiktok": "https://www.tiktok.com/@oem"}
+        },
+        {
+            "name": "WhatsApp phone with +",
+            "input": {"whatsapp": "+96891234567"},
+            "expected": {"whatsapp": "+96891234567"}
+        },
+        {
+            "name": "WhatsApp wa.me URL",
+            "input": {"whatsapp": "https://wa.me/96891234567"},
+            "expected": {"whatsapp": "https://wa.me/96891234567"}
+        },
+        {
+            "name": "WhatsApp digits only",
+            "input": {"whatsapp": "96891234567"},
+            "expected": {"whatsapp": "+96891234567"}
+        },
+        {
+            "name": "Unknown key stripped",
+            "input": {"instagram": "@test", "unknownKey": "xxx"},
+            "expected": {"instagram": "https://www.instagram.com/test/"}
+        },
+        {
+            "name": "Empty value stays empty",
+            "input": {"instagram": ""},
+            "expected": {"instagram": ""}
+        }
+    ]
+    
+    passed = 0
+    total = len(test_cases)
+    
+    for i, test_case in enumerate(test_cases):
+        print(f"\nTest {i+1}: {test_case['name']}")
         
-    def create_test_product(self, vendor_id):
-        """Create a test product for a vendor"""
-        product_data = {
-            "nameAr": f"منتج اختبار الشحن {int(time.time())}",
-            "nameEn": f"Shipping Test Product {int(time.time())}",
-            "price": 25.0,
-            "description": "منتج لاختبار سياسة الشحن الجديدة",
-            "category": "OTHER",
-            "stock": 100,
-            "isActive": True
+        company_data = {
+            "nameAr": f"شركة اختبار {i+1}",
+            "sector": "TECH",
+            "social": test_case["input"]
         }
         
-        response = self.session.post(f"{BASE_URL}/products", json=product_data)
-        if response.status_code == 200:
-            product = response.json()["product"]
-            self.test_products[vendor_id] = product
-            self.log(f"✅ Created test product: {product['id']}")
-            return product
+        response = session.post(f"{API_BASE}/companies", json=company_data)
+        
+        if response.status_code in [200, 201]:
+            company = response.json().get("company", {})
+            social = company.get("social", {})
+            
+            # Check expected values
+            success = True
+            for key, expected_value in test_case["expected"].items():
+                actual_value = social.get(key, "")
+                if actual_value != expected_value:
+                    print(f"  ❌ {key}: expected '{expected_value}', got '{actual_value}'")
+                    success = False
+                else:
+                    print(f"  ✅ {key}: '{actual_value}'")
+            
+            # Check that unknown keys are not present
+            if "unknownKey" in test_case["input"] and "unknownKey" in social:
+                print(f"  ❌ unknownKey should be stripped but found: {social['unknownKey']}")
+                success = False
+            
+            if success:
+                passed += 1
+                print(f"  ✅ Test passed")
+            else:
+                print(f"  ❌ Test failed")
         else:
-            self.log(f"❌ Failed to create product: {response.status_code} {response.text}")
-            return None
-            
-    def test_shipping_quote_basic(self):
-        """Test basic shipping quote functionality with new rates"""
-        self.log("\n🧪 Testing basic shipping quote functionality...")
+            print(f"  ❌ API call failed: {response.status_code} {response.text}")
+    
+    print(f"\n=== sanitizeSocial tests: {passed}/{total} passed ===")
+    return passed == total
+
+def test_company_social_endpoints():
+    """Test POST and PUT /api/companies with social"""
+    print("\n=== Testing Company Social Endpoints ===")
+    
+    # Create test users
+    timestamp = int(time.time())
+    
+    # Regular user with BASIC tier
+    user_email = f"test_user_{timestamp}@test.com"
+    user_id, user_email, password = create_test_user(user_email, role="MEMBER", tier="BASIC")
+    user_session = login_user(user_email, password)
+    
+    # Admin user
+    admin_email = f"test_admin_{timestamp}@test.com"
+    admin_id, admin_email, admin_password = create_test_user(admin_email, role="ADMIN", tier="PLATINUM")
+    admin_session = login_user(admin_email, admin_password)
+    
+    if not user_session or not admin_session:
+        print("❌ Failed to login test users")
+        return False
+    
+    # Test 1: POST /api/companies with social
+    print("\n1. Testing POST /api/companies with social")
+    company_data = {
+        "nameAr": "شركة اختبار الشبكات الاجتماعية",
+        "sector": "TECH",
+        "social": {
+            "instagram": "@testcompany",
+            "facebook": "fb.com/testcompany",
+            "whatsapp": "96891234567",
+            "linkedin": "linkedin.com/company/test",
+            "twitter": "@testcompany",
+            "tiktok": "@testcompany",
+            "snapchat": "@testcompany",
+            "youtube": "youtube.com/testcompany"
+        }
+    }
+    
+    response = user_session.post(f"{API_BASE}/companies", json=company_data)
+    
+    if response.status_code in [200, 201]:
+        company = response.json().get("company", {})
+        company_id = company.get("id")
+        social = company.get("social", {})
         
-        test_cases = [
-            # Test case a) MUSCAT → 2 OMR
-            {
-                "name": "MUSCAT governorate",
-                "body": {"governorate": "MUSCAT", "amount": 10},
-                "expected": {"fee": 2.0, "isFree": False, "absorbedByVendor": False}
-            },
-            # Test case b) DHOFAR → 3 OMR  
-            {
-                "name": "DHOFAR governorate",
-                "body": {"governorate": "DHOFAR", "amount": 10},
-                "expected": {"fee": 3.0, "isFree": False}
-            },
-            # Test case c) BATINAH → 3 OMR
-            {
-                "name": "BATINAH governorate", 
-                "body": {"governorate": "BATINAH", "amount": 10},
-                "expected": {"fee": 3.0}
-            },
-            # Test case d) MUSANDAM → 3 OMR (was 6 OMR before)
-            {
-                "name": "MUSANDAM governorate",
-                "body": {"governorate": "MUSANDAM", "amount": 10}, 
-                "expected": {"fee": 3.0}
-            },
-            # Test case e) Free threshold reached
-            {
-                "name": "MUSCAT with free threshold",
-                "body": {"governorate": "MUSCAT", "amount": 35},
-                "expected": {"fee": 0, "isFree": True, "freeThresholdReached": True}
-            },
-            # Test case f) Invalid governorate fallback
-            {
-                "name": "Invalid governorate fallback",
-                "body": {"governorate": "INVALID_GOV", "amount": 10},
-                "expected": {"fee": 3.0}  # DEFAULT_SHIPPING_FEE
-            },
-            # Test case g) Empty items array
-            {
-                "name": "Empty items array",
-                "body": {"governorate": "MUSCAT", "amount": 10, "items": []},
-                "expected": {"fee": 2.0, "absorbedByVendor": False}
+        print("✅ Company created successfully")
+        print(f"  Company ID: {company_id}")
+        print(f"  Social links: {json.dumps(social, indent=2, ensure_ascii=False)}")
+        
+        # Verify sanitization
+        expected_social = {
+            "instagram": "https://www.instagram.com/testcompany/",
+            "facebook": "https://fb.com/testcompany",
+            "whatsapp": "+96891234567",
+            "linkedin": "https://linkedin.com/company/test",
+            "twitter": "https://twitter.com/testcompany",
+            "tiktok": "https://www.tiktok.com/@testcompany",
+            "snapchat": "https://www.snapchat.com/add/testcompany",
+            "youtube": "https://youtube.com/testcompany"
+        }
+        
+        social_correct = True
+        for key, expected in expected_social.items():
+            actual = social.get(key, "")
+            if actual != expected:
+                print(f"  ❌ {key}: expected '{expected}', got '{actual}'")
+                social_correct = False
+        
+        if social_correct:
+            print("✅ Social links sanitized correctly")
+        
+        # Test 2: PUT /api/companies/:id with social (owner)
+        print("\n2. Testing PUT /api/companies/:id with social (owner)")
+        update_data = {
+            "social": {
+                "instagram": "@newhandle",
+                "facebook": "",  # Clear this field
+                "linkedin": "https://linkedin.com/in/newprofile"
             }
-        ]
+        }
         
-        passed = 0
-        total = len(test_cases)
+        update_response = user_session.put(f"{API_BASE}/companies/{company_id}", json=update_data)
         
-        for test_case in test_cases:
-            try:
-                response = self.session.post(f"{BASE_URL}/shipping/quote", json=test_case["body"])
-                
-                if response.status_code != 200:
-                    self.log(f"❌ {test_case['name']}: HTTP {response.status_code}")
-                    continue
-                    
-                data = response.json()
-                
-                # Check expected values
-                success = True
-                for key, expected_value in test_case["expected"].items():
-                    if key in data and data[key] != expected_value:
-                        self.log(f"❌ {test_case['name']}: {key} = {data[key]}, expected {expected_value}")
-                        success = False
-                        
-                # Verify response structure
-                required_fields = ["governorate", "fee", "isFree", "freeThreshold", "freeThresholdReached", "absorbedByVendor", "allRates"]
-                for field in required_fields:
-                    if field not in data:
-                        self.log(f"❌ {test_case['name']}: Missing field {field}")
-                        success = False
-                        
-                if success:
-                    self.log(f"✅ {test_case['name']}: fee={data['fee']}, isFree={data['isFree']}")
-                    passed += 1
-                    
-            except Exception as e:
-                self.log(f"❌ {test_case['name']}: Exception {str(e)}")
-                
-        self.log(f"\n📊 Basic shipping quote tests: {passed}/{total} passed")
-        return passed == total
-        
-    def test_vendor_profile_endpoints(self):
-        """Test vendor profile GET/PUT with vendorAbsorbsShipping field"""
-        self.log("\n🧪 Testing vendor profile endpoints...")
-        
-        # Create and login as vendor
-        vendor = self.create_test_user("VENDOR", "_profile")
-        if not vendor or not self.login_user(vendor["email"], vendor["password"]):
-            self.log("❌ Failed to create/login vendor for profile tests")
-            return False
+        if update_response.status_code == 200:
+            updated_company = update_response.json().get("company", {})
+            updated_social = updated_company.get("social", {})
             
-        passed = 0
-        total = 5
-        
-        try:
-            # Test 1: GET /api/vendor/profile includes vendorAbsorbsShipping
-            response = self.session.get(f"{BASE_URL}/vendor/profile")
-            if response.status_code == 200:
-                profile = response.json()["profile"]
-                if "vendorAbsorbsShipping" in profile and profile["vendorAbsorbsShipping"] == False:
-                    self.log("✅ GET /vendor/profile: vendorAbsorbsShipping defaults to false")
-                    passed += 1
-                else:
-                    self.log(f"❌ GET /vendor/profile: vendorAbsorbsShipping = {profile.get('vendorAbsorbsShipping')}")
+            print("✅ Company updated successfully")
+            print(f"  Updated social: {json.dumps(updated_social, indent=2, ensure_ascii=False)}")
+            
+            # Verify updates
+            if updated_social.get("instagram") == "https://www.instagram.com/newhandle/":
+                print("✅ Instagram updated correctly")
             else:
-                self.log(f"❌ GET /vendor/profile failed: {response.status_code}")
-                
-            # Test 2: PUT /api/vendor/profile with vendorAbsorbsShipping=true
-            update_data = {
-                "vendorAbsorbsShipping": True,
-                "businessName": "Test Shipping Store"
+                print(f"❌ Instagram not updated correctly: {updated_social.get('instagram')}")
+            
+            if updated_social.get("facebook") == "":
+                print("✅ Facebook cleared correctly")
+            else:
+                print(f"❌ Facebook not cleared: {updated_social.get('facebook')}")
+        else:
+            print(f"❌ Company update failed: {update_response.status_code} {update_response.text}")
+        
+        # Test 3: PUT /api/companies/:id with social (admin preserves status)
+        print("\n3. Testing PUT /api/companies/:id with social (admin)")
+        
+        # First approve the company as admin
+        approve_response = admin_session.post(f"{API_BASE}/admin/companies/{company_id}/approve")
+        if approve_response.status_code == 200:
+            print("✅ Company approved by admin")
+        
+        # Now update as admin
+        admin_update_data = {
+            "social": {
+                "twitter": "@adminupdated"
             }
-            response = self.session.put(f"{BASE_URL}/vendor/profile", json=update_data)
-            if response.status_code == 200:
-                profile = response.json()["profile"]
-                if profile.get("vendorAbsorbsShipping") == True:
-                    self.log("✅ PUT /vendor/profile: vendorAbsorbsShipping set to true")
-                    passed += 1
-                else:
-                    self.log(f"❌ PUT /vendor/profile: vendorAbsorbsShipping = {profile.get('vendorAbsorbsShipping')}")
-            else:
-                self.log(f"❌ PUT /vendor/profile failed: {response.status_code} {response.text}")
-                
-            # Test 3: Verify persistence with GET
-            response = self.session.get(f"{BASE_URL}/vendor/profile")
-            if response.status_code == 200:
-                profile = response.json()["profile"]
-                if profile.get("vendorAbsorbsShipping") == True:
-                    self.log("✅ GET /vendor/profile: vendorAbsorbsShipping persisted as true")
-                    passed += 1
-                else:
-                    self.log(f"❌ GET /vendor/profile: vendorAbsorbsShipping not persisted = {profile.get('vendorAbsorbsShipping')}")
-            else:
-                self.log(f"❌ GET /vendor/profile verification failed: {response.status_code}")
-                
-            # Test 4: Toggle back to false
-            update_data = {"vendorAbsorbsShipping": False}
-            response = self.session.put(f"{BASE_URL}/vendor/profile", json=update_data)
-            if response.status_code == 200:
-                profile = response.json()["profile"]
-                if profile.get("vendorAbsorbsShipping") == False:
-                    self.log("✅ PUT /vendor/profile: vendorAbsorbsShipping toggled to false")
-                    passed += 1
-                else:
-                    self.log(f"❌ PUT /vendor/profile: vendorAbsorbsShipping = {profile.get('vendorAbsorbsShipping')}")
-            else:
-                self.log(f"❌ PUT /vendor/profile toggle failed: {response.status_code}")
-                
-            # Test 5: Invalid value (string instead of boolean)
-            update_data = {"vendorAbsorbsShipping": "truthy_string"}
-            response = self.session.put(f"{BASE_URL}/vendor/profile", json=update_data)
-            if response.status_code == 200:
-                profile = response.json()["profile"]
-                if profile.get("vendorAbsorbsShipping") == False:  # Should NOT be true for non-boolean
-                    self.log("✅ PUT /vendor/profile: string value correctly rejected (remains false)")
-                    passed += 1
-                else:
-                    self.log(f"❌ PUT /vendor/profile: string value incorrectly accepted = {profile.get('vendorAbsorbsShipping')}")
-            else:
-                self.log(f"❌ PUT /vendor/profile string test failed: {response.status_code}")
-                
-        except Exception as e:
-            self.log(f"❌ Vendor profile test exception: {str(e)}")
+        }
+        
+        admin_update_response = admin_session.put(f"{API_BASE}/companies/{company_id}", json=admin_update_data)
+        
+        if admin_update_response.status_code == 200:
+            admin_updated_company = admin_update_response.json().get("company", {})
+            print("✅ Admin update successful")
+            print(f"  Status preserved: {admin_updated_company.get('status')}")
+            print(f"  Twitter updated: {admin_updated_company.get('social', {}).get('twitter')}")
+        else:
+            print(f"❌ Admin update failed: {admin_update_response.status_code} {admin_update_response.text}")
+        
+        return True
+    else:
+        print(f"❌ Company creation failed: {response.status_code} {response.text}")
+        return False
+
+def test_expert_social_endpoints():
+    """Test POST /api/experts/apply and PUT /api/experts/me with social"""
+    print("\n=== Testing Expert Social Endpoints ===")
+    
+    # Create a GOLD tier user
+    timestamp = int(time.time())
+    email = f"test_expert_{timestamp}@test.com"
+    user_id, email, password = create_test_user(email, role="MEMBER", tier="GOLD")
+    
+    session = login_user(email, password)
+    if not session:
+        print("❌ Failed to login expert user")
+        return False
+    
+    # Test 1: POST /api/experts/apply with social
+    print("\n1. Testing POST /api/experts/apply with social")
+    expert_data = {
+        "specialty": "BUSINESS",
+        "hourlyRate": 25,
+        "bio": "خبير في إدارة الأعمال",
+        "phone": "+96891234567",
+        "email": "expert@test.com",
+        "website": "https://expert.com",
+        "social": {
+            "instagram": "@experthandle",
+            "linkedin": "linkedin.com/in/expert",
+            "twitter": "@expert",
+            "whatsapp": "+96891234567"
+        }
+    }
+    
+    response = session.post(f"{API_BASE}/experts/apply", json=expert_data)
+    
+    if response.status_code in [200, 201]:
+        expert_response = response.json()
+        expert_id = expert_response.get("expert", {}).get("id")
+        print(f"✅ Expert application submitted successfully")
+        print(f"  Expert ID: {expert_id}")
+        
+        # Verify expert was created with social fields
+        expert_doc = db.experts.find_one({"_id": expert_id})
+        if expert_doc:
+            social = expert_doc.get("social", {})
+            print(f"  Social links: {json.dumps(social, indent=2, ensure_ascii=False)}")
             
-        self.log(f"\n📊 Vendor profile tests: {passed}/{total} passed")
-        return passed == total
-        
-    def test_vendor_absorption_flow(self):
-        """Test end-to-end vendor absorption flow"""
-        self.log("\n🧪 Testing vendor absorption flow...")
-        
-        # Create vendor and set absorption to true
-        vendor = self.create_test_user("VENDOR", "_absorption")
-        if not vendor or not self.login_user(vendor["email"], vendor["password"]):
-            self.log("❌ Failed to create/login vendor for absorption tests")
-            return False
+            # Verify sanitization
+            if social.get("instagram") == "https://www.instagram.com/experthandle/":
+                print("✅ Instagram sanitized correctly")
+            else:
+                print(f"❌ Instagram not sanitized: {social.get('instagram')}")
             
-        passed = 0
-        total = 4
+            if social.get("linkedin") == "https://linkedin.com/in/expert":
+                print("✅ LinkedIn sanitized correctly")
+            else:
+                print(f"❌ LinkedIn not sanitized: {social.get('linkedin')}")
         
-        try:
-            # Step 1: Set vendorAbsorbsShipping=true
-            update_data = {"vendorAbsorbsShipping": True, "businessName": "Absorption Test Store"}
-            response = self.session.put(f"{BASE_URL}/vendor/profile", json=update_data)
-            if response.status_code == 200:
-                self.log("✅ Set vendor absorption to true")
-                vendor_id = vendor["id"]
+        # Test 2: PUT /api/experts/me
+        print("\n2. Testing PUT /api/experts/me")
+        update_data = {
+            "bio": "خبير محدث في إدارة الأعمال",
+            "social": {
+                "instagram": "@newexperthandle",
+                "facebook": "facebook.com/expert",
+                "linkedin": ""  # Clear this field
+            },
+            "phone": "+96899999999",
+            "website": "https://newexpert.com"
+        }
+        
+        update_response = session.put(f"{API_BASE}/experts/me", json=update_data)
+        
+        if update_response.status_code == 200:
+            updated_expert = update_response.json().get("expert", {})
+            print("✅ Expert profile updated successfully")
+            print(f"  Updated bio: {updated_expert.get('bio')}")
+            print(f"  Updated phone: {updated_expert.get('phone')}")
+            print(f"  Updated website: {updated_expert.get('website')}")
+            
+            updated_social = updated_expert.get("social", {})
+            print(f"  Updated social: {json.dumps(updated_social, indent=2, ensure_ascii=False)}")
+            
+            # Verify updates
+            if updated_social.get("instagram") == "https://www.instagram.com/newexperthandle/":
+                print("✅ Instagram updated correctly")
+            else:
+                print(f"❌ Instagram not updated: {updated_social.get('instagram')}")
+            
+            if updated_social.get("facebook") == "https://facebook.com/expert":
+                print("✅ Facebook updated correctly")
+            else:
+                print(f"❌ Facebook not updated: {updated_social.get('facebook')}")
+            
+            if updated_social.get("linkedin") == "":
+                print("✅ LinkedIn cleared correctly")
+            else:
+                print(f"❌ LinkedIn not cleared: {updated_social.get('linkedin')}")
+        else:
+            print(f"❌ Expert update failed: {update_response.status_code} {update_response.text}")
+        
+        return True
+    else:
+        print(f"❌ Expert application failed: {response.status_code} {response.text}")
+        return False
+
+def test_public_endpoints_include_social():
+    """Test that public GET endpoints include social fields"""
+    print("\n=== Testing Public Endpoints Include Social ===")
+    
+    # Test GET /api/companies
+    print("\n1. Testing GET /api/companies includes social")
+    response = requests.get(f"{API_BASE}/companies")
+    
+    if response.status_code == 200:
+        companies = response.json().get("companies", [])
+        if companies:
+            first_company = companies[0]
+            if "social" in first_company:
+                print("✅ GET /api/companies includes social field")
+                print(f"  Sample social: {json.dumps(first_company['social'], indent=2, ensure_ascii=False)}")
+            else:
+                print("❌ GET /api/companies missing social field")
+        else:
+            print("⚠️ No companies found to test")
+    else:
+        print(f"❌ GET /api/companies failed: {response.status_code}")
+    
+    # Test GET /api/experts
+    print("\n2. Testing GET /api/experts includes social")
+    response = requests.get(f"{API_BASE}/experts")
+    
+    if response.status_code == 200:
+        experts = response.json()
+        if experts and len(experts) > 0:
+            first_expert = experts[0]
+            if "social" in first_expert:
+                print("✅ GET /api/experts includes social field")
+                print(f"  Sample social: {json.dumps(first_expert['social'], indent=2, ensure_ascii=False)}")
+            else:
+                print("❌ GET /api/experts missing social field")
+            
+            # Check for phone, email, website fields
+            for field in ["phone", "email", "website"]:
+                if field in first_expert:
+                    print(f"✅ GET /api/experts includes {field} field")
+                else:
+                    print(f"❌ GET /api/experts missing {field} field")
+        else:
+            print("⚠️ No experts found to test")
+    else:
+        print(f"❌ GET /api/experts failed: {response.status_code}")
+
+def test_edge_cases():
+    """Test sanitization edge cases"""
+    print("\n=== Testing Sanitization Edge Cases ===")
+    
+    # Create a test user
+    timestamp = int(time.time())
+    email = f"test_edge_{timestamp}@test.com"
+    user_id, email, password = create_test_user(email, role="MEMBER", tier="BASIC")
+    
+    session = login_user(email, password)
+    if not session:
+        print("❌ Failed to login user for edge case tests")
+        return False
+    
+    edge_cases = [
+        {
+            "name": "social: null",
+            "input": {"nameAr": "شركة اختبار 1", "sector": "TECH", "social": None},
+            "expected_social_keys": ["instagram", "facebook", "twitter", "linkedin", "whatsapp", "tiktok", "snapchat", "youtube"]
+        },
+        {
+            "name": "social: 'not-an-object'",
+            "input": {"nameAr": "شركة اختبار 2", "sector": "TECH", "social": "not-an-object"},
+            "expected_social_keys": ["instagram", "facebook", "twitter", "linkedin", "whatsapp", "tiktok", "snapchat", "youtube"]
+        },
+        {
+            "name": "social: {}",
+            "input": {"nameAr": "شركة اختبار 3", "sector": "TECH", "social": {}},
+            "expected_social_keys": ["instagram", "facebook", "twitter", "linkedin", "whatsapp", "tiktok", "snapchat", "youtube"]
+        },
+        {
+            "name": "Very long URL (should be trimmed)",
+            "input": {
+                "nameAr": "شركة اختبار 4", 
+                "sector": "TECH", 
+                "social": {"instagram": "https://www.instagram.com/" + "a" * 500}
+            },
+            "check_length": True
+        }
+    ]
+    
+    passed = 0
+    total = len(edge_cases)
+    
+    for i, test_case in enumerate(edge_cases):
+        print(f"\nTest {i+1}: {test_case['name']}")
+        
+        response = session.post(f"{API_BASE}/companies", json=test_case["input"])
+        
+        if response.status_code in [200, 201]:
+            company = response.json().get("company", {})
+            social = company.get("social", {})
+            
+            if "expected_social_keys" in test_case:
+                # Check that all 8 keys are present
+                missing_keys = []
+                for key in test_case["expected_social_keys"]:
+                    if key not in social:
+                        missing_keys.append(key)
                 
-                # Step 2: Create a product for this vendor
-                product = self.create_test_product(vendor_id)
-                if product:
-                    product_id = product["id"]
-                    
-                    # Step 3: Test shipping quote with this vendor's product
-                    quote_data = {
-                        "governorate": "MUSCAT",
-                        "amount": 10,
-                        "items": [{"productId": product_id, "vendorId": vendor_id}]
-                    }
-                    response = self.session.post(f"{BASE_URL}/shipping/quote", json=quote_data)
-                    if response.status_code == 200:
-                        data = response.json()
-                        if data.get("fee") == 0 and data.get("isFree") == True and data.get("absorbedByVendor") == True:
-                            self.log("✅ Shipping absorbed by vendor: fee=0, absorbedByVendor=true")
-                            passed += 1
-                        else:
-                            self.log(f"❌ Absorption failed: fee={data.get('fee')}, absorbedByVendor={data.get('absorbedByVendor')}")
-                    else:
-                        self.log(f"❌ Shipping quote failed: {response.status_code}")
-                        
-                    # Step 4: Toggle vendor flag to false and test again
-                    update_data = {"vendorAbsorbsShipping": False}
-                    response = self.session.put(f"{BASE_URL}/vendor/profile", json=update_data)
-                    if response.status_code == 200:
+                if not missing_keys:
+                    print(f"✅ All 8 social keys present")
+                    # Check that all values are empty strings
+                    all_empty = all(social[key] == "" for key in test_case["expected_social_keys"])
+                    if all_empty:
+                        print(f"✅ All social values are empty strings")
                         passed += 1
-                        
-                        # Test shipping quote again
-                        response = self.session.post(f"{BASE_URL}/shipping/quote", json=quote_data)
-                        if response.status_code == 200:
-                            data = response.json()
-                            if data.get("fee") == 2.0 and data.get("isFree") == False and data.get("absorbedByVendor") == False:
-                                self.log("✅ Shipping NOT absorbed after toggle: fee=2.0, absorbedByVendor=false")
-                                passed += 1
-                            else:
-                                self.log(f"❌ Toggle failed: fee={data.get('fee')}, absorbedByVendor={data.get('absorbedByVendor')}")
-                        else:
-                            self.log(f"❌ Second shipping quote failed: {response.status_code}")
                     else:
-                        self.log(f"❌ Toggle vendor absorption failed: {response.status_code}")
+                        print(f"❌ Not all social values are empty: {social}")
                 else:
-                    self.log("❌ Failed to create test product")
-            else:
-                self.log(f"❌ Failed to set vendor absorption: {response.status_code}")
-                
-        except Exception as e:
-            self.log(f"❌ Vendor absorption test exception: {str(e)}")
+                    print(f"❌ Missing keys: {missing_keys}")
             
-        # Test with fake product/vendor IDs (graceful fallback)
-        try:
-            fake_quote_data = {
-                "governorate": "MUSCAT",
-                "amount": 10,
-                "items": [{"productId": "fake-product-id", "vendorId": "fake-vendor-id"}]
-            }
-            response = self.session.post(f"{BASE_URL}/shipping/quote", json=fake_quote_data)
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("fee") == 2.0 and data.get("absorbedByVendor") == False:
-                    self.log("✅ Graceful fallback for fake vendor: fee=2.0, absorbedByVendor=false")
+            elif test_case.get("check_length"):
+                # Check URL length is capped
+                instagram_url = social.get("instagram", "")
+                if len(instagram_url) <= 300:
+                    print(f"✅ URL length capped correctly: {len(instagram_url)} chars")
                     passed += 1
                 else:
-                    self.log(f"❌ Fake vendor fallback failed: fee={data.get('fee')}, absorbedByVendor={data.get('absorbedByVendor')}")
-            else:
-                self.log(f"❌ Fake vendor quote failed: {response.status_code}")
-        except Exception as e:
-            self.log(f"❌ Fake vendor test exception: {str(e)}")
-            
-        self.log(f"\n📊 Vendor absorption tests: {passed}/{total} passed")
-        return passed == total
-        
-    def test_authorization(self):
-        """Test authorization for vendor profile endpoints"""
-        self.log("\n🧪 Testing authorization...")
-        
-        passed = 0
-        total = 2
-        
-        try:
-            # Test 1: Unauthenticated access
-            temp_session = requests.Session()
-            response = temp_session.get(f"{BASE_URL}/vendor/profile")
-            if response.status_code == 401:
-                self.log("✅ GET /vendor/profile: 401 without session")
-                passed += 1
-            else:
-                self.log(f"❌ GET /vendor/profile: Expected 401, got {response.status_code}")
-                
-            response = temp_session.put(f"{BASE_URL}/vendor/profile", json={"vendorAbsorbsShipping": True})
-            if response.status_code == 401:
-                self.log("✅ PUT /vendor/profile: 401 without session")
-                passed += 1
-            else:
-                self.log(f"❌ PUT /vendor/profile: Expected 401, got {response.status_code}")
-                
-        except Exception as e:
-            self.log(f"❌ Authorization test exception: {str(e)}")
-            
-        self.log(f"\n📊 Authorization tests: {passed}/{total} passed")
-        return passed == total
-        
-    def run_all_tests(self):
-        """Run all shipping policy tests"""
-        self.log("🚀 Starting NEW shipping policy + vendor absorption backend tests...")
-        self.log(f"🌐 Base URL: {BASE_URL}")
-        
-        results = []
-        
-        # Test 1: Basic shipping quote functionality
-        results.append(("Basic Shipping Quote", self.test_shipping_quote_basic()))
-        
-        # Test 2: Vendor profile endpoints
-        results.append(("Vendor Profile Endpoints", self.test_vendor_profile_endpoints()))
-        
-        # Test 3: End-to-end vendor absorption flow
-        results.append(("Vendor Absorption Flow", self.test_vendor_absorption_flow()))
-        
-        # Test 4: Authorization
-        results.append(("Authorization", self.test_authorization()))
-        
-        # Summary
-        self.log("\n" + "="*60)
-        self.log("📊 SHIPPING POLICY TEST RESULTS:")
-        self.log("="*60)
-        
-        passed_count = 0
-        total_count = len(results)
-        
-        for test_name, passed in results:
-            status = "✅ PASSED" if passed else "❌ FAILED"
-            self.log(f"{status}: {test_name}")
-            if passed:
-                passed_count += 1
-                
-        self.log("="*60)
-        self.log(f"🎯 OVERALL RESULT: {passed_count}/{total_count} test suites passed")
-        
-        if passed_count == total_count:
-            self.log("🎉 ALL SHIPPING POLICY TESTS PASSED!")
-            return True
+                    print(f"❌ URL not capped: {len(instagram_url)} chars")
         else:
-            self.log("⚠️  Some tests failed. Check logs above for details.")
-            return False
+            print(f"❌ API call failed: {response.status_code} {response.text}")
+    
+    print(f"\n=== Edge case tests: {passed}/{total} passed ===")
+    return passed == total
+
+def test_authentication_and_authorization():
+    """Test authentication and authorization for social endpoints"""
+    print("\n=== Testing Authentication and Authorization ===")
+    
+    # Test unauthenticated access
+    print("\n1. Testing unauthenticated access")
+    
+    # PUT /api/experts/me without auth
+    response = requests.put(f"{API_BASE}/experts/me", json={"bio": "test"})
+    if response.status_code == 401:
+        print("✅ PUT /api/experts/me returns 401 without auth")
+    else:
+        print(f"❌ PUT /api/experts/me should return 401, got {response.status_code}")
+    
+    # Test user without expert record
+    print("\n2. Testing user without expert record")
+    timestamp = int(time.time())
+    email = f"test_noexpert_{timestamp}@test.com"
+    user_id, email, password = create_test_user(email, role="MEMBER", tier="GOLD")
+    
+    session = login_user(email, password)
+    if session:
+        response = session.put(f"{API_BASE}/experts/me", json={"bio": "test"})
+        if response.status_code == 404:
+            print("✅ PUT /api/experts/me returns 404 for user without expert record")
+        else:
+            print(f"❌ PUT /api/experts/me should return 404, got {response.status_code}")
+    
+    # Test tier requirements for expert application
+    print("\n3. Testing tier requirements for expert application")
+    
+    # Create FREE tier user
+    free_email = f"test_free_{timestamp}@test.com"
+    free_user_id, free_email, free_password = create_test_user(free_email, role="MEMBER", tier="FREE")
+    
+    free_session = login_user(free_email, free_password)
+    if free_session:
+        expert_data = {
+            "specialty": "LEGAL",
+            "hourlyRate": 30,
+            "bio": "خبير قانوني"
+        }
+        
+        response = free_session.post(f"{API_BASE}/experts/apply", json=expert_data)
+        if response.status_code == 403:
+            print("✅ Expert application blocked for FREE tier user")
+        else:
+            print(f"❌ Expert application should be blocked for FREE tier, got {response.status_code}")
+
+def main():
+    """Run all social media tests"""
+    print("🧪 Starting Social Media Links Backend Testing")
+    print(f"Base URL: {BASE_URL}")
+    print(f"API Base: {API_BASE}")
+    
+    # Test results
+    results = []
+    
+    try:
+        # Test 1: sanitizeSocial behavior
+        results.append(("sanitizeSocial behavior", test_sanitize_social_via_company()))
+        
+        # Test 2: Company social endpoints
+        results.append(("Company social endpoints", test_company_social_endpoints()))
+        
+        # Test 3: Expert social endpoints
+        results.append(("Expert social endpoints", test_expert_social_endpoints()))
+        
+        # Test 4: Public endpoints include social
+        results.append(("Public endpoints include social", test_public_endpoints_include_social()))
+        
+        # Test 5: Edge cases
+        results.append(("Edge cases", test_edge_cases()))
+        
+        # Test 6: Authentication and authorization
+        results.append(("Authentication and authorization", test_authentication_and_authorization()))
+        
+    except Exception as e:
+        print(f"❌ Test execution failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
+    
+    # Print summary
+    print("\n" + "="*60)
+    print("🎯 SOCIAL MEDIA LINKS TESTING SUMMARY")
+    print("="*60)
+    
+    passed = 0
+    total = len(results)
+    
+    for test_name, result in results:
+        status = "✅ PASSED" if result else "❌ FAILED"
+        print(f"{status}: {test_name}")
+        if result:
+            passed += 1
+    
+    print(f"\nOverall: {passed}/{total} test suites passed ({passed/total*100:.1f}%)")
+    
+    if passed == total:
+        print("🎉 All social media features are working correctly!")
+    else:
+        print("⚠️ Some issues found. Please review the failed tests above.")
+    
+    return passed == total
 
 if __name__ == "__main__":
-    tester = ShippingPolicyTester()
-    success = tester.run_all_tests()
-    exit(0 if success else 1)
+    main()
