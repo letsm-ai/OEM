@@ -44,6 +44,29 @@ import {
   handleAdminExpertApprove,
   handleAdminExpertReject,
 } from '@/lib/api/experts'
+import {
+  handleVendorApplicationGet,
+  handleVendorApply,
+  handleAdminVendorApplicationsList,
+  handleAdminVendorApplicationAction,
+} from '@/lib/api/vendor-application'
+import {
+  handleVendorPayoutsList,
+  handleVendorPayoutCreate,
+  handleAdminPayoutsList,
+  handleAdminPayoutAction,
+} from '@/lib/api/payouts'
+import {
+  handleAdminUsersList,
+  handleAdminUserPatch,
+  handleAdminApprovalsSummary,
+} from '@/lib/api/admin-users'
+import {
+  handleVendorsList,
+  handleVendorStorefront,
+  handleVendorProfileGet,
+  handleVendorProfileUpdate,
+} from '@/lib/api/vendor-profile'
 import { sanitizeSocial } from '@/lib/social'
 import {
   handleWishlistList,
@@ -1306,217 +1329,27 @@ async function handleRoute(request, { params }) {
     /* ============================================================
        MARKETPLACE — VENDOR APPLICATIONS
        ============================================================ */
-    // ---- GET /vendor/application (my application status, if any) ----
+    // ---- GET /vendor/application ----
     if (route === '/vendor/application' && method === 'GET') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      await connectDB()
-      const app = await VendorApplication.findOne({
-        userId: session.user.id,
-      }).lean()
-      const user = await User.findById(session.user.id).lean()
-      return handleCORS(
-        NextResponse.json({
-          application: app
-            ? { id: app._id, ...app, _id: undefined }
-            : null,
-          isVendor: user?.role === 'VENDOR' || user?.role === 'ADMIN',
-          tier: user?.membershipTier || 'FREE',
-        })
-      )
+      return handleVendorApplicationGet()
     }
 
-    // ---- POST /vendor/apply (any logged-in user can apply) ----
+    // ---- POST /vendor/apply ----
     if (route === '/vendor/apply' && method === 'POST') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      await connectDB()
-      const dbUser = await User.findById(session.user.id).lean()
-      if (!dbUser) {
-        return handleCORS(
-          NextResponse.json({ error: 'المستخدم غير موجود' }, { status: 404 })
-        )
-      }
-      if (dbUser.role === 'VENDOR' || dbUser.role === 'ADMIN') {
-        return handleCORS(
-          NextResponse.json(
-            { error: 'أنت بائع بالفعل' },
-            { status: 400 }
-          )
-        )
-      }
-      // Open to ALL membership tiers (FREE, BASIC, GOLD, PLATINUM) — no tier gate.
-      const body = await request.json().catch(() => ({}))
-      const businessName = String(body?.businessName || '').trim()
-      if (!businessName || businessName.length < 2) {
-        return handleCORS(
-          NextResponse.json(
-            { error: 'اسم المتجر/النشاط مطلوب' },
-            { status: 400 }
-          )
-        )
-      }
-      const existing = await VendorApplication.findOne({
-        userId: session.user.id,
-      })
-      if (existing && existing.status === 'PENDING') {
-        return handleCORS(
-          NextResponse.json(
-            { error: 'لديك طلب قيد المراجعة بالفعل' },
-            { status: 409 }
-          )
-        )
-      }
-      const doc = {
-        userId: session.user.id,
-        businessName,
-        businessDescription: String(body?.businessDescription || '').slice(0, 2000),
-        phone: String(body?.phone || '').slice(0, 30),
-        status: 'PENDING',
-        adminNote: '',
-        reviewedBy: null,
-        reviewedAt: null,
-        updatedAt: new Date(),
-      }
-      let saved
-      if (existing) {
-        saved = await VendorApplication.findByIdAndUpdate(
-          existing._id,
-          { $set: doc },
-          { new: true }
-        ).lean()
-      } else {
-        saved = (
-          await VendorApplication.create({ ...doc, createdAt: new Date() })
-        ).toObject()
-      }
-      return handleCORS(
-        NextResponse.json({
-          success: true,
-          application: { id: saved._id, ...saved, _id: undefined },
-        })
-      )
+      return handleVendorApply(request)
     }
 
     // ---- GET /admin/vendor-applications?status= (admin) ----
     if (route === '/admin/vendor-applications' && method === 'GET') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      if (session.user.role !== 'ADMIN') {
-        return handleCORS(
-          NextResponse.json({ error: 'صلاحيات مسؤول مطلوبة' }, { status: 403 })
-        )
-      }
-      await connectDB()
-      const url = new URL(request.url)
-      const statusFilter = (url.searchParams.get('status') || '').toUpperCase()
-      const q = {}
-      if (['PENDING', 'APPROVED', 'REJECTED'].includes(statusFilter)) {
-        q.status = statusFilter
-      }
-      const apps = await VendorApplication.find(q)
-        .sort({ createdAt: -1 })
-        .limit(500)
-        .lean()
-      const userIds = apps.map((a) => a.userId)
-      const users = await User.find({ _id: { $in: userIds } })
-        .select({ _id: 1, name: 1, email: 1, membershipTier: 1, role: 1 })
-        .lean()
-      const userMap = Object.fromEntries(users.map((u) => [u._id, u]))
-      return handleCORS(
-        NextResponse.json({
-          applications: apps.map((a) => ({
-            id: a._id,
-            ...a,
-            _id: undefined,
-            user: userMap[a.userId]
-              ? {
-                  id: userMap[a.userId]._id,
-                  name: userMap[a.userId].name,
-                  email: userMap[a.userId].email,
-                  membershipTier: userMap[a.userId].membershipTier,
-                  role: userMap[a.userId].role,
-                }
-              : null,
-          })),
-        })
-      )
+      return handleAdminVendorApplicationsList(request)
     }
 
     // ---- POST /admin/vendor-applications/:id/(approve|reject) (admin) ----
     if (adminVendorAppActionMatch && method === 'POST') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      if (session.user.role !== 'ADMIN') {
-        return handleCORS(
-          NextResponse.json({ error: 'صلاحيات مسؤول مطلوبة' }, { status: 403 })
-        )
-      }
-      const id = adminVendorAppActionMatch[1]
-      const action = adminVendorAppActionMatch[2] // approve | reject
-      const body = await request.json().catch(() => ({}))
-      await connectDB()
-      const app = await VendorApplication.findById(id)
-      if (!app) {
-        return handleCORS(
-          NextResponse.json({ error: 'الطلب غير موجود' }, { status: 404 })
-        )
-      }
-      app.status = action === 'approve' ? 'APPROVED' : 'REJECTED'
-      app.adminNote = String(body?.note || '').slice(0, 500)
-      app.reviewedBy = session.user.id
-      app.reviewedAt = new Date()
-      app.updatedAt = new Date()
-      await app.save()
-      if (action === 'approve') {
-        // Ensure the approved user has a vendor profile with a unique slug.
-        const approvedUser = await User.findById(app.userId)
-        if (approvedUser) {
-          const existingSlug = approvedUser.vendorProfile?.slug
-          let slug = existingSlug
-          if (!slug) {
-            slug = await uniqueVendorSlug(User, app.businessName, approvedUser._id)
-          }
-          approvedUser.role = 'VENDOR'
-          approvedUser.vendorProfile = {
-            slug,
-            businessName: app.businessName || approvedUser.name,
-            tagline: approvedUser.vendorProfile?.tagline || '',
-            bio: approvedUser.vendorProfile?.bio || app.businessDescription || '',
-            banner: approvedUser.vendorProfile?.banner || '',
-            logo: approvedUser.vendorProfile?.logo || approvedUser.photo || '',
-            phone: approvedUser.vendorProfile?.phone || app.phone || approvedUser.phone || '',
-            whatsapp: approvedUser.vendorProfile?.whatsapp || '',
-            instagram: approvedUser.vendorProfile?.instagram || '',
-            website: approvedUser.vendorProfile?.website || '',
-            governorate: approvedUser.vendorProfile?.governorate || '',
-            city: approvedUser.vendorProfile?.city || '',
-            address: approvedUser.vendorProfile?.address || '',
-          }
-          await approvedUser.save()
-        }
-      }
-      return handleCORS(
-        NextResponse.json({
-          success: true,
-          application: { id: app._id, ...app.toObject(), _id: undefined },
-        })
+      return handleAdminVendorApplicationAction(
+        adminVendorAppActionMatch[1],
+        adminVendorAppActionMatch[2],
+        request
       )
     }
 
@@ -2570,122 +2403,17 @@ async function handleRoute(request, { params }) {
 
     // ---- GET /vendor/payouts (balance + list of requests) ----
     if (route === '/vendor/payouts' && method === 'GET') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
-      }
-      await connectDB()
-      const dbUser = await User.findById(session.user.id).lean()
-      if (!dbUser || (dbUser.role !== 'VENDOR' && dbUser.role !== 'ADMIN')) {
-        return handleCORS(
-          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
-        )
-      }
-      const balance = await computeVendorBalance(session.user.id)
-      const requests = await PayoutRequest.find({ vendorId: session.user.id })
-        .sort({ createdAt: -1 })
-        .limit(50)
-        .lean()
-      return handleCORS(
-        NextResponse.json({
-          balance,
-          requests: requests.map((r) => ({ id: r._id, ...r, _id: undefined })),
-        })
-      )
+      return handleVendorPayoutsList()
     }
 
     // ---- POST /vendor/payouts (vendor requests a payout) ----
     if (route === '/vendor/payouts' && method === 'POST') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
-      }
-      await connectDB()
-      const dbUser = await User.findById(session.user.id).lean()
-      if (!dbUser || (dbUser.role !== 'VENDOR' && dbUser.role !== 'ADMIN')) {
-        return handleCORS(
-          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
-        )
-      }
-      const body = await request.json().catch(() => ({}))
-      const amount = Number(body?.amount)
-      const bank = body?.bankDetails || {}
-      const accountHolderName = String(bank.accountHolderName || '').trim()
-      const bankName = String(bank.bankName || '').trim()
-      const iban = String(bank.iban || '').replace(/\s+/g, '').toUpperCase()
-
-      if (!Number.isFinite(amount) || amount < MIN_PAYOUT_AMOUNT) {
-        return handleCORS(
-          NextResponse.json(
-            { error: `الحد الأدنى لطلب السحب هو ${MIN_PAYOUT_AMOUNT} ر.ع` },
-            { status: 400 }
-          )
-        )
-      }
-      if (!accountHolderName) {
-        return handleCORS(NextResponse.json({ error: 'اسم صاحب الحساب مطلوب' }, { status: 400 }))
-      }
-      if (!bankName) {
-        return handleCORS(NextResponse.json({ error: 'اسم البنك مطلوب' }, { status: 400 }))
-      }
-      // Basic IBAN validation for Oman: starts with OM followed by 2 digits + 16 chars
-      if (!/^OM\d{2}[A-Z0-9]{16}$/.test(iban)) {
-        return handleCORS(
-          NextResponse.json({ error: 'رقم IBAN غير صالح (يجب أن يبدأ بـ OM ويحتوي على 20 خانة)' }, { status: 400 })
-        )
-      }
-
-      const balance = await computeVendorBalance(session.user.id)
-      if (amount > balance.availableBalance) {
-        return handleCORS(
-          NextResponse.json(
-            { error: `الرصيد المتاح للسحب هو ${balance.availableBalance} ر.ع فقط` },
-            { status: 400 }
-          )
-        )
-      }
-
-      const req = await PayoutRequest.create({
-        vendorId: session.user.id,
-        vendorName: dbUser.name || '',
-        amountRequested: +amount.toFixed(3),
-        bankDetails: {
-          accountHolderName,
-          bankName,
-          iban,
-          note: String(bank.note || '').slice(0, 300),
-        },
-        status: 'PENDING',
-        requestedAt: new Date(),
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      })
-      return handleCORS(
-        NextResponse.json({
-          request: { id: req._id, ...req.toObject(), _id: undefined },
-        })
-      )
+      return handleVendorPayoutCreate(request)
     }
 
     // ---- GET /admin/payouts (admin: all requests, filterable) ----
     if (route === '/admin/payouts' && method === 'GET') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user || session.user.role !== 'ADMIN') {
-        return handleCORS(NextResponse.json({ error: 'صلاحيات الإدارة مطلوبة' }, { status: 403 }))
-      }
-      await connectDB()
-      const url = new URL(request.url)
-      const status = url.searchParams.get('status') // optional
-      const q = status ? { status } : {}
-      const requests = await PayoutRequest.find(q)
-        .sort({ createdAt: -1 })
-        .limit(200)
-        .lean()
-      return handleCORS(
-        NextResponse.json({
-          requests: requests.map((r) => ({ id: r._id, ...r, _id: undefined })),
-        })
-      )
+      return handleAdminPayoutsList(request)
     }
 
     // ---- POST /admin/payouts/:id/:action (admin approve/reject/mark-paid) ----
@@ -2693,70 +2421,7 @@ async function handleRoute(request, { params }) {
       /^\/admin\/payouts\/([A-Za-z0-9-]+)\/(approve|reject|mark-paid)$/
     )
     if (adminPayoutMatch && method === 'POST') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user || session.user.role !== 'ADMIN') {
-        return handleCORS(NextResponse.json({ error: 'صلاحيات الإدارة مطلوبة' }, { status: 403 }))
-      }
-      await connectDB()
-      const [, id, action] = adminPayoutMatch
-      const req = await PayoutRequest.findById(id)
-      if (!req) {
-        return handleCORS(NextResponse.json({ error: 'الطلب غير موجود' }, { status: 404 }))
-      }
-      const body = await request.json().catch(() => ({}))
-      const admin = await User.findById(session.user.id).lean()
-
-      if (action === 'approve') {
-        if (req.status !== 'PENDING') {
-          return handleCORS(
-            NextResponse.json({ error: 'لا يمكن الموافقة على طلب ليس قيد الانتظار' }, { status: 400 })
-          )
-        }
-        req.status = 'APPROVED'
-        req.adminId = session.user.id
-        req.adminName = admin?.name || ''
-        req.processedAt = new Date()
-      } else if (action === 'reject') {
-        if (req.status !== 'PENDING') {
-          return handleCORS(
-            NextResponse.json({ error: 'لا يمكن رفض طلب ليس قيد الانتظار' }, { status: 400 })
-          )
-        }
-        const reason = String(body?.reason || '').trim()
-        if (!reason) {
-          return handleCORS(
-            NextResponse.json({ error: 'سبب الرفض مطلوب' }, { status: 400 })
-          )
-        }
-        req.status = 'REJECTED'
-        req.rejectionReason = reason.slice(0, 500)
-        req.adminId = session.user.id
-        req.adminName = admin?.name || ''
-        req.processedAt = new Date()
-      } else if (action === 'mark-paid') {
-        if (req.status !== 'APPROVED') {
-          return handleCORS(
-            NextResponse.json({ error: 'يجب الموافقة على الطلب أولاً' }, { status: 400 })
-          )
-        }
-        const ref = String(body?.transferReference || '').trim()
-        if (!ref) {
-          return handleCORS(
-            NextResponse.json({ error: 'مرجع التحويل البنكي مطلوب' }, { status: 400 })
-          )
-        }
-        req.status = 'PAID'
-        req.transferReference = ref.slice(0, 100)
-        req.adminId = session.user.id
-        req.adminName = admin?.name || ''
-      }
-      req.updatedAt = new Date()
-      await req.save()
-      return handleCORS(
-        NextResponse.json({
-          request: { id: req._id, ...req.toObject(), _id: undefined },
-        })
-      )
+      return handleAdminPayoutAction(adminPayoutMatch[1], adminPayoutMatch[2], request)
     }
 
     /* ============================================================
@@ -3310,290 +2975,22 @@ async function handleRoute(request, { params }) {
        ============================================================ */
     // ---- GET /vendors (public list of approved vendors) ----
     if (route === '/vendors' && method === 'GET') {
-      await connectDB()
-      const vendors = await User.find({
-        role: { $in: ['VENDOR', 'ADMIN'] },
-        'vendorProfile.slug': { $ne: '' },
-      })
-        .select({
-          _id: 1,
-          name: 1,
-          vendorProfile: 1,
-          createdAt: 1,
-        })
-        .sort({ createdAt: -1 })
-        .limit(200)
-        .lean()
-      // Product counts per vendor
-      const ids = vendors.map((v) => v._id)
-      const counts = await Product.aggregate([
-        { $match: { vendorId: { $in: ids }, isActive: true } },
-        { $group: { _id: '$vendorId', count: { $sum: 1 } } },
-      ])
-      const countMap = Object.fromEntries(counts.map((c) => [c._id, c.count]))
-      return handleCORS(
-        NextResponse.json({
-          vendors: vendors
-            .filter((v) => (countMap[v._id] || 0) > 0)
-            .map((v) => ({
-              id: v._id,
-              name: v.name,
-              slug: v.vendorProfile?.slug || '',
-              businessName: v.vendorProfile?.businessName || v.name,
-              tagline: v.vendorProfile?.tagline || '',
-              logo: v.vendorProfile?.logo || '',
-              banner: v.vendorProfile?.banner || '',
-              governorate: v.vendorProfile?.governorate || '',
-              city: v.vendorProfile?.city || '',
-              productCount: countMap[v._id] || 0,
-            })),
-        })
-      )
+      return handleVendorsList()
     }
 
     // ---- GET /vendors/:slug (public vendor storefront) ----
     if (vendorBySlugMatch && method === 'GET') {
-      await connectDB()
-      const slug = decodeURIComponent(vendorBySlugMatch[1])
-      const vendor = await User.findOne({
-        'vendorProfile.slug': slug,
-        role: { $in: ['VENDOR', 'ADMIN'] },
-      })
-        .select({
-          _id: 1,
-          name: 1,
-          vendorProfile: 1,
-          createdAt: 1,
-          membershipTier: 1,
-        })
-        .lean()
-      if (!vendor) {
-        return handleCORS(
-          NextResponse.json({ error: 'المتجر غير موجود' }, { status: 404 })
-        )
-      }
-      const products = await Product.find({
-        vendorId: vendor._id,
-        isActive: true,
-      })
-        .sort({ createdAt: -1 })
-        .limit(200)
-        .lean()
-      return handleCORS(
-        NextResponse.json({
-          vendor: {
-            id: vendor._id,
-            name: vendor.name,
-            slug: vendor.vendorProfile?.slug,
-            businessName: vendor.vendorProfile?.businessName || vendor.name,
-            tagline: vendor.vendorProfile?.tagline || '',
-            bio: vendor.vendorProfile?.bio || '',
-            banner: vendor.vendorProfile?.banner || '',
-            logo: vendor.vendorProfile?.logo || '',
-            phone: vendor.vendorProfile?.phone || '',
-            whatsapp: vendor.vendorProfile?.whatsapp || '',
-            instagram: vendor.vendorProfile?.instagram || '',
-            website: vendor.vendorProfile?.website || '',
-            governorate: vendor.vendorProfile?.governorate || '',
-            city: vendor.vendorProfile?.city || '',
-            address: vendor.vendorProfile?.address || '',
-            membershipTier: vendor.membershipTier,
-            memberSince: vendor.createdAt,
-          },
-          products: products.map((p) => ({
-            id: p._id,
-            ...p,
-            _id: undefined,
-            vendorName: vendor.name,
-          })),
-        })
-      )
+      return handleVendorStorefront(vendorBySlugMatch[1])
     }
 
     // ---- GET /vendor/profile (my profile, for editing) ----
     if (route === '/vendor/profile' && method === 'GET') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      await connectDB()
-      const user = await User.findById(session.user.id).lean()
-      if (user?.role !== 'VENDOR' && user?.role !== 'ADMIN') {
-        return handleCORS(
-          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
-        )
-      }
-      return handleCORS(
-        NextResponse.json({
-          profile: {
-            id: user._id,
-            name: user.name,
-            email: user.email,
-            slug: user.vendorProfile?.slug || '',
-            businessName: user.vendorProfile?.businessName || user.name,
-            tagline: user.vendorProfile?.tagline || '',
-            bio: user.vendorProfile?.bio || '',
-            banner: user.vendorProfile?.banner || '',
-            logo: user.vendorProfile?.logo || '',
-            phone: user.vendorProfile?.phone || '',
-            whatsapp: user.vendorProfile?.whatsapp || '',
-            instagram: user.vendorProfile?.instagram || '',
-            website: user.vendorProfile?.website || '',
-            governorate: user.vendorProfile?.governorate || '',
-            city: user.vendorProfile?.city || '',
-            address: user.vendorProfile?.address || '',
-            social: user.vendorProfile?.social || {
-              instagram: '', facebook: '', twitter: '', linkedin: '',
-              whatsapp: '', tiktok: '', snapchat: '', youtube: '',
-            },
-            vendorAbsorbsShipping: user.vendorAbsorbsShipping === true,
-          },
-        })
-      )
+      return handleVendorProfileGet()
     }
 
     // ---- PUT /vendor/profile (edit my vendor profile) ----
     if (route === '/vendor/profile' && method === 'PUT') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      await connectDB()
-      const user = await User.findById(session.user.id)
-      if (!user) {
-        return handleCORS(
-          NextResponse.json({ error: 'المستخدم غير موجود' }, { status: 404 })
-        )
-      }
-      if (user.role !== 'VENDOR' && user.role !== 'ADMIN') {
-        return handleCORS(
-          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
-        )
-      }
-      const body = await request.json().catch(() => ({}))
-      const prof = user.vendorProfile || {}
-
-      // Text fields with length caps
-      const strFields = {
-        businessName: 80,
-        tagline: 160,
-        bio: 3000,
-        phone: 30,
-        whatsapp: 30,
-        instagram: 80,
-        website: 200,
-        governorate: 40,
-        city: 60,
-        address: 300,
-      }
-      for (const [key, cap] of Object.entries(strFields)) {
-        if (body[key] !== undefined) {
-          prof[key] = String(body[key] || '').trim().slice(0, cap)
-        }
-      }
-      if (prof.businessName && prof.businessName.length < 2) {
-        return handleCORS(
-          NextResponse.json({ error: 'اسم المتجر قصير جداً' }, { status: 400 })
-        )
-      }
-
-      // Image fields (base64 data URL)
-      for (const f of ['banner', 'logo']) {
-        if (body[f] !== undefined) {
-          const v = body[f]
-          if (v === '' || v === null) {
-            prof[f] = ''
-          } else if (
-            typeof v === 'string' &&
-            /^data:image\/(png|jpe?g|webp|gif);base64,/.test(v) &&
-            v.length <= 3_000_000
-          ) {
-            prof[f] = v
-          } else {
-            return handleCORS(
-              NextResponse.json(
-                { error: 'صيغة/حجم الصورة غير مدعوم' },
-                { status: 400 }
-              )
-            )
-          }
-        }
-      }
-
-      // Custom slug (optional). Validate uniqueness if provided.
-      if (body.slug !== undefined) {
-        const desired = slugify(body.slug)
-        if (!desired) {
-          return handleCORS(
-            NextResponse.json(
-              { error: 'الرابط غير صالح' },
-              { status: 400 }
-            )
-          )
-        }
-        if (desired.length < 3 || desired.length > 60) {
-          return handleCORS(
-            NextResponse.json(
-              { error: 'الرابط يجب أن يكون بين 3 و 60 حرفاً' },
-              { status: 400 }
-            )
-          )
-        }
-        if (desired !== prof.slug) {
-          const collision = await User.findOne({
-            'vendorProfile.slug': desired,
-            _id: { $ne: user._id },
-          }).lean()
-          if (collision) {
-            return handleCORS(
-              NextResponse.json(
-                { error: 'هذا الرابط مستخدم، جرّب اسماً آخر' },
-                { status: 409 }
-              )
-            )
-          }
-          prof.slug = desired
-        }
-      }
-
-      // If somehow slug is empty, synthesize one
-      if (!prof.slug) {
-        prof.slug = await uniqueVendorSlug(
-          User,
-          prof.businessName || user.name,
-          user._id
-        )
-      }
-
-      // Toggle: vendor absorbs shipping cost (free shipping for customer)
-      if (body.vendorAbsorbsShipping !== undefined) {
-        user.vendorAbsorbsShipping = body.vendorAbsorbsShipping === true
-      }
-
-      // Social media links (sanitized)
-      if (body.social !== undefined) {
-        prof.social = sanitizeSocial(body.social)
-      }
-
-      user.vendorProfile = prof
-      user.updatedAt = new Date()
-      await user.save()
-      return handleCORS(
-        NextResponse.json({
-          success: true,
-          profile: {
-            ...prof,
-            id: user._id,
-            name: user.name,
-            email: user.email,
-            vendorAbsorbsShipping: user.vendorAbsorbsShipping === true,
-          },
-        })
-      )
+      return handleVendorProfileUpdate(request)
     }
 
 
@@ -3607,125 +3004,20 @@ async function handleRoute(request, { params }) {
        ============================================================ */
     // ---- GET /admin/users?role=&tier=&suspended=&search=&page=&limit= ----
     if (route === '/admin/users' && method === 'GET') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
-      if (session.user.role !== 'ADMIN') return handleCORS(NextResponse.json({ error: 'صلاحيات غير كافية' }, { status: 403 }))
-      await connectDB()
-      const url = new URL(request.url)
-      const role = url.searchParams.get('role') || ''
-      const tier = url.searchParams.get('tier') || ''
-      const suspended = url.searchParams.get('suspended') || ''
-      const search = (url.searchParams.get('search') || '').trim()
-      const page = Math.max(parseInt(url.searchParams.get('page') || '1', 10) || 1, 1)
-      const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 1), 100)
-      const q = { isGuest: { $ne: true } }
-      if (role) q.role = role
-      if (tier) q.membershipTier = tier
-      if (suspended === '1') q.isSuspended = true
-      else if (suspended === '0') q.isSuspended = { $ne: true }
-      if (search) {
-        const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
-        q.$or = [{ name: rx }, { email: rx }, { phone: rx }]
-      }
-      const [total, users, totals] = await Promise.all([
-        User.countDocuments(q),
-        User.find(q)
-          .select('-password')
-          .sort({ createdAt: -1 })
-          .skip((page - 1) * limit)
-          .limit(limit)
-          .lean(),
-        User.aggregate([
-          { $match: { isGuest: { $ne: true } } },
-          {
-            $group: {
-              _id: null,
-              total: { $sum: 1 },
-              admins: { $sum: { $cond: [{ $eq: ['$role', 'ADMIN'] }, 1, 0] } },
-              members: { $sum: { $cond: [{ $eq: ['$role', 'MEMBER'] }, 1, 0] } },
-              vendors: { $sum: { $cond: [{ $eq: ['$role', 'VENDOR'] }, 1, 0] } },
-              experts: { $sum: { $cond: [{ $eq: ['$role', 'EXPERT'] }, 1, 0] } },
-              suspended: { $sum: { $cond: ['$isSuspended', 1, 0] } },
-            },
-          },
-        ]),
-      ])
-      return handleCORS(
-        NextResponse.json({
-          users: users.map((u) => ({ id: u._id, ...u, _id: undefined })),
-          pagination: { page, limit, total, pages: Math.ceil(total / limit) },
-          totals: totals[0] || { total: 0, admins: 0, members: 0, vendors: 0, experts: 0, suspended: 0 },
-        })
-      )
+      return handleAdminUsersList(request)
     }
 
     // ---- PATCH /admin/users/:id  (change role, tier, or suspend/activate) ----
     const adminUserMatch = route.match(/^\/admin\/users\/([^/]+)$/)
     if (adminUserMatch && method === 'PATCH') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
-      if (session.user.role !== 'ADMIN') return handleCORS(NextResponse.json({ error: 'صلاحيات غير كافية' }, { status: 403 }))
-      await connectDB()
-      const targetId = adminUserMatch[1]
-      const body = await request.json().catch(() => ({}))
-      const target = await User.findById(targetId)
-      if (!target) return handleCORS(NextResponse.json({ error: 'المستخدم غير موجود' }, { status: 404 }))
-      if (String(target._id) === String(session.user.id) && (body.action === 'suspend' || body.role)) {
-        return handleCORS(NextResponse.json({ error: 'لا يمكنك تعديل حسابك الإداري' }, { status: 400 }))
-      }
-      const update = {}
-      if (body.role && ['ADMIN', 'MEMBER', 'VENDOR', 'EXPERT'].includes(body.role)) {
-        update.role = body.role
-      }
-      if (body.membershipTier && ['FREE', 'BASIC', 'GOLD', 'PLATINUM'].includes(body.membershipTier)) {
-        update.membershipTier = body.membershipTier
-      }
-      if (body.action === 'suspend') {
-        update.isSuspended = true
-        update.suspendedReason = String(body.reason || '').slice(0, 300)
-        update.suspendedAt = new Date()
-      } else if (body.action === 'activate') {
-        update.isSuspended = false
-        update.suspendedReason = ''
-        update.suspendedAt = null
-      }
-      if (Object.keys(update).length === 0) {
-        return handleCORS(NextResponse.json({ error: 'لا توجد تغييرات' }, { status: 400 }))
-      }
-      const updated = await User.findByIdAndUpdate(targetId, { $set: update }, { new: true })
-        .select('-password')
-        .lean()
-      return handleCORS(
-        NextResponse.json({
-          user: { id: updated._id, ...updated, _id: undefined },
-          message: 'تم تحديث المستخدم بنجاح',
-        })
-      )
+      return handleAdminUserPatch(adminUserMatch[1], request)
     }
 
     /* ============================================================
        ADMIN APPROVALS — combined summary
        ============================================================ */
     if (route === '/admin/approvals/summary' && method === 'GET') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
-      if (session.user.role !== 'ADMIN') return handleCORS(NextResponse.json({ error: 'صلاحيات غير كافية' }, { status: 403 }))
-      await connectDB()
-      const [pendingCompanies, pendingExperts, pendingVendorApps, pendingPayouts] = await Promise.all([
-        Company.countDocuments({ status: 'PENDING' }),
-        Expert.countDocuments({ status: 'PENDING' }),
-        VendorApplication ? VendorApplication.countDocuments({ status: 'PENDING' }) : 0,
-        PayoutRequest ? PayoutRequest.countDocuments({ status: 'PENDING' }) : 0,
-      ])
-      return handleCORS(
-        NextResponse.json({
-          companies: pendingCompanies,
-          experts: pendingExperts,
-          vendors: pendingVendorApps,
-          payouts: pendingPayouts,
-          total: pendingCompanies + pendingExperts + pendingVendorApps + pendingPayouts,
-        })
-      )
+      return handleAdminApprovalsSummary()
     }
 
     if (route === '/admin/coupons' && method === 'GET') {
