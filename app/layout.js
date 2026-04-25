@@ -14,6 +14,11 @@ const cairo = Cairo({
 export const metadata = {
   title: 'مجلس رواد الأعمال العماني',
   description: 'منظومة رواد الأعمال العمانيين - مجلس رواد الأعمال العماني',
+  icons: {
+    icon: '/logo.png',
+    shortcut: '/logo.png',
+    apple: '/logo.png',
+  },
 }
 
 export default function RootLayout({ children }) {

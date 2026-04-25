@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import Image from 'next/image'
 import { useSession, signOut } from 'next-auth/react'
 import { useEffect, useState } from 'react'
 import { Menu, X, LogOut, User as UserIcon } from 'lucide-react'
@@ -40,11 +41,18 @@ export default function Navbar() {
     <header className="sticky top-0 z-50 w-full border-b border-[#E5E7EB] bg-white/95 backdrop-blur">
       <div className="container mx-auto flex h-16 items-center justify-between px-4">
         {/* Logo */}
-        <Link href="/" className="flex items-center gap-2">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#1B3A6B]">
-            <span className="text-lg font-bold text-[#C9A84C]">م</span>
+        <Link href="/" className="flex items-center gap-2.5">
+          <div className="relative h-12 w-12 shrink-0 overflow-hidden">
+            <Image
+              src="/logo.png"
+              alt="شعار مجلس رواد الأعمال العماني"
+              fill
+              sizes="48px"
+              className="object-contain"
+              priority
+            />
           </div>
-          <div className="flex flex-col leading-tight">
+          <div className="hidden flex-col leading-tight sm:flex">
             <span className="text-sm font-bold text-[#1B3A6B]">مجلس رواد الأعمال</span>
             <span className="text-[10px] text-gray-500">العماني</span>
           </div>

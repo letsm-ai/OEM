@@ -1,5 +1,6 @@
 import Link from 'next/link'
-import { Facebook, Instagram, Twitter, Linkedin, Mail, MapPin, Phone } from 'lucide-react'
+import Image from 'next/image'
+import { Instagram, Mail, MapPin, Phone } from 'lucide-react'
 
 export default function Footer() {
   const year = new Date().getFullYear()
@@ -9,9 +10,15 @@ export default function Footer() {
         <div className="grid gap-8 md:grid-cols-2 lg:grid-cols-4">
           {/* Brand */}
           <div>
-            <div className="mb-3 flex items-center gap-2">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#C9A84C] text-[#1B3A6B] font-extrabold">
-                ر
+            <div className="mb-4 flex items-center gap-3">
+              <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-xl bg-white/95 p-1.5">
+                <Image
+                  src="/logo.png"
+                  alt="شعار مجلس رواد الأعمال العماني"
+                  fill
+                  sizes="56px"
+                  className="object-contain"
+                />
               </div>
               <div>
                 <div className="font-extrabold text-white">مجلس رواد الأعمال</div>
@@ -55,29 +62,27 @@ export default function Footer() {
               </li>
               <li className="flex items-center gap-2">
                 <Mail className="h-4 w-4 text-[#C9A84C]" />
-                <span dir="ltr">info@majles-oman.om</span>
+                <a href="mailto:omanimajles@gmail.com" dir="ltr" className="transition hover:text-[#C9A84C]">
+                  omanimajles@gmail.com
+                </a>
               </li>
               <li className="flex items-center gap-2">
                 <Phone className="h-4 w-4 text-[#C9A84C]" />
-                <span dir="ltr">+968 9000 0000</span>
+                <a href="tel:+96895141641" dir="ltr" className="transition hover:text-[#C9A84C]">
+                  +968 9514 1641
+                </a>
               </li>
             </ul>
             <div className="mt-4 flex items-center gap-2">
-              {[
-                { Icon: Facebook, href: '#', label: 'فيسبوك' },
-                { Icon: Instagram, href: '#', label: 'إنستغرام' },
-                { Icon: Twitter, href: '#', label: 'تويتر' },
-                { Icon: Linkedin, href: '#', label: 'لينكد إن' },
-              ].map(({ Icon, href, label }) => (
-                <a
-                  key={label}
-                  href={href}
-                  aria-label={label}
-                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-gray-300 transition hover:border-[#C9A84C] hover:bg-[#C9A84C] hover:text-[#1B3A6B]"
-                >
-                  <Icon className="h-4 w-4" />
-                </a>
-              ))}
+              <a
+                href="https://www.instagram.com/oem_2020/"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="تابعنا على إنستغرام"
+                className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-gray-300 transition hover:border-[#C9A84C] hover:bg-[#C9A84C] hover:text-[#1B3A6B]"
+              >
+                <Instagram className="h-4 w-4" />
+              </a>
             </div>
           </div>
         </div>

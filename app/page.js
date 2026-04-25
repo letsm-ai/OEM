@@ -296,7 +296,7 @@ export default async function LandingPage() {
                       >
                         <span className="font-semibold">{t.nameAr}</span>
                         <span className="text-sm">
-                          <span className="text-lg font-bold text-[#C9A84C]">{t.price}</span> ر.ع / شهرياً
+                          <span className="text-lg font-bold text-[#C9A84C]">{t.price}</span> ر.ع / سنوياً
                         </span>
                       </div>
                     )
