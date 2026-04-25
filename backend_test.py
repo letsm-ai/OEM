@@ -1,623 +1,705 @@
 #!/usr/bin/env python3
 """
-Comprehensive backend test for Phase A refactoring verification.
-Tests all endpoints from the extracted modules:
-- /app/lib/api/membership.js
-- /app/lib/api/companies.js  
-- /app/lib/api/experts.js
+Phase C Backend Testing - Comprehensive test for all 5 refactored modules:
+1. Cart endpoints + abandoned cart cron
+2. Vendor analytics (full KPI dashboard)
+3. Vendor promotions (BUY_X_GET_Y, TIER types)
+4. Inventory management + CSV import + stock movements
+5. Vendor product CRUD
 
-Goal: Verify functional parity - no behavior should have changed by the extraction.
+Testing against: https://omani-startup-hub.preview.emergentagent.com/api
 """
 
 import requests
 import json
 import time
 import uuid
+import base64
 from datetime import datetime, timedelta
-import pymongo
-import bcrypt
-import os
 
 # Configuration
 BASE_URL = "https://omani-startup-hub.preview.emergentagent.com/api"
-MONGO_URL = "mongodb://localhost:27017/majles"
+CRON_SECRET = "fcb09a9f909c3ea848c026041b3b3d3069beba9da6848e56"
 
-class BackendTester:
+class PhaseCtester:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
             'Content-Type': 'application/json',
-            'User-Agent': 'Backend-Test/1.0'
+            'User-Agent': 'Phase-C-Backend-Tester/1.0'
         })
+        self.vendor_session = None
+        self.admin_session = None
+        self.test_product_id = None
+        self.test_promotion_id = None
         
-        # Connect to MongoDB for direct operations
-        self.mongo_client = pymongo.MongoClient(MONGO_URL)
-        self.db = self.mongo_client.majles
+    def log(self, message):
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
         
-        # Test data storage
-        self.test_users = {}
-        self.test_companies = {}
-        self.test_experts = {}
-        self.test_appointments = {}
-        
-        # Test results
-        self.results = {
-            'membership': {'passed': 0, 'failed': 0, 'tests': []},
-            'companies': {'passed': 0, 'failed': 0, 'tests': []},
-            'experts': {'passed': 0, 'failed': 0, 'tests': []},
-            'total_passed': 0,
-            'total_failed': 0
-        }
-
-    def log_test(self, category, test_name, passed, details=""):
-        """Log test result"""
-        status = "✅ PASS" if passed else "❌ FAIL"
-        print(f"{status}: {test_name}")
-        if details:
-            print(f"   {details}")
-        
-        self.results[category]['tests'].append({
-            'name': test_name,
-            'passed': passed,
-            'details': details
-        })
-        
-        if passed:
-            self.results[category]['passed'] += 1
-            self.results['total_passed'] += 1
-        else:
-            self.results[category]['failed'] += 1
-            self.results['total_failed'] += 1
-
-    def create_test_user(self, role="MEMBER", tier="FREE", email_suffix=""):
-        """Create a test user with fresh timestamped email"""
+    def create_test_user(self, role="VENDOR"):
+        """Create a fresh test user with timestamped email"""
         timestamp = int(time.time())
-        email = f"refactor_{role.lower()}_{timestamp}{email_suffix}@x.com"
+        email = f"phasec_{role.lower()}_{timestamp}@test.com"
         password = "Password123"
         
-        # Create user via signup endpoint
+        # Create user
         signup_data = {
-            "name": f"Test {role} User",
+            "name": f"Phase C {role} User",
             "email": email,
             "password": password
         }
         
         response = self.session.post(f"{BASE_URL}/signup", json=signup_data)
         if response.status_code != 200:
-            print(f"Failed to create user: {response.text}")
-            return None
+            raise Exception(f"Failed to create user: {response.text}")
             
-        user_data = response.json()
-        user_id = user_data['user']['id']
-        
-        # Update role and tier via MongoDB if needed
-        if role != "MEMBER" or tier != "FREE":
-            self.db.users.update_one(
-                {"_id": user_id},
-                {"$set": {"role": role, "membershipTier": tier}}
-            )
-        
-        user_info = {
-            'id': user_id,
-            'email': email,
-            'password': password,
-            'role': role,
-            'tier': tier
-        }
-        
-        self.test_users[f"{role}_{tier}"] = user_info
-        return user_info
-
-    def login_user(self, user_info):
-        """Login user and get session"""
-        # Get CSRF token
+        # Login to get session
+        login_data = {"email": email, "password": password}
         csrf_response = self.session.get(f"{BASE_URL}/auth/csrf")
-        if csrf_response.status_code != 200:
-            return False
-            
         csrf_token = csrf_response.json().get('csrfToken')
-        
-        # Login with credentials
-        login_data = {
-            'email': user_info['email'],
-            'password': user_info['password'],
-            'csrfToken': csrf_token,
-            'callbackUrl': '/',
-            'json': 'true'
-        }
         
         login_response = self.session.post(
             f"{BASE_URL}/auth/callback/credentials",
-            data=login_data,
+            data={
+                "email": email,
+                "password": password,
+                "csrfToken": csrf_token,
+                "callbackUrl": "/",
+                "json": "true"
+            },
             headers={'Content-Type': 'application/x-www-form-urlencoded'}
         )
         
-        # Verify session by calling /me
-        me_response = self.session.get(f"{BASE_URL}/me")
-        return me_response.status_code == 200
-
-    def test_membership_endpoints(self):
-        """Test all membership endpoints from membership.js"""
-        print("\n🧪 TESTING MEMBERSHIP ENDPOINTS")
-        print("=" * 50)
-        
-        # Create test users
-        basic_user = self.create_test_user("MEMBER", "FREE", "_basic")
-        if not basic_user:
-            self.log_test('membership', 'User creation', False, "Failed to create basic user")
-            return
+        if login_response.status_code != 200:
+            raise Exception(f"Failed to login: {login_response.text}")
             
-        # Test 1: POST /membership/subscribe - No auth
-        response = self.session.post(f"{BASE_URL}/membership/subscribe", json={"tier": "BASIC"})
-        self.log_test('membership', 'Subscribe without auth → 401', 
-                     response.status_code == 401 and 'غير مصرح' in response.text)
-        
-        # Login user
-        if not self.login_user(basic_user):
-            self.log_test('membership', 'User login', False, "Failed to login user")
-            return
+        # Get session cookies
+        session_cookies = {}
+        for cookie in self.session.cookies:
+            session_cookies[cookie.name] = cookie.value
             
-        # Test 2: POST /membership/subscribe - Invalid tier
-        response = self.session.post(f"{BASE_URL}/membership/subscribe", json={"tier": "INVALID"})
-        self.log_test('membership', 'Subscribe invalid tier → 400', 
-                     response.status_code == 400 and 'باقة غير صحيحة' in response.text)
-        
-        # Test 3: POST /membership/subscribe - FREE tier
-        response = self.session.post(f"{BASE_URL}/membership/subscribe", json={"tier": "FREE"})
-        self.log_test('membership', 'Subscribe FREE tier → 400', 
-                     response.status_code == 400 and 'الباقة المجانية مفعلة تلقائياً' in response.text)
-        
-        # Test 4: POST /membership/subscribe - Valid BASIC subscription
-        response = self.session.post(f"{BASE_URL}/membership/subscribe", json={"tier": "BASIC"})
-        success = response.status_code == 200
-        if success:
-            data = response.json()
-            success = (data.get('success') and 
-                      data.get('membership', {}).get('tier') == 'BASIC' and
-                      data.get('membership', {}).get('amountPaid') == 50)
-        self.log_test('membership', 'Subscribe BASIC tier → 200', success)
-        
-        # Test 5: GET /membership/history - No auth (logout first)
-        self.session.cookies.clear()
-        response = self.session.get(f"{BASE_URL}/membership/history")
-        self.log_test('membership', 'History without auth → 401', 
-                     response.status_code == 401)
-        
-        # Login again
-        self.login_user(basic_user)
-        
-        # Test 6: GET /membership/history - With auth
-        response = self.session.get(f"{BASE_URL}/membership/history")
-        success = response.status_code == 200
-        if success:
-            data = response.json()
-            success = 'history' in data and len(data['history']) >= 1
-        self.log_test('membership', 'History with auth → 200', success)
-        
-        # Test 7: POST /membership/discount - Invalid price
-        response = self.session.post(f"{BASE_URL}/membership/discount", json={"price": "invalid"})
-        self.log_test('membership', 'Discount invalid price → 400', 
-                     response.status_code == 400 and 'السعر غير صحيح' in response.text)
-        
-        # Test 8: POST /membership/discount - Valid price with BASIC tier
-        response = self.session.post(f"{BASE_URL}/membership/discount", json={"price": 100})
-        success = response.status_code == 200
-        if success:
-            data = response.json()
-            success = (data.get('tier') == 'BASIC' and 
-                      data.get('discountPercent') == 10 and
-                      data.get('finalPrice') == 90)
-        self.log_test('membership', 'Discount with BASIC tier → 200', success)
-        
-        # Test 9: POST /membership/discount - No session (should use FREE tier)
-        self.session.cookies.clear()
-        response = self.session.post(f"{BASE_URL}/membership/discount", json={"price": 100})
-        success = response.status_code == 200
-        if success:
-            data = response.json()
-            success = (data.get('tier') == 'FREE' and 
-                      data.get('discountPercent') == 0 and
-                      data.get('finalPrice') == 100)
-        self.log_test('membership', 'Discount without session → FREE tier', success)
-
-    def test_companies_endpoints(self):
-        """Test all companies endpoints from companies.js"""
-        print("\n🧪 TESTING COMPANIES ENDPOINTS")
-        print("=" * 50)
-        
-        # Create test users
-        basic_user = self.create_test_user("MEMBER", "BASIC", "_comp")
-        admin_user = self.create_test_user("ADMIN", "FREE", "_admin")
-        
-        # Test 1: GET /companies (public)
-        response = self.session.get(f"{BASE_URL}/companies")
-        success = response.status_code == 200 and 'companies' in response.json()
-        self.log_test('companies', 'Public companies list → 200', success)
-        
-        # Test 2: POST /companies - No auth
-        company_data = {
-            "nameAr": "شركة اختبار",
-            "sector": "TECH",
-            "description": "شركة للاختبار"
+        return {
+            "email": email,
+            "password": password,
+            "user_id": response.json()["user"]["id"],
+            "cookies": session_cookies
         }
-        response = self.session.post(f"{BASE_URL}/companies", json=company_data)
-        self.log_test('companies', 'Create company without auth → 401', 
-                     response.status_code == 401)
         
-        # Login BASIC user
-        self.login_user(basic_user)
+    def setup_test_data(self):
+        """Setup test users and promote to required roles"""
+        self.log("Setting up test data...")
         
-        # Test 3: POST /companies - Missing required fields
-        response = self.session.post(f"{BASE_URL}/companies", json={"nameAr": "test"})
-        self.log_test('companies', 'Create company missing sector → 400', 
-                     response.status_code == 400 and 'القطاع مطلوبان' in response.text)
+        # Create vendor user
+        vendor_user = self.create_test_user("VENDOR")
+        self.vendor_session = requests.Session()
+        self.vendor_session.cookies.update(vendor_user["cookies"])
+        self.vendor_session.headers.update({'Content-Type': 'application/json'})
         
-        # Test 4: POST /companies - Invalid sector
-        invalid_data = company_data.copy()
-        invalid_data["sector"] = "INVALID"
-        response = self.session.post(f"{BASE_URL}/companies", json=invalid_data)
-        self.log_test('companies', 'Create company invalid sector → 400', 
-                     response.status_code == 400 and 'القطاع غير صحيح' in response.text)
+        # Create admin user  
+        admin_user = self.create_test_user("ADMIN")
+        self.admin_session = requests.Session()
+        self.admin_session.cookies.update(admin_user["cookies"])
+        self.admin_session.headers.update({'Content-Type': 'application/json'})
         
-        # Test 5: POST /companies - Valid creation
-        response = self.session.post(f"{BASE_URL}/companies", json=company_data)
-        success = response.status_code == 200
-        company_id = None
-        if success:
-            data = response.json()
-            success = (data.get('success') and 
-                      data.get('company', {}).get('status') == 'PENDING')
-            company_id = data.get('company', {}).get('id')
-        self.log_test('companies', 'Create company valid → 200', success)
-        
-        if company_id:
-            self.test_companies[basic_user['id']] = company_id
+        # Promote users via direct MongoDB (using pymongo)
+        try:
+            import pymongo
+            client = pymongo.MongoClient("mongodb://localhost:27017/")
+            db = client["majles"]
             
-            # Test 6: GET /companies/:id - PENDING company without auth
-            self.session.cookies.clear()
-            response = self.session.get(f"{BASE_URL}/companies/{company_id}")
-            self.log_test('companies', 'Get PENDING company without auth → 404', 
-                         response.status_code == 404)
+            # Promote vendor user to VENDOR role
+            db.users.update_one(
+                {"_id": vendor_user["user_id"]},
+                {"$set": {"role": "VENDOR", "membershipTier": "GOLD"}}
+            )
             
-            # Test 7: GET /companies/:id - Owner can access PENDING
-            self.login_user(basic_user)
-            response = self.session.get(f"{BASE_URL}/companies/{company_id}")
-            self.log_test('companies', 'Owner access PENDING company → 200', 
-                         response.status_code == 200)
+            # Promote admin user to ADMIN role
+            db.users.update_one(
+                {"_id": admin_user["user_id"]},
+                {"$set": {"role": "ADMIN", "membershipTier": "PLATINUM"}}
+            )
             
-            # Test 8: PUT /companies/:id - Update by owner
-            update_data = {"description": "Updated description"}
-            response = self.session.put(f"{BASE_URL}/companies/{company_id}", json=update_data)
-            success = response.status_code == 200
-            if success:
-                data = response.json()
-                success = data.get('company', {}).get('status') == 'PENDING'  # Should reset to PENDING
-            self.log_test('companies', 'Update company by owner → 200', success)
+            self.log(f"✅ Created vendor user: {vendor_user['email']}")
+            self.log(f"✅ Created admin user: {admin_user['email']}")
             
-            # Test 9: DELETE /companies/:id - Delete by owner
-            response = self.session.delete(f"{BASE_URL}/companies/{company_id}")
-            self.log_test('companies', 'Delete company by owner → 200', 
-                         response.status_code == 200)
-        
-        # Test 10: GET /my-companies
-        response = self.session.get(f"{BASE_URL}/my-companies")
-        success = response.status_code == 200 and 'companies' in response.json()
-        self.log_test('companies', 'My companies → 200', success)
-        
-        # Admin tests
-        self.login_user(admin_user)
-        
-        # Test 11: GET /admin/companies
-        response = self.session.get(f"{BASE_URL}/admin/companies")
-        success = response.status_code == 200 and 'companies' in response.json()
-        self.log_test('companies', 'Admin companies list → 200', success)
-        
-        # Create a company for admin tests
-        self.login_user(basic_user)
-        response = self.session.post(f"{BASE_URL}/companies", json=company_data)
-        if response.status_code == 200:
-            admin_test_company_id = response.json().get('company', {}).get('id')
+            client.close()
             
-            # Test 12: POST /admin/companies/:id/approve
-            self.login_user(admin_user)
-            response = self.session.post(f"{BASE_URL}/admin/companies/{admin_test_company_id}/approve")
-            success = response.status_code == 200
-            if success:
-                data = response.json()
-                success = data.get('status') == 'APPROVED'
-            self.log_test('companies', 'Admin approve company → 200', success)
+        except ImportError:
+            self.log("⚠️ pymongo not available, using API promotion")
+            # Alternative: use API endpoints if available
             
-            # Test 13: POST /admin/companies/:id/reject
-            # Create another company to reject
-            self.login_user(basic_user)
-            reject_data = company_data.copy()
-            reject_data["nameAr"] = "شركة للرفض"
-            response = self.session.post(f"{BASE_URL}/companies", json=reject_data)
-            if response.status_code == 200:
-                reject_company_id = response.json().get('company', {}).get('id')
-                
-                self.login_user(admin_user)
-                response = self.session.post(f"{BASE_URL}/admin/companies/{reject_company_id}/reject", 
-                                           json={"reason": "Test rejection"})
-                success = response.status_code == 200
-                if success:
-                    data = response.json()
-                    success = data.get('status') == 'REJECTED'
-                self.log_test('companies', 'Admin reject company → 200', success)
+        return vendor_user, admin_user
 
-    def test_experts_endpoints(self):
-        """Test all experts endpoints from experts.js"""
-        print("\n🧪 TESTING EXPERTS ENDPOINTS")
-        print("=" * 50)
-        
-        # Create test users
-        gold_user = self.create_test_user("MEMBER", "GOLD", "_expert")
-        free_user = self.create_test_user("MEMBER", "FREE", "_client")
-        admin_user = self.create_test_user("ADMIN", "FREE", "_exp_admin")
-        
-        # Test 1: GET /experts (public)
-        response = self.session.get(f"{BASE_URL}/experts")
-        success = response.status_code == 200 and 'experts' in response.json()
-        self.log_test('experts', 'Public experts list → 200', success)
-        
-        # Test 2: POST /experts/apply - No auth
-        expert_data = {
-            "specialty": "LEGAL",
-            "hourlyRate": 25,
-            "bio": "Legal expert"
-        }
-        response = self.session.post(f"{BASE_URL}/experts/apply", json=expert_data)
-        self.log_test('experts', 'Apply expert without auth → 401', 
-                     response.status_code == 401)
-        
-        # Test 3: POST /experts/apply - FREE user (should fail)
-        self.login_user(free_user)
-        response = self.session.post(f"{BASE_URL}/experts/apply", json=expert_data)
-        self.log_test('experts', 'Apply expert with FREE tier → 403', 
-                     response.status_code == 403 and 'الباقة الذهبية أو البلاتينية مطلوبة' in response.text)
-        
-        # Test 4: POST /experts/apply - GOLD user, invalid specialty
-        self.login_user(gold_user)
-        invalid_data = expert_data.copy()
-        invalid_data["specialty"] = "INVALID"
-        response = self.session.post(f"{BASE_URL}/experts/apply", json=invalid_data)
-        self.log_test('experts', 'Apply expert invalid specialty → 400', 
-                     response.status_code == 400 and 'التخصص غير صحيح' in response.text)
-        
-        # Test 5: POST /experts/apply - GOLD user, invalid hourly rate
-        invalid_data = expert_data.copy()
-        invalid_data["hourlyRate"] = 0
-        response = self.session.post(f"{BASE_URL}/experts/apply", json=invalid_data)
-        self.log_test('experts', 'Apply expert invalid rate → 400', 
-                     response.status_code == 400 and 'سعر الساعة مطلوب' in response.text)
-        
-        # Test 6: POST /experts/apply - Valid application
-        response = self.session.post(f"{BASE_URL}/experts/apply", json=expert_data)
-        success = response.status_code == 200
-        expert_id = None
-        if success:
-            data = response.json()
-            success = data.get('success') and data.get('expert', {}).get('status') == 'PENDING'
-            expert_id = data.get('expert', {}).get('id')
-        self.log_test('experts', 'Apply expert valid → 200', success)
-        
-        # Test 7: POST /experts/apply - Duplicate application
-        response = self.session.post(f"{BASE_URL}/experts/apply", json=expert_data)
-        self.log_test('experts', 'Apply expert duplicate → 409', 
-                     response.status_code == 409)
-        
-        if expert_id:
-            self.test_experts[gold_user['id']] = expert_id
-            
-            # Test 8: GET /experts/me
-            response = self.session.get(f"{BASE_URL}/experts/me")
-            success = response.status_code == 200 and 'specialty' in response.json()
-            self.log_test('experts', 'Get expert me → 200', success)
-            
-            # Test 9: PUT /experts/me
-            update_data = {"bio": "Updated bio", "hourlyRate": 30}
-            response = self.session.put(f"{BASE_URL}/experts/me", json=update_data)
-            self.log_test('experts', 'Update expert me → 200', 
-                         response.status_code == 200)
-            
-            # Test 10: PUT /experts/me/availability
-            availability_data = {
-                "availability": [
-                    {"dayOfWeek": 0, "startTime": "09:00", "endTime": "12:00"},
-                    {"dayOfWeek": 1, "startTime": "14:00", "endTime": "17:00"}
-                ]
-            }
-            response = self.session.put(f"{BASE_URL}/experts/me/availability", json=availability_data)
-            success = response.status_code == 200
-            if success:
-                data = response.json()
-                success = data.get('count') == 2
-            self.log_test('experts', 'Set availability → 200', success)
-            
-            # Test 11: GET /experts/:id/availability
-            response = self.session.get(f"{BASE_URL}/experts/{expert_id}/availability")
-            success = response.status_code == 200 and 'availability' in response.json()
-            self.log_test('experts', 'Get expert availability → 200', success)
-            
-            # Test 12: GET /experts/:id/slots
-            tomorrow = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
-            response = self.session.get(f"{BASE_URL}/experts/{expert_id}/slots?date={tomorrow}")
-            success = response.status_code == 200 and 'slots' in response.json()
-            self.log_test('experts', 'Get expert slots → 200', success)
-            
-            # Admin approve expert for appointment tests
-            self.login_user(admin_user)
-            response = self.session.post(f"{BASE_URL}/admin/experts/{expert_id}/approve")
-            if response.status_code == 200:
-                # Test 13: POST /appointments - Guest booking
-                guest_data = {
-                    "expertId": expert_id,
-                    "date": tomorrow,
-                    "startTime": "09:00",
-                    "endTime": "10:00",
-                    "guest": {
-                        "name": "Guest Client",
-                        "email": f"guest_{int(time.time())}@test.com",
-                        "phone": "+968 9123 4567"
-                    }
-                }
-                self.session.cookies.clear()  # Logout
-                response = self.session.post(f"{BASE_URL}/appointments", json=guest_data)
-                success = response.status_code == 200
-                appointment_id = None
-                if success:
-                    data = response.json()
-                    success = data.get('success') and data.get('appointment', {}).get('status') == 'CONFIRMED'
-                    appointment_id = data.get('appointment', {}).get('id')
-                self.log_test('experts', 'Guest appointment booking → 200', success)
-                
-                # Test 14: POST /appointments - Authenticated booking
-                self.login_user(free_user)
-                auth_data = {
-                    "expertId": expert_id,
-                    "date": tomorrow,
-                    "startTime": "10:00",
-                    "endTime": "11:00"
-                }
-                response = self.session.post(f"{BASE_URL}/appointments", json=auth_data)
-                success = response.status_code == 200
-                auth_appointment_id = None
-                if success:
-                    data = response.json()
-                    success = data.get('success')
-                    auth_appointment_id = data.get('appointment', {}).get('id')
-                self.log_test('experts', 'Authenticated appointment booking → 200', success)
-                
-                # Test 15: POST /appointments - Duplicate booking
-                response = self.session.post(f"{BASE_URL}/appointments", json=auth_data)
-                self.log_test('experts', 'Duplicate appointment booking → 409', 
-                             response.status_code == 409 and 'محجوز بالفعل' in response.text)
-                
-                # Test 16: GET /appointments
-                response = self.session.get(f"{BASE_URL}/appointments")
-                success = response.status_code == 200 and 'appointments' in response.json()
-                self.log_test('experts', 'Get appointments → 200', success)
-                
-                # Test 17: POST /appointments/:id/cancel
-                if auth_appointment_id:
-                    response = self.session.post(f"{BASE_URL}/appointments/{auth_appointment_id}/cancel")
-                    self.log_test('experts', 'Cancel appointment → 200', 
-                                 response.status_code == 200)
-            
-            # Admin tests
-            self.login_user(admin_user)
-            
-            # Test 18: GET /admin/experts
-            response = self.session.get(f"{BASE_URL}/admin/experts")
-            success = response.status_code == 200 and 'experts' in response.json()
-            self.log_test('experts', 'Admin experts list → 200', success)
-            
-            # Test 19: POST /admin/experts/:id/reject
-            # Create another expert to reject
-            self.login_user(gold_user)
-            reject_data = expert_data.copy()
-            reject_data["specialty"] = "BUSINESS"
-            # Need to create new user since one expert per user
-            reject_user = self.create_test_user("MEMBER", "GOLD", "_reject")
-            self.login_user(reject_user)
-            response = self.session.post(f"{BASE_URL}/experts/apply", json=reject_data)
-            if response.status_code == 200:
-                reject_expert_id = response.json().get('expert', {}).get('id')
-                
-                self.login_user(admin_user)
-                response = self.session.post(f"{BASE_URL}/admin/experts/{reject_expert_id}/reject", 
-                                           json={"reason": "Test rejection"})
-                success = response.status_code == 200
-                if success:
-                    data = response.json()
-                    success = data.get('status') == 'REJECTED'
-                self.log_test('experts', 'Admin reject expert → 200', success)
-
-    def test_validation_edge_cases(self):
-        """Test validation and edge cases"""
-        print("\n🧪 TESTING VALIDATION & EDGE CASES")
-        print("=" * 50)
-        
-        # Test 404s for missing IDs
-        fake_id = str(uuid.uuid4())
-        
-        response = self.session.get(f"{BASE_URL}/companies/{fake_id}")
-        self.log_test('experts', 'GET company with fake ID → 404', 
-                     response.status_code == 404)
-        
-        response = self.session.get(f"{BASE_URL}/experts/{fake_id}")
-        self.log_test('experts', 'GET expert with fake ID → 404', 
-                     response.status_code == 404)
-        
-        # Test invalid date format for slots
-        response = self.session.get(f"{BASE_URL}/experts/{fake_id}/slots?date=invalid")
-        self.log_test('experts', 'GET slots with invalid date → 400', 
-                     response.status_code == 400 and 'تاريخ غير صحيح' in response.text)
-
-    def run_all_tests(self):
-        """Run all test suites"""
-        print("🚀 STARTING COMPREHENSIVE BACKEND TESTING")
-        print("Phase A Refactoring Verification")
-        print("Testing extracted modules: membership.js, companies.js, experts.js")
-        print("=" * 70)
+    def test_cart_endpoints(self):
+        """Test cart upsert/get/clear endpoints"""
+        self.log("\n🛒 TESTING CART ENDPOINTS")
         
         try:
-            self.test_membership_endpoints()
-            self.test_companies_endpoints()
-            self.test_experts_endpoints()
-            self.test_validation_edge_cases()
+            # Test 1: POST /api/cart (upsert)
+            cart_data = {
+                "items": [
+                    {
+                        "productId": str(uuid.uuid4()),
+                        "quantity": 2,
+                        "nameAr": "منتج تجريبي للسلة",
+                        "unitPrice": 15.5,
+                        "image": "data:image/png;base64,test"
+                    },
+                    {
+                        "productId": str(uuid.uuid4()),
+                        "quantity": 1,
+                        "nameAr": "منتج آخر",
+                        "unitPrice": 25.0,
+                        "image": ""
+                    }
+                ]
+            }
+            
+            response = self.vendor_session.post(f"{BASE_URL}/cart", json=cart_data)
+            assert response.status_code == 200, f"Cart upsert failed: {response.text}"
+            result = response.json()
+            assert result["success"] == True
+            assert result["count"] == 2
+            self.log("✅ C1: POST /api/cart (upsert) → 200 with success=true, count=2")
+            
+            # Test 2: GET /api/cart
+            response = self.vendor_session.get(f"{BASE_URL}/cart")
+            assert response.status_code == 200, f"Cart get failed: {response.text}"
+            result = response.json()
+            assert "items" in result
+            assert len(result["items"]) == 2
+            self.log("✅ C2: GET /api/cart → 200 with items array (2 items)")
+            
+            # Test 3: DELETE /api/cart (clear)
+            response = self.vendor_session.delete(f"{BASE_URL}/cart")
+            assert response.status_code == 200, f"Cart clear failed: {response.text}"
+            result = response.json()
+            assert result["success"] == True
+            self.log("✅ C3: DELETE /api/cart → 200 with success=true")
+            
+            # Test 4: GET /api/cart (after clear)
+            response = self.vendor_session.get(f"{BASE_URL}/cart")
+            assert response.status_code == 200
+            result = response.json()
+            assert len(result["items"]) == 0
+            self.log("✅ C4: GET /api/cart (after clear) → 200 with empty items array")
+            
+            # Test 5: Unauthenticated cart access
+            response = self.session.get(f"{BASE_URL}/cart")
+            assert response.status_code == 200
+            result = response.json()
+            assert result["items"] == []
+            self.log("✅ C5: GET /api/cart (unauthenticated) → 200 with empty items")
             
         except Exception as e:
-            print(f"❌ Test execution failed: {e}")
-            import traceback
-            traceback.print_exc()
-        
-        finally:
-            self.print_summary()
+            self.log(f"❌ Cart endpoints test failed: {str(e)}")
+            return False
+            
+        return True
 
-    def print_summary(self):
-        """Print test summary"""
-        print("\n" + "=" * 70)
-        print("📊 TEST SUMMARY")
-        print("=" * 70)
+    def test_abandoned_cart_cron(self):
+        """Test abandoned cart cron endpoint"""
+        self.log("\n📧 TESTING ABANDONED CART CRON")
         
-        for category, results in self.results.items():
-            if category in ['membership', 'companies', 'experts']:
-                passed = results['passed']
-                failed = results['failed']
-                total = passed + failed
-                success_rate = (passed / total * 100) if total > 0 else 0
+        try:
+            # Test 1: No authorization header
+            response = self.session.post(f"{BASE_URL}/cron/abandoned-carts")
+            assert response.status_code == 401, f"Expected 401, got {response.status_code}"
+            result = response.json()
+            assert "غير مصرح" in result.get("error", "")
+            self.log("✅ AC1: POST /api/cron/abandoned-carts (no auth) → 401 'غير مصرح'")
+            
+            # Test 2: Wrong cron key
+            headers = {"X-CRON-KEY": "wrong-key"}
+            response = self.session.post(f"{BASE_URL}/cron/abandoned-carts", headers=headers)
+            assert response.status_code == 401
+            self.log("✅ AC2: POST /api/cron/abandoned-carts (wrong key) → 401")
+            
+            # Test 3: Correct cron key
+            headers = {"X-CRON-KEY": CRON_SECRET}
+            response = self.session.post(f"{BASE_URL}/cron/abandoned-carts", headers=headers)
+            assert response.status_code == 200, f"Cron failed: {response.text}"
+            result = response.json()
+            assert result["success"] == True
+            assert "candidates" in result
+            assert "sent" in result
+            self.log(f"✅ AC3: POST /api/cron/abandoned-carts (correct key) → 200 with candidates={result['candidates']}, sent={result['sent']}")
+            
+            # Test 4: Admin session authorization
+            response = self.admin_session.post(f"{BASE_URL}/cron/abandoned-carts")
+            assert response.status_code == 200
+            result = response.json()
+            assert result["success"] == True
+            self.log("✅ AC4: POST /api/cron/abandoned-carts (admin session) → 200")
+            
+        except Exception as e:
+            self.log(f"❌ Abandoned cart cron test failed: {str(e)}")
+            return False
+            
+        return True
+
+    def test_vendor_analytics(self):
+        """Test vendor analytics endpoint"""
+        self.log("\n📊 TESTING VENDOR ANALYTICS")
+        
+        try:
+            # Test 1: Unauthenticated request
+            response = self.session.get(f"{BASE_URL}/vendor/analytics")
+            assert response.status_code == 401
+            self.log("✅ VA1: GET /api/vendor/analytics (no auth) → 401")
+            
+            # Test 2: Non-vendor user (using regular session)
+            regular_user = self.create_test_user("MEMBER")
+            regular_session = requests.Session()
+            regular_session.cookies.update(regular_user["cookies"])
+            regular_session.headers.update({'Content-Type': 'application/json'})
+            
+            response = regular_session.get(f"{BASE_URL}/vendor/analytics")
+            assert response.status_code == 403
+            result = response.json()
+            assert "صلاحيات بائع مطلوبة" in result.get("error", "")
+            self.log("✅ VA2: GET /api/vendor/analytics (non-vendor) → 403 'صلاحيات بائع مطلوبة'")
+            
+            # Test 3: Vendor analytics (full payload)
+            response = self.vendor_session.get(f"{BASE_URL}/vendor/analytics")
+            assert response.status_code == 200, f"Vendor analytics failed: {response.text}"
+            result = response.json()
+            
+            # Validate payload structure
+            required_fields = [
+                "generatedAt", "kpi", "last30Days", "products", 
+                "pendingShipments", "monthly", "topProducts", 
+                "byCategory", "orderStatus"
+            ]
+            for field in required_fields:
+                assert field in result, f"Missing field: {field}"
                 
-                print(f"\n{category.upper()}:")
-                print(f"  ✅ Passed: {passed}")
-                print(f"  ❌ Failed: {failed}")
-                print(f"  📈 Success Rate: {success_rate:.1f}%")
+            # Validate KPI structure
+            kpi = result["kpi"]
+            kpi_fields = [
+                "totalRevenue", "totalUnits", "totalOrders", 
+                "totalCommission", "totalNet", "commissionPercent", "avgOrderValue"
+            ]
+            for field in kpi_fields:
+                assert field in kpi, f"Missing KPI field: {field}"
                 
-                if failed > 0:
-                    print(f"  Failed tests:")
-                    for test in results['tests']:
-                        if not test['passed']:
-                            print(f"    - {test['name']}: {test['details']}")
+            # Validate monthly array (should have 12 entries)
+            assert len(result["monthly"]) == 12, f"Expected 12 monthly entries, got {len(result['monthly'])}"
+            
+            # Validate monthly structure
+            for month in result["monthly"]:
+                assert "key" in month
+                assert "year" in month
+                assert "month" in month
+                assert "revenue" in month
+                assert "orders" in month
+                assert "units" in month
+                
+            self.log(f"✅ VA3: GET /api/vendor/analytics (vendor) → 200 with complete payload")
+            self.log(f"    • totalRevenue: {kpi['totalRevenue']}")
+            self.log(f"    • totalOrders: {kpi['totalOrders']}")
+            self.log(f"    • totalUnits: {kpi['totalUnits']}")
+            self.log(f"    • commissionPercent: {kpi['commissionPercent']}%")
+            self.log(f"    • monthly entries: {len(result['monthly'])}")
+            self.log(f"    • topProducts: {len(result['topProducts'])}")
+            self.log(f"    • byCategory: {len(result['byCategory'])}")
+            
+        except Exception as e:
+            self.log(f"❌ Vendor analytics test failed: {str(e)}")
+            return False
+            
+        return True
+
+    def test_promotions(self):
+        """Test vendor promotions CRUD"""
+        self.log("\n🎁 TESTING VENDOR PROMOTIONS")
         
-        total_tests = self.results['total_passed'] + self.results['total_failed']
-        overall_success = (self.results['total_passed'] / total_tests * 100) if total_tests > 0 else 0
+        try:
+            # Test 1: GET /api/vendor/promotions (empty list)
+            response = self.vendor_session.get(f"{BASE_URL}/vendor/promotions")
+            assert response.status_code == 200, f"Get promotions failed: {response.text}"
+            result = response.json()
+            assert "promotions" in result
+            self.log(f"✅ P1: GET /api/vendor/promotions → 200 with {len(result['promotions'])} promotions")
+            
+            # Test 2: POST /api/vendor/promotions (BUY_X_GET_Y)
+            promo_data = {
+                "type": "BUY_X_GET_Y",
+                "nameAr": "اشتري 2 واحصل على 1 مجاناً",
+                "descriptionAr": "عرض خاص لفترة محدودة",
+                "productIds": [],
+                "isActive": True,
+                "priority": 1,
+                "buyQty": 2,
+                "getQty": 1,
+                "getDiscountPercent": 100
+            }
+            
+            response = self.vendor_session.post(f"{BASE_URL}/vendor/promotions", json=promo_data)
+            assert response.status_code == 200, f"Create BUY_X_GET_Y promotion failed: {response.text}"
+            result = response.json()
+            assert "promotion" in result
+            promo = result["promotion"]
+            assert promo["type"] == "BUY_X_GET_Y"
+            assert promo["buyQty"] == 2
+            assert promo["getQty"] == 1
+            assert promo["getDiscountPercent"] == 100
+            self.test_promotion_id = promo["id"]
+            self.log("✅ P2: POST /api/vendor/promotions (BUY_X_GET_Y) → 200 with promotion created")
+            
+            # Test 3: POST /api/vendor/promotions (TIER)
+            tier_data = {
+                "type": "TIER",
+                "nameAr": "خصومات متدرجة",
+                "descriptionAr": "خصم حسب قيمة الطلب",
+                "tiers": [
+                    {"minSpend": 50, "percent": 10},
+                    {"minSpend": 100, "percent": 20},
+                    {"minSpend": 200, "percent": 30}
+                ]
+            }
+            
+            response = self.vendor_session.post(f"{BASE_URL}/vendor/promotions", json=tier_data)
+            assert response.status_code == 200, f"Create TIER promotion failed: {response.text}"
+            result = response.json()
+            promo = result["promotion"]
+            assert promo["type"] == "TIER"
+            assert len(promo["tiers"]) == 3
+            self.log("✅ P3: POST /api/vendor/promotions (TIER) → 200 with 3 tiers")
+            
+            # Test 4: PUT /api/vendor/promotions/:id
+            update_data = {
+                "nameAr": "اشتري 2 واحصل على 1 مجاناً - محدث",
+                "isActive": False
+            }
+            
+            response = self.vendor_session.put(f"{BASE_URL}/vendor/promotions/{self.test_promotion_id}", json=update_data)
+            assert response.status_code == 200, f"Update promotion failed: {response.text}"
+            result = response.json()
+            promo = result["promotion"]
+            assert "محدث" in promo["nameAr"]
+            assert promo["isActive"] == False
+            self.log("✅ P4: PUT /api/vendor/promotions/:id → 200 with updated promotion")
+            
+            # Test 5: Validation errors
+            invalid_data = {"type": "INVALID_TYPE"}
+            response = self.vendor_session.post(f"{BASE_URL}/vendor/promotions", json=invalid_data)
+            assert response.status_code == 400
+            result = response.json()
+            assert "نوع العرض غير صحيح" in result.get("error", "")
+            self.log("✅ P5: POST /api/vendor/promotions (invalid type) → 400 'نوع العرض غير صحيح'")
+            
+            # Test 6: DELETE /api/vendor/promotions/:id
+            response = self.vendor_session.delete(f"{BASE_URL}/vendor/promotions/{self.test_promotion_id}")
+            assert response.status_code == 200, f"Delete promotion failed: {response.text}"
+            result = response.json()
+            assert result["success"] == True
+            self.log("✅ P6: DELETE /api/vendor/promotions/:id → 200 with success=true")
+            
+        except Exception as e:
+            self.log(f"❌ Promotions test failed: {str(e)}")
+            return False
+            
+        return True
+
+    def test_inventory_management(self):
+        """Test inventory endpoints"""
+        self.log("\n📦 TESTING INVENTORY MANAGEMENT")
         
-        print(f"\n🎯 OVERALL RESULTS:")
-        print(f"  Total Tests: {total_tests}")
-        print(f"  ✅ Passed: {self.results['total_passed']}")
-        print(f"  ❌ Failed: {self.results['total_failed']}")
-        print(f"  📈 Success Rate: {overall_success:.1f}%")
+        try:
+            # Test 1: GET /api/vendor/inventory
+            response = self.vendor_session.get(f"{BASE_URL}/vendor/inventory")
+            assert response.status_code == 200, f"Get inventory failed: {response.text}"
+            result = response.json()
+            assert "products" in result
+            assert "summary" in result
+            summary = result["summary"]
+            assert "total" in summary
+            assert "active" in summary
+            assert "lowCount" in summary
+            self.log(f"✅ I1: GET /api/vendor/inventory → 200 with summary (total={summary['total']}, active={summary['active']}, lowCount={summary['lowCount']})")
+            
+            # Test 2: GET /api/vendor/inventory?lowStock=1
+            response = self.vendor_session.get(f"{BASE_URL}/vendor/inventory?lowStock=1")
+            assert response.status_code == 200
+            result = response.json()
+            # Should only return low stock products
+            self.log(f"✅ I2: GET /api/vendor/inventory?lowStock=1 → 200 with {len(result['products'])} low stock products")
+            
+            # Test 3: GET /api/vendor/products/import/template
+            response = self.vendor_session.get(f"{BASE_URL}/vendor/products/import/template")
+            assert response.status_code == 200, f"Get template failed: {response.text}"
+            assert response.headers.get('Content-Type') == 'text/csv; charset=utf-8'
+            assert response.headers.get('Content-Disposition') == 'attachment; filename="products_template.csv"'
+            content = response.text
+            assert content.startswith('\ufeff')  # BOM
+            assert 'nameAr' in content
+            assert 'عسل سدر جبلي' in content  # Sample data
+            self.log("✅ I3: GET /api/vendor/products/import/template → 200 with CSV content-type and BOM")
+            
+            # Test 4: POST /api/vendor/products/import (validation)
+            import_data = {"rows": []}
+            response = self.vendor_session.post(f"{BASE_URL}/vendor/products/import", json=import_data)
+            assert response.status_code == 400
+            result = response.json()
+            assert "لا توجد صفوف لاستيرادها" in result.get("error", "")
+            self.log("✅ I4: POST /api/vendor/products/import (empty rows) → 400 'لا توجد صفوف لاستيرادها'")
+            
+            # Test 5: POST /api/vendor/products/import (dry run)
+            import_data = {
+                "dryRun": True,
+                "rows": [
+                    {
+                        "nameAr": "منتج تجريبي للاستيراد",
+                        "price": 25.5,
+                        "stock": 10,
+                        "category": "ELECTRONICS",
+                        "lowStockThreshold": 3
+                    }
+                ]
+            }
+            
+            response = self.vendor_session.post(f"{BASE_URL}/vendor/products/import", json=import_data)
+            assert response.status_code == 200, f"Import dry run failed: {response.text}"
+            result = response.json()
+            assert result["success"] == True
+            assert result["dryRun"] == True
+            assert result["okCount"] == 1
+            assert result["failCount"] == 0
+            assert result["createdCount"] == 0
+            self.log("✅ I5: POST /api/vendor/products/import (dry run) → 200 with okCount=1, failCount=0, createdCount=0")
+            
+        except Exception as e:
+            self.log(f"❌ Inventory management test failed: {str(e)}")
+            return False
+            
+        return True
+
+    def test_vendor_products_crud(self):
+        """Test vendor product CRUD operations"""
+        self.log("\n🛍️ TESTING VENDOR PRODUCTS CRUD")
         
-        if overall_success >= 90:
-            print("\n🎉 EXCELLENT: Refactoring verification successful!")
-            print("   Functional parity maintained across all modules.")
-        elif overall_success >= 75:
-            print("\n✅ GOOD: Most functionality working correctly.")
-            print("   Minor issues detected, review failed tests.")
+        try:
+            # Test 1: POST /api/products (create)
+            product_data = {
+                "nameAr": "منتج تجريبي للمرحلة ج",
+                "nameEn": "Phase C Test Product",
+                "description": "منتج تجريبي لاختبار المرحلة ج من التطوير",
+                "price": 45.75,
+                "category": "ELECTRONICS",
+                "subcategory": "هواتف ذكية",
+                "stock": 15,
+                "lowStockThreshold": 5,
+                "tags": ["تجريبي", "اختبار", "مرحلة ج"],
+                "images": [
+                    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+                ]
+            }
+            
+            response = self.vendor_session.post(f"{BASE_URL}/products", json=product_data)
+            assert response.status_code == 200, f"Create product failed: {response.text}"
+            result = response.json()
+            assert result["success"] == True
+            assert "product" in result
+            product = result["product"]
+            assert product["nameAr"] == product_data["nameAr"]
+            assert product["price"] == product_data["price"]
+            assert product["category"] == product_data["category"]
+            self.test_product_id = product["id"]
+            self.log("✅ VP1: POST /api/products → 200 with product created")
+            
+            # Test 2: GET /api/vendor/products
+            response = self.vendor_session.get(f"{BASE_URL}/vendor/products")
+            assert response.status_code == 200, f"Get vendor products failed: {response.text}"
+            result = response.json()
+            assert "products" in result
+            assert len(result["products"]) >= 1
+            # Find our test product
+            found = any(p["id"] == self.test_product_id for p in result["products"])
+            assert found, "Test product not found in vendor products list"
+            self.log(f"✅ VP2: GET /api/vendor/products → 200 with {len(result['products'])} products")
+            
+            # Test 3: PUT /api/products/:id (update)
+            update_data = {
+                "nameAr": "منتج تجريبي محدث للمرحلة ج",
+                "price": 55.25,
+                "stock": 20,
+                "isActive": True
+            }
+            
+            response = self.vendor_session.put(f"{BASE_URL}/products/{self.test_product_id}", json=update_data)
+            assert response.status_code == 200, f"Update product failed: {response.text}"
+            result = response.json()
+            assert result["success"] == True
+            product = result["product"]
+            assert "محدث" in product["nameAr"]
+            assert product["price"] == 55.25
+            assert product["stock"] == 20
+            self.log("✅ VP3: PUT /api/products/:id → 200 with updated product")
+            
+            # Test 4: GET /api/products/:id/stock/movements
+            response = self.vendor_session.get(f"{BASE_URL}/products/{self.test_product_id}/stock/movements")
+            assert response.status_code == 200, f"Get stock movements failed: {response.text}"
+            result = response.json()
+            assert "movements" in result
+            # Should have at least one INIT movement from product creation
+            movements = result["movements"]
+            assert len(movements) >= 1
+            init_movement = next((m for m in movements if m["type"] == "INIT"), None)
+            assert init_movement is not None, "No INIT stock movement found"
+            self.log(f"✅ VP4: GET /api/products/:id/stock/movements → 200 with {len(movements)} movements")
+            
+            # Test 5: POST /api/products/:id/stock/adjust
+            adjust_data = {
+                "type": "ADJUST",
+                "delta": -5,
+                "note": "تعديل تجريبي للمخزون"
+            }
+            
+            response = self.vendor_session.post(f"{BASE_URL}/products/{self.test_product_id}/stock/adjust", json=adjust_data)
+            assert response.status_code == 200, f"Stock adjust failed: {response.text}"
+            result = response.json()
+            assert result["success"] == True
+            assert result["delta"] == -5
+            assert result["newStock"] == 15  # 20 - 5
+            self.log("✅ VP5: POST /api/products/:id/stock/adjust → 200 with delta=-5, newStock=15")
+            
+            # Test 6: Validation errors
+            invalid_product = {
+                "nameAr": "X",  # Too short
+                "price": -10,   # Negative price
+                "category": "INVALID"  # Invalid category
+            }
+            
+            response = self.vendor_session.post(f"{BASE_URL}/products", json=invalid_product)
+            assert response.status_code == 400
+            result = response.json()
+            assert "اسم المنتج مطلوب" in result.get("error", "")
+            self.log("✅ VP6: POST /api/products (invalid data) → 400 'اسم المنتج مطلوب'")
+            
+            # Test 7: DELETE /api/products/:id (soft delete - product has no orders)
+            response = self.vendor_session.delete(f"{BASE_URL}/products/{self.test_product_id}")
+            assert response.status_code == 200, f"Delete product failed: {response.text}"
+            result = response.json()
+            assert result["success"] == True
+            # Since product has no orders, it should be hard deleted
+            self.log("✅ VP7: DELETE /api/products/:id → 200 with success=true")
+            
+        except Exception as e:
+            self.log(f"❌ Vendor products CRUD test failed: {str(e)}")
+            return False
+            
+        return True
+
+    def test_public_product_promotions(self):
+        """Test public product promotions endpoint"""
+        self.log("\n🎯 TESTING PUBLIC PRODUCT PROMOTIONS")
+        
+        try:
+            # Create a test product first
+            product_data = {
+                "nameAr": "منتج للعروض الترويجية",
+                "price": 100,
+                "category": "ELECTRONICS",
+                "stock": 10
+            }
+            
+            response = self.vendor_session.post(f"{BASE_URL}/products", json=product_data)
+            assert response.status_code == 200
+            product_id = response.json()["product"]["id"]
+            
+            # Create a promotion for this product
+            promo_data = {
+                "type": "BUY_X_GET_Y",
+                "nameAr": "عرض خاص للمنتج",
+                "productIds": [product_id],
+                "isActive": True,
+                "buyQty": 2,
+                "getQty": 1,
+                "getDiscountPercent": 50
+            }
+            
+            response = self.vendor_session.post(f"{BASE_URL}/vendor/promotions", json=promo_data)
+            assert response.status_code == 200
+            
+            # Test: GET /api/products/:id/promotions (public endpoint)
+            response = self.session.get(f"{BASE_URL}/products/{product_id}/promotions")
+            assert response.status_code == 200, f"Get product promotions failed: {response.text}"
+            result = response.json()
+            assert "promotions" in result
+            promotions = result["promotions"]
+            assert len(promotions) >= 1
+            
+            # Find our promotion
+            found_promo = next((p for p in promotions if p["nameAr"] == "عرض خاص للمنتج"), None)
+            assert found_promo is not None, "Test promotion not found"
+            assert found_promo["type"] == "BUY_X_GET_Y"
+            assert found_promo["buyQty"] == 2
+            assert found_promo["getQty"] == 1
+            
+            self.log(f"✅ PP1: GET /api/products/:id/promotions → 200 with {len(promotions)} active promotions")
+            
+            # Test with non-existent product
+            fake_id = str(uuid.uuid4())
+            response = self.session.get(f"{BASE_URL}/products/{fake_id}/promotions")
+            assert response.status_code == 404
+            result = response.json()
+            assert "المنتج غير موجود" in result.get("error", "")
+            self.log("✅ PP2: GET /api/products/:id/promotions (non-existent) → 404 'المنتج غير موجود'")
+            
+        except Exception as e:
+            self.log(f"❌ Public product promotions test failed: {str(e)}")
+            return False
+            
+        return True
+
+    def run_all_tests(self):
+        """Run all Phase C tests"""
+        self.log("🚀 STARTING PHASE C BACKEND TESTING")
+        self.log("=" * 60)
+        
+        # Setup
+        try:
+            self.setup_test_data()
+        except Exception as e:
+            self.log(f"❌ Setup failed: {str(e)}")
+            return False
+        
+        # Run tests
+        test_results = []
+        
+        test_results.append(("Cart Endpoints", self.test_cart_endpoints()))
+        test_results.append(("Abandoned Cart Cron", self.test_abandoned_cart_cron()))
+        test_results.append(("Vendor Analytics", self.test_vendor_analytics()))
+        test_results.append(("Vendor Promotions", self.test_promotions()))
+        test_results.append(("Inventory Management", self.test_inventory_management()))
+        test_results.append(("Vendor Products CRUD", self.test_vendor_products_crud()))
+        test_results.append(("Public Product Promotions", self.test_public_product_promotions()))
+        
+        # Summary
+        self.log("\n" + "=" * 60)
+        self.log("📊 PHASE C TESTING SUMMARY")
+        self.log("=" * 60)
+        
+        passed = 0
+        total = len(test_results)
+        
+        for test_name, result in test_results:
+            status = "✅ PASSED" if result else "❌ FAILED"
+            self.log(f"{status} - {test_name}")
+            if result:
+                passed += 1
+        
+        self.log(f"\n🎯 OVERALL RESULT: {passed}/{total} tests passed ({(passed/total)*100:.1f}%)")
+        
+        if passed == total:
+            self.log("🎉 ALL PHASE C TESTS PASSED! The refactored modules are working correctly.")
         else:
-            print("\n⚠️  ISSUES DETECTED: Significant functionality problems.")
-            print("   Review failed tests and investigate regressions.")
+            self.log("⚠️ Some tests failed. Please check the logs above for details.")
+            
+        return passed == total
 
 if __name__ == "__main__":
-    tester = BackendTester()
-    tester.run_all_tests()
+    tester = PhaseCtester()
+    success = tester.run_all_tests()
+    exit(0 if success else 1)

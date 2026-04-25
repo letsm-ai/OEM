@@ -5213,10 +5213,7 @@ backend:
           📊 PERFORMANCE: Endpoint responds quickly with parallel counting across multiple collections.
 
 test_plan:
-  current_focus:
-    - "GET /api/admin/users (admin user management with pagination and filters)"
-    - "PATCH /api/admin/users/:id (admin user modification - role, tier, suspend/activate)"
-    - "GET /api/admin/approvals/summary (combined pending approvals count)"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -5698,3 +5695,130 @@ agent_communication:
       • Robust error handling and edge case coverage
       
       The monolithic route.js has been successfully reduced by 33% (5709 → 3830 lines) while maintaining full backward compatibility and functional parity. All 4 Phase B modules are production-ready and fully functional.
+  - agent: "main"
+    message: |
+      🔧 PHASE C REFACTORING — extracted 6 more feature groups (3830 → 2746 lines, additional -1084 lines).
+      
+      🎉 OVERALL TOTAL: route.js shrank from 5709 → 2746 lines (-52%, halved!).
+      
+      8) `/lib/api/cart.js` (115 lines) — cart upsert/get/clear + abandoned-cart cron
+         • POST   /cart           — auth required; sanitizes items[] (max 100, qty 1-99)
+         • GET    /cart           — returns items[] for current user (or empty for guest)
+         • DELETE /cart           — clears cart (after order success)
+         • POST   /cron/abandoned-carts — auth via X-CRON-KEY header OR ADMIN session; sends reminder emails for carts updated 24-72h ago with reminderEmailsSent < 1
+      
+      9) `/lib/api/vendor-analytics.js` (237 lines) — large MongoDB aggregation pipelines for vendor KPI dashboard
+         • GET /vendor/analytics — auth + (VENDOR or ADMIN); revenue/units/orders KPIs, last-30-days, monthly time series (12 buckets, gaps filled), top 5 products, by-category, status breakdown, pending shipments
+      
+      10) `/lib/api/promotions.js` (172 lines) — vendor promotions (BUY_X_GET_Y, TIER) + per-product promo lookup
+          • GET    /vendor/promotions — auth + vendor; list
+          • POST   /vendor/promotions — type validation, name validation, BUY_X_GET_Y params (buy/get/percent), TIER params (minSpend, percent 1-90)
+          • PUT    /vendor/promotions/:id — owner/admin only
+          • DELETE /vendor/promotions/:id — owner/admin only
+          • GET    /products/:id/promotions — public; filters by isActive + date window + product applicability
+      
+      11) `/lib/api/inventory.js` (260 lines) — inventory list + CSV import + stock movements + stock adjust
+          • GET  /vendor/inventory — auth + vendor; supports ?lowStock=1; computes summary {total, active, lowCount}
+          • POST /vendor/products/import — CSV-row import, supports dry-run, max 200 rows; auto-creates products with INIT stock movement
+          • GET  /vendor/products/import/template — returns UTF-8 CSV with BOM (Excel-friendly Arabic)
+          • GET  /products/:id/stock/movements — owner/admin; last 200 movements
+          • POST /products/:id/stock/adjust — owner/admin; type RESTOCK|ADJUST|RETURN; supports variant-level adjust with aggregate stock recalc
+      
+      12) `/lib/api/products-vendor.js` (213 lines) — vendor product CRUD
+          • POST   /products — vendor only; full validation (name 2+ chars, price ≥ 0, valid category, images data-URL ≤ 2MB max 5, variants sanitized, INIT stock movements)
+          • PUT    /products/:id — owner/admin; partial updates with same validations
+          • DELETE /products/:id — owner/admin; soft-delete (isActive=false) if product has orders, hard-delete otherwise
+          • GET    /vendor/products — auth + vendor; lists vendor's own products
+      
+      ✅ ESLint: zero issues across all 13 modules + dispatcher
+      ✅ Smoke tests via curl all pass (cart/vendor-analytics/promotions/inventory/products → expected 401s for protected routes; CSV template returns proper UTF-8 BOM)
+      
+      Please run backend tests on Phase C endpoints:
+      - Cart upsert/get/clear
+      - Abandoned cart cron (with X-CRON-KEY)
+      - Vendor analytics (full payload structure validation)
+      - Vendor promotions CRUD (both BUY_X_GET_Y and TIER types)
+      - Public /products/:id/promotions
+      - Vendor inventory (lowStock filter, summary)
+      - CSV products import (dry-run + actual + invalid rows)
+      - CSV template download (Content-Type + BOM)
+      - Stock movements + stock adjust (variant + non-variant)
+      - Vendor product CRUD (POST/PUT/DELETE) including soft-delete edge case
+      - Vendor products list
+      
+      Use FRESH timestamped accounts. NO regression vs Phase A/B. The remaining big chunks (Public Products + AI search, Orders, Order shipping status) are NOT yet extracted — leave them for Phase D.
+
+  - agent: "testing"
+    message: |
+      ✅ PHASE C REFACTORED MODULES TESTING COMPLETE - ALL ENDPOINTS WORKING PERFECTLY:
+      
+      🎯 COMPREHENSIVE TEST RESULTS (6/6 PASSED - 100% SUCCESS RATE):
+      
+      📋 MODULE 1: CART ENDPOINTS ✅
+         • POST /api/cart (upsert) → 200 with success=true, sanitizes items (max 100, qty 1-99)
+         • GET /api/cart → 200 with items array for authenticated users, empty for guests
+         • DELETE /api/cart → 200 with success=true, clears cart after order
+         • All authentication and data validation working correctly
+      
+      📋 MODULE 2: VENDOR ANALYTICS ✅
+         • GET /api/vendor/analytics → 200 with complete KPI dashboard payload
+         • Full structure verified: generatedAt, kpi, last30Days, products, pendingShipments, monthly (12 buckets), topProducts, byCategory, orderStatus
+         • KPI fields: totalRevenue, totalUnits, totalOrders, totalCommission, totalNet, commissionPercent, avgOrderValue
+         • Monthly time series with proper gap filling working correctly
+         • Authentication (VENDOR or ADMIN role) enforced properly
+      
+      📋 MODULE 3: VENDOR PROMOTIONS ✅
+         • GET /api/vendor/promotions → 200 with promotions list
+         • POST /api/vendor/promotions (BUY_X_GET_Y) → 200 with buyQty, getQty, getDiscountPercent validation
+         • POST /api/vendor/promotions (TIER) → 200 with tiers array validation (minSpend, percent 1-90)
+         • PUT /api/vendor/promotions/:id → 200 with owner/admin authorization
+         • DELETE /api/vendor/promotions/:id → 200 with proper cleanup
+         • GET /api/products/:id/promotions → 200 with active promotions filtered by date window
+         • All Arabic error messages and validation working correctly
+      
+      📋 MODULE 4: INVENTORY MANAGEMENT ✅
+         • GET /api/vendor/inventory → 200 with products and summary (total, active, lowCount)
+         • GET /api/vendor/inventory?lowStock=1 → 200 with filtered low stock products
+         • GET /api/vendor/products/import/template → 200 with CSV content-type, UTF-8 BOM, Excel-friendly
+         • POST /api/vendor/products/import (dry run) → 200 with validation, supports Arabic field names
+         • GET /api/products/:id/stock/movements → 200 with last 200 movements (owner/admin only)
+         • POST /api/products/:id/stock/adjust → 200 with RESTOCK/ADJUST/RETURN types, variant support
+         • All CSV import validation and stock movement tracking working correctly
+      
+      📋 MODULE 5: VENDOR PRODUCTS CRUD ✅
+         • POST /api/products → 200 with full validation (nameAr ≥2, price ≥0, valid category, images ≤2MB max 5)
+         • GET /api/vendor/products → 200 with vendor's own products (all statuses)
+         • PUT /api/products/:id → 200 with partial updates, owner/admin authorization
+         • DELETE /api/products/:id → 200 with soft-delete (isActive=false) if ordered, hard-delete otherwise
+         • Stock movements recorded correctly for INIT operations
+         • All validation and authorization working correctly
+      
+      📋 MODULE 6: ABANDONED CART CRON ✅
+         • POST /api/cron/abandoned-carts (X-CRON-KEY) → 200 with candidates and sent counts
+         • Authentication via X-CRON-KEY header OR ADMIN session working
+         • Finds carts updated 24-72h ago with reminderEmailsSent < 1
+         • Email sending and database updates working correctly
+      
+      🔧 TECHNICAL IMPLEMENTATION VERIFIED:
+      ✅ All 5 refactored modules extracted successfully from monolithic route.js
+      ✅ Functional parity maintained - no regressions detected
+      ✅ Authentication and authorization working across all endpoints
+      ✅ Arabic error messages implemented throughout
+      ✅ Database operations (MongoDB) working correctly
+      ✅ Validation logic properly implemented
+      ✅ Stock movement tracking and inventory management functional
+      ✅ CSV import with UTF-8 BOM and Excel compatibility
+      ✅ Promotion system with multiple types (BUY_X_GET_Y, TIER)
+      ✅ Vendor analytics with complex aggregation pipelines
+      ✅ Cart management with proper sanitization
+      ✅ Cron endpoint with dual authentication methods
+      
+      📊 REFACTORING SUCCESS:
+      ✅ Route.js reduced from 5709 → 2746 lines (-52%, HALVED!)
+      ✅ Phase C: 3830 → 2746 lines (additional -1084 lines)
+      ✅ All extracted modules working independently
+      ✅ No breaking changes or functional regressions
+      ✅ Improved code organization and maintainability
+      
+      🎉 CONCLUSION: All Phase C refactored modules are production-ready and fully functional. The extraction process was successful with complete functional parity maintained. All endpoints respond correctly with proper authentication, validation, Arabic localization, and business logic implementation.
+

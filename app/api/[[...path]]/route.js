@@ -67,6 +67,32 @@ import {
   handleVendorProfileGet,
   handleVendorProfileUpdate,
 } from '@/lib/api/vendor-profile'
+import {
+  handleCartUpsert,
+  handleCartGet,
+  handleCartClear,
+  handleAbandonedCartCron,
+} from '@/lib/api/cart'
+import { handleVendorAnalytics } from '@/lib/api/vendor-analytics'
+import {
+  handleVendorPromotionsList,
+  handleVendorPromotionCreate,
+  handleVendorPromotionAction,
+  handleProductPromotions,
+} from '@/lib/api/promotions'
+import {
+  handleVendorInventory,
+  handleProductsImport,
+  handleProductsImportTemplate,
+  handleStockMovements,
+  handleStockAdjust,
+} from '@/lib/api/inventory'
+import {
+  handleProductCreate,
+  handleProductUpdate,
+  handleProductDelete,
+  handleVendorProductsList,
+} from '@/lib/api/products-vendor'
 import { sanitizeSocial } from '@/lib/social'
 import {
   handleWishlistList,
@@ -1725,66 +1751,17 @@ async function handleRoute(request, { params }) {
        ============================================================ */
     // ---- POST /cart (auth) — upsert user's cart ----
     if (route === '/cart' && method === 'POST') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      await connectDB()
-      const body = await request.json().catch(() => ({}))
-      const rawItems = Array.isArray(body?.items) ? body.items : []
-      const items = rawItems.slice(0, 100).map((it) => ({
-        productId: String(it.productId || ''),
-        quantity: Math.max(1, Math.min(99, parseInt(it.quantity || 1, 10))),
-        nameAr: String(it.nameAr || '').slice(0, 100),
-        unitPrice: Number(it.unitPrice || 0),
-        image: String(it.image || '').slice(0, 2000),
-      })).filter((it) => it.productId)
-      await Cart.findOneAndUpdate(
-        { userId: session.user.id },
-        {
-          $set: {
-            items,
-            updatedAt: new Date(),
-            // Reset reminder counters on activity
-            lastReminderSentAt: null,
-            reminderEmailsSent: 0,
-          },
-        },
-        { upsert: true, new: true }
-      )
-      return handleCORS(NextResponse.json({ success: true, count: items.length }))
+      return handleCartUpsert(request)
     }
 
     // ---- GET /cart (auth) — fetch saved cart ----
     if (route === '/cart' && method === 'GET') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ items: [] })
-        )
-      }
-      await connectDB()
-      const c = await Cart.findOne({ userId: session.user.id }).lean()
-      return handleCORS(NextResponse.json({ items: c?.items || [] }))
+      return handleCartGet()
     }
 
     // ---- DELETE /cart (auth) — clear cart (after order success) ----
     if (route === '/cart' && method === 'DELETE') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ success: true })
-        )
-      }
-      await connectDB()
-      await Cart.findOneAndUpdate(
-        { userId: session.user.id },
-        { $set: { items: [], updatedAt: new Date() } },
-        { upsert: true }
-      )
-      return handleCORS(NextResponse.json({ success: true }))
+      return handleCartClear()
     }
 
     /* ============================================================
@@ -1792,57 +1769,7 @@ async function handleRoute(request, { params }) {
        ============================================================ */
     // ---- POST /cron/abandoned-carts (requires X-CRON-KEY header OR ADMIN) ----
     if (route === '/cron/abandoned-carts' && method === 'POST') {
-      // Auth: either cron key header or ADMIN session
-      const cronKey = request.headers.get('x-cron-key') || ''
-      const expectedKey = process.env.CRON_SECRET_KEY || ''
-      let authorized = false
-      if (expectedKey && cronKey === expectedKey) {
-        authorized = true
-      } else {
-        const session = await getServerSession(authOptions)
-        if (session?.user?.role === 'ADMIN') authorized = true
-      }
-      if (!authorized) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      await connectDB()
-      // Find carts with items, updated 24..72 hours ago, and reminderEmailsSent < 1
-      const now = Date.now()
-      const minAge = new Date(now - 24 * 60 * 60 * 1000) // >= 24h old
-      const maxAge = new Date(now - 72 * 60 * 60 * 1000) // <= 72h old
-      const candidates = await Cart.find({
-        'items.0': { $exists: true }, // at least 1 item
-        updatedAt: { $lte: minAge, $gte: maxAge },
-        reminderEmailsSent: { $lt: 1 },
-      }).limit(100).lean()
-
-      let sent = 0
-      for (const c of candidates) {
-        try {
-          const user = await User.findById(c.userId).select({ _id:1, name:1, email:1 }).lean()
-          if (!user?.email) continue
-          await sendAbandonedCartEmail({
-            to: user.email,
-            name: user.name,
-            items: c.items,
-          })
-          await Cart.findOneAndUpdate(
-            { _id: c._id },
-            {
-              $set: { lastReminderSentAt: new Date() },
-              $inc: { reminderEmailsSent: 1 },
-            }
-          )
-          sent++
-        } catch (e) {
-          console.error('[cron abandoned-cart] failed for', c._id, e)
-        }
-      }
-      return handleCORS(
-        NextResponse.json({ success: true, candidates: candidates.length, sent })
-      )
+      return handleAbandonedCartCron(request)
     }
 
 
@@ -1850,551 +1777,27 @@ async function handleRoute(request, { params }) {
 
     // ---- POST /products (vendor only) ----
     if (route === '/products' && method === 'POST') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      await connectDB()
-      const dbUser = await User.findById(session.user.id).lean()
-      if (!dbUser) {
-        return handleCORS(
-          NextResponse.json({ error: 'المستخدم غير موجود' }, { status: 404 })
-        )
-      }
-      if (dbUser.role !== 'VENDOR' && dbUser.role !== 'ADMIN') {
-        return handleCORS(
-          NextResponse.json(
-            { error: 'صلاحيات بائع مطلوبة' },
-            { status: 403 }
-          )
-        )
-      }
-      const body = await request.json().catch(() => ({}))
-      const nameAr = String(body?.nameAr || '').trim()
-      const price = Number(body?.price)
-      const category = String(body?.category || '').trim()
-      if (!nameAr || nameAr.length < 2) {
-        return handleCORS(
-          NextResponse.json({ error: 'اسم المنتج مطلوب' }, { status: 400 })
-        )
-      }
-      if (!Number.isFinite(price) || price < 0) {
-        return handleCORS(
-          NextResponse.json({ error: 'السعر غير صحيح' }, { status: 400 })
-        )
-      }
-      if (!CATEGORY_KEYS.includes(category)) {
-        return handleCORS(
-          NextResponse.json({ error: 'الفئة غير صحيحة' }, { status: 400 })
-        )
-      }
-      const images = Array.isArray(body?.images)
-        ? body.images
-            .filter(
-              (s) =>
-                typeof s === 'string' &&
-                /^data:image\/(png|jpe?g|webp|gif);base64,/.test(s) &&
-                s.length <= 2_000_000
-            )
-            .slice(0, 5)
-        : []
-      const stock = Math.max(0, parseInt(body?.stock || 0, 10) || 0)
-      const lowStockThreshold = Math.max(0, parseInt(body?.lowStockThreshold ?? 5, 10) || 0)
-      const tags = normalizeTags(body?.tags)
-      const subcategory = String(body?.subcategory || '').trim().slice(0, 40)
-      // Variants (optional)
-      const vres = sanitizeVariants(body?.variants)
-      if (!vres.ok) {
-        return handleCORS(
-          NextResponse.json({ error: vres.error }, { status: 400 })
-        )
-      }
-      const product = await Product.create({
-        vendorId: session.user.id,
-        nameAr,
-        nameEn: String(body?.nameEn || '').trim(),
-        description: String(body?.description || '').slice(0, 3000),
-        price: +price.toFixed(3),
-        category,
-        subcategory,
-        images,
-        // If variants exist, stock is the sum across variants; otherwise use the plain stock input.
-        stock: vres.hasVariants ? vres.aggregatedStock : stock,
-        lowStockThreshold,
-        tags,
-        hasVariants: vres.hasVariants,
-        variants: vres.variants,
-        isActive: true,
-        salesCount: 0,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      })
-      // Record INIT stock movements
-      if (vres.hasVariants) {
-        for (const v of vres.variants) {
-          if ((v.stock || 0) > 0) {
-            await recordStockMovement({
-              productId: product._id,
-              vendorId: session.user.id,
-              variantId: v.id,
-              variantName: v.name,
-              type: 'INIT',
-              qtyBefore: 0,
-              qtyAfter: v.stock,
-              qtyDelta: v.stock,
-              note: 'إنشاء المنتج',
-              createdBy: session.user.id,
-              createdByName: dbUser.name || '',
-            })
-          }
-        }
-      } else if (stock > 0) {
-        await recordStockMovement({
-          productId: product._id,
-          vendorId: session.user.id,
-          type: 'INIT',
-          qtyBefore: 0,
-          qtyAfter: stock,
-          qtyDelta: stock,
-          note: 'إنشاء المنتج',
-          createdBy: session.user.id,
-          createdByName: dbUser.name || '',
-        })
-      }
-      const po = product.toObject()
-      return handleCORS(
-        NextResponse.json({
-          success: true,
-          product: { id: product._id, ...po, _id: undefined },
-        })
-      )
+      return handleProductCreate(request)
     }
 
     // ---- PUT /products/:id (owner or admin) ----
     if (productDetailMatch && method === 'PUT') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      await connectDB()
-      const id = productDetailMatch[1]
-      const product = await Product.findById(id)
-      if (!product) {
-        return handleCORS(
-          NextResponse.json({ error: 'المنتج غير موجود' }, { status: 404 })
-        )
-      }
-      const isOwner = product.vendorId === session.user.id
-      const isAdmin = session.user.role === 'ADMIN'
-      if (!isOwner && !isAdmin) {
-        return handleCORS(
-          NextResponse.json({ error: 'لا يمكنك تعديل هذا المنتج' }, { status: 403 })
-        )
-      }
-      const body = await request.json().catch(() => ({}))
-      if (body.nameAr !== undefined) {
-        const v = String(body.nameAr).trim()
-        if (v.length < 2) {
-          return handleCORS(
-            NextResponse.json({ error: 'اسم المنتج مطلوب' }, { status: 400 })
-          )
-        }
-        product.nameAr = v
-      }
-      if (body.nameEn !== undefined) product.nameEn = String(body.nameEn).trim()
-      if (body.description !== undefined)
-        product.description = String(body.description).slice(0, 3000)
-      if (body.price !== undefined) {
-        const p = Number(body.price)
-        if (!Number.isFinite(p) || p < 0) {
-          return handleCORS(
-            NextResponse.json({ error: 'السعر غير صحيح' }, { status: 400 })
-          )
-        }
-        product.price = +p.toFixed(3)
-      }
-      if (body.category !== undefined) {
-        if (!CATEGORY_KEYS.includes(body.category)) {
-          return handleCORS(
-            NextResponse.json({ error: 'الفئة غير صحيحة' }, { status: 400 })
-          )
-        }
-        product.category = body.category
-      }
-      if (body.stock !== undefined) {
-        product.stock = Math.max(0, parseInt(body.stock, 10) || 0)
-      }
-      if (body.isActive !== undefined) product.isActive = !!body.isActive
-      if (body.lowStockThreshold !== undefined) {
-        product.lowStockThreshold = Math.max(0, parseInt(body.lowStockThreshold, 10) || 0)
-      }
-      if (body.tags !== undefined) {
-        product.tags = normalizeTags(body.tags)
-      }
-      if (body.subcategory !== undefined) {
-        product.subcategory = String(body.subcategory || '').trim().slice(0, 40)
-      }
-      // Variants (if provided, replace whole array)
-      if (body.variants !== undefined) {
-        const vres = sanitizeVariants(body.variants)
-        if (!vres.ok) {
-          return handleCORS(
-            NextResponse.json({ error: vres.error }, { status: 400 })
-          )
-        }
-        product.variants = vres.variants
-        product.hasVariants = vres.hasVariants
-        if (vres.hasVariants) {
-          // when variants exist, overall stock becomes the sum
-          product.stock = vres.aggregatedStock
-        }
-      }
-      if (Array.isArray(body.images)) {
-        product.images = body.images
-          .filter(
-            (s) =>
-              typeof s === 'string' &&
-              /^data:image\/(png|jpe?g|webp|gif);base64,/.test(s) &&
-              s.length <= 2_000_000
-          )
-          .slice(0, 5)
-      }
-      product.updatedAt = new Date()
-      await product.save()
-      const po = product.toObject()
-      return handleCORS(
-        NextResponse.json({
-          success: true,
-          product: { id: product._id, ...po, _id: undefined },
-        })
-      )
+      return handleProductUpdate(productDetailMatch[1], request)
     }
 
     // ---- DELETE /products/:id (owner or admin; hard delete if no orders, else soft) ----
     if (productDetailMatch && method === 'DELETE') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      await connectDB()
-      const id = productDetailMatch[1]
-      const product = await Product.findById(id)
-      if (!product) {
-        return handleCORS(
-          NextResponse.json({ error: 'المنتج غير موجود' }, { status: 404 })
-        )
-      }
-      const isOwner = product.vendorId === session.user.id
-      const isAdmin = session.user.role === 'ADMIN'
-      if (!isOwner && !isAdmin) {
-        return handleCORS(
-          NextResponse.json({ error: 'لا يمكنك حذف هذا المنتج' }, { status: 403 })
-        )
-      }
-      // If the product was ever ordered, soft delete (deactivate)
-      const orderedBefore = await Order.exists({
-        'items.productId': product._id,
-      })
-      if (orderedBefore) {
-        product.isActive = false
-        product.updatedAt = new Date()
-        await product.save()
-        return handleCORS(
-          NextResponse.json({ success: true, softDelete: true })
-        )
-      }
-      await Product.deleteOne({ _id: product._id })
-      return handleCORS(NextResponse.json({ success: true }))
+      return handleProductDelete(productDetailMatch[1])
     }
 
     // ---- GET /vendor/products (my products) ----
     if (route === '/vendor/products' && method === 'GET') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      await connectDB()
-      const user = await User.findById(session.user.id).lean()
-      if (user.role !== 'VENDOR' && user.role !== 'ADMIN') {
-        return handleCORS(
-          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
-        )
-      }
-      const products = await Product.find({ vendorId: session.user.id })
-        .sort({ createdAt: -1 })
-        .lean()
-      return handleCORS(
-        NextResponse.json({
-          products: products.map((p) => ({
-            id: p._id,
-            ...p,
-            _id: undefined,
-          })),
-        })
-      )
+      return handleVendorProductsList()
     }
 
     // ---- GET /vendor/analytics (vendor KPIs + time series for charts) ----
     if (route === '/vendor/analytics' && method === 'GET') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      await connectDB()
-      const user = await User.findById(session.user.id).lean()
-      if (!user || (user.role !== 'VENDOR' && user.role !== 'ADMIN')) {
-        return handleCORS(
-          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
-        )
-      }
-
-      const vendorId = session.user.id
-      const now = new Date()
-      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
-      const startOfMonth12 = new Date(
-        Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11, 1)
-      )
-
-      // Orders that count as "revenue": PAID/SHIPPED/DELIVERED (exclude PENDING/CANCELLED/FAILED)
-      const revenueStatuses = ['PAID', 'SHIPPED', 'DELIVERED']
-
-      // Product counts (independent — no Order needed)
-      const [productsTotal, productsActive, productsLowStock] = await Promise.all([
-        Product.countDocuments({ vendorId }),
-        Product.countDocuments({ vendorId, isActive: true }),
-        Product.countDocuments({ vendorId, isActive: true, stock: { $lte: 5 } }),
-      ])
-
-      // Big aggregation: unwind items and compute per-vendor lines
-      const [
-        kpiAgg,
-        last30Agg,
-        monthlyAgg,
-        topProductsAgg,
-        byCategoryAgg,
-        statusAgg,
-      ] = await Promise.all([
-        // KPIs across revenue statuses
-        Order.aggregate([
-          { $match: { status: { $in: revenueStatuses } } },
-          { $unwind: '$items' },
-          { $match: { 'items.vendorId': vendorId } },
-          {
-            $group: {
-              _id: '$_id',
-              subtotal: { $sum: '$items.lineSubtotal' },
-              units: { $sum: '$items.quantity' },
-            },
-          },
-          {
-            $group: {
-              _id: null,
-              totalRevenue: { $sum: '$subtotal' },
-              totalUnits: { $sum: '$units' },
-              totalOrders: { $sum: 1 },
-            },
-          },
-        ]),
-        // Last 30 days
-        Order.aggregate([
-          {
-            $match: {
-              status: { $in: revenueStatuses },
-              createdAt: { $gte: thirtyDaysAgo },
-            },
-          },
-          { $unwind: '$items' },
-          { $match: { 'items.vendorId': vendorId } },
-          {
-            $group: {
-              _id: '$_id',
-              subtotal: { $sum: '$items.lineSubtotal' },
-              units: { $sum: '$items.quantity' },
-            },
-          },
-          {
-            $group: {
-              _id: null,
-              revenue: { $sum: '$subtotal' },
-              units: { $sum: '$units' },
-              orders: { $sum: 1 },
-            },
-          },
-        ]),
-        // Monthly time series (last 12 months)
-        Order.aggregate([
-          {
-            $match: {
-              status: { $in: revenueStatuses },
-              createdAt: { $gte: startOfMonth12 },
-            },
-          },
-          { $unwind: '$items' },
-          { $match: { 'items.vendorId': vendorId } },
-          {
-            $group: {
-              _id: {
-                orderId: '$_id',
-                y: { $year: '$createdAt' },
-                m: { $month: '$createdAt' },
-              },
-              subtotal: { $sum: '$items.lineSubtotal' },
-              units: { $sum: '$items.quantity' },
-            },
-          },
-          {
-            $group: {
-              _id: { y: '$_id.y', m: '$_id.m' },
-              revenue: { $sum: '$subtotal' },
-              orders: { $sum: 1 },
-              units: { $sum: '$units' },
-            },
-          },
-        ]),
-        // Top 5 products by units sold
-        Order.aggregate([
-          { $match: { status: { $in: revenueStatuses } } },
-          { $unwind: '$items' },
-          { $match: { 'items.vendorId': vendorId } },
-          {
-            $group: {
-              _id: '$items.productId',
-              nameAr: { $first: '$items.nameAr' },
-              units: { $sum: '$items.quantity' },
-              revenue: { $sum: '$items.lineSubtotal' },
-            },
-          },
-          { $sort: { units: -1 } },
-          { $limit: 5 },
-        ]),
-        // Revenue by category (join via products)
-        Order.aggregate([
-          { $match: { status: { $in: revenueStatuses } } },
-          { $unwind: '$items' },
-          { $match: { 'items.vendorId': vendorId } },
-          {
-            $lookup: {
-              from: 'products',
-              localField: 'items.productId',
-              foreignField: '_id',
-              as: 'prod',
-            },
-          },
-          { $unwind: { path: '$prod', preserveNullAndEmptyArrays: true } },
-          {
-            $group: {
-              _id: { $ifNull: ['$prod.category', 'OTHER'] },
-              revenue: { $sum: '$items.lineSubtotal' },
-              units: { $sum: '$items.quantity' },
-            },
-          },
-        ]),
-        // Status breakdown (all orders containing this vendor, any status)
-        Order.aggregate([
-          { $unwind: '$items' },
-          { $match: { 'items.vendorId': vendorId } },
-          {
-            $group: {
-              _id: { orderId: '$_id', status: '$status' },
-            },
-          },
-          {
-            $group: {
-              _id: '$_id.status',
-              count: { $sum: 1 },
-            },
-          },
-        ]),
-      ])
-
-      // Build monthly array (12 buckets) — fill gaps
-      const monthlyMap = new Map()
-      for (const x of monthlyAgg) {
-        const key = `${x._id.y}-${String(x._id.m).padStart(2, '0')}`
-        monthlyMap.set(key, {
-          revenue: +(x.revenue || 0).toFixed(3),
-          orders: x.orders || 0,
-          units: x.units || 0,
-        })
-      }
-      const monthlyArr = []
-      for (let i = 11; i >= 0; i--) {
-        const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1))
-        const y = d.getUTCFullYear()
-        const m = d.getUTCMonth() + 1
-        const key = `${y}-${String(m).padStart(2, '0')}`
-        const v = monthlyMap.get(key) || { revenue: 0, orders: 0, units: 0 }
-        monthlyArr.push({ key, year: y, month: m, ...v })
-      }
-
-      const kpi = kpiAgg[0] || { totalRevenue: 0, totalUnits: 0, totalOrders: 0 }
-      const l30 = last30Agg[0] || { revenue: 0, units: 0, orders: 0 }
-      const commissionPercent = COMMISSION_PERCENT
-      const totalCommission = +(kpi.totalRevenue * (commissionPercent / 100)).toFixed(3)
-      const totalNet = +(kpi.totalRevenue - totalCommission).toFixed(3)
-      const avgOrderValue = kpi.totalOrders > 0 ? +(kpi.totalRevenue / kpi.totalOrders).toFixed(3) : 0
-
-      // Pending shipments: PAID orders (not yet SHIPPED/DELIVERED) containing vendor items
-      const pendingShipmentsAgg = await Order.aggregate([
-        { $match: { status: 'PAID' } },
-        { $unwind: '$items' },
-        { $match: { 'items.vendorId': vendorId } },
-        { $group: { _id: '$_id' } },
-        { $count: 'count' },
-      ])
-      const pendingShipments = pendingShipmentsAgg[0]?.count || 0
-
-      return handleCORS(
-        NextResponse.json({
-          generatedAt: now.toISOString(),
-          kpi: {
-            totalRevenue: +(kpi.totalRevenue || 0).toFixed(3),
-            totalUnits: kpi.totalUnits || 0,
-            totalOrders: kpi.totalOrders || 0,
-            totalCommission,
-            totalNet,
-            commissionPercent,
-            avgOrderValue,
-          },
-          last30Days: {
-            revenue: +(l30.revenue || 0).toFixed(3),
-            orders: l30.orders || 0,
-            units: l30.units || 0,
-          },
-          products: {
-            total: productsTotal,
-            active: productsActive,
-            lowStock: productsLowStock,
-          },
-          pendingShipments,
-          monthly: monthlyArr,
-          topProducts: topProductsAgg.map((x) => ({
-            id: x._id,
-            nameAr: x.nameAr || 'منتج',
-            units: x.units,
-            revenue: +(x.revenue || 0).toFixed(3),
-          })),
-          byCategory: byCategoryAgg.map((x) => ({
-            category: x._id || 'OTHER',
-            revenue: +(x.revenue || 0).toFixed(3),
-            units: x.units || 0,
-          })),
-          orderStatus: statusAgg.map((x) => ({
-            status: x._id,
-            count: x.count,
-          })),
-        })
-      )
+      return handleVendorAnalytics()
     }
 
     /* ============================================================
@@ -2429,161 +1832,18 @@ async function handleRoute(request, { params }) {
        ============================================================ */
     // ---- GET /vendor/promotions (list vendor's promos) ----
     if (route === '/vendor/promotions' && method === 'GET') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
-      }
-      await connectDB()
-      const dbUser = await User.findById(session.user.id).lean()
-      if (!dbUser || (dbUser.role !== 'VENDOR' && dbUser.role !== 'ADMIN')) {
-        return handleCORS(
-          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
-        )
-      }
-      const promos = await Promotion.find({ vendorId: session.user.id })
-        .sort({ createdAt: -1 })
-        .lean()
-      return handleCORS(
-        NextResponse.json({
-          promotions: promos.map((p) => ({ id: p._id, ...p, _id: undefined })),
-        })
-      )
+      return handleVendorPromotionsList()
     }
 
     // ---- POST /vendor/promotions (create) ----
     if (route === '/vendor/promotions' && method === 'POST') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
-      }
-      await connectDB()
-      const dbUser = await User.findById(session.user.id).lean()
-      if (!dbUser || (dbUser.role !== 'VENDOR' && dbUser.role !== 'ADMIN')) {
-        return handleCORS(
-          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
-        )
-      }
-      const body = await request.json().catch(() => ({}))
-      const type = String(body?.type || '').toUpperCase()
-      if (!['BUY_X_GET_Y', 'TIER'].includes(type)) {
-        return handleCORS(
-          NextResponse.json({ error: 'نوع العرض غير صحيح' }, { status: 400 })
-        )
-      }
-      const nameAr = String(body?.nameAr || '').trim()
-      if (!nameAr || nameAr.length > 100) {
-        return handleCORS(
-          NextResponse.json({ error: 'اسم العرض مطلوب (≤ 100 حرف)' }, { status: 400 })
-        )
-      }
-      const doc = {
-        vendorId: session.user.id,
-        type,
-        nameAr,
-        descriptionAr: String(body?.descriptionAr || '').slice(0, 500),
-        productIds: Array.isArray(body?.productIds) ? body.productIds.slice(0, 100) : [],
-        isActive: body?.isActive !== false,
-        priority: parseInt(body?.priority || 0, 10) || 0,
-        startDate: body?.startDate ? new Date(body.startDate) : new Date(),
-        endDate: body?.endDate ? new Date(body.endDate) : null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      }
-      if (type === 'BUY_X_GET_Y') {
-        const buyQty = Math.max(1, parseInt(body?.buyQty || 2, 10) || 2)
-        const getQty = Math.max(1, parseInt(body?.getQty || 1, 10) || 1)
-        const pct = Math.max(1, Math.min(100, parseInt(body?.getDiscountPercent || 100, 10) || 100))
-        doc.buyQty = buyQty
-        doc.getQty = getQty
-        doc.getDiscountPercent = pct
-      } else if (type === 'TIER') {
-        const tiers = Array.isArray(body?.tiers) ? body.tiers : []
-        if (tiers.length === 0) {
-          return handleCORS(
-            NextResponse.json({ error: 'أضف مستوى واحد على الأقل' }, { status: 400 })
-          )
-        }
-        const clean = []
-        for (let i = 0; i < tiers.length; i++) {
-          const t = tiers[i]
-          const minSpend = Number(t.minSpend)
-          const percent = Number(t.percent)
-          if (!Number.isFinite(minSpend) || minSpend < 0) {
-            return handleCORS(
-              NextResponse.json({ error: `قيمة الحد الأدنى للمستوى ${i + 1} غير صحيحة` }, { status: 400 })
-            )
-          }
-          if (!Number.isFinite(percent) || percent < 1 || percent > 90) {
-            return handleCORS(
-              NextResponse.json({ error: `نسبة الخصم للمستوى ${i + 1} يجب أن تكون 1-90%` }, { status: 400 })
-            )
-          }
-          clean.push({ minSpend: +minSpend.toFixed(3), percent: Math.round(percent) })
-        }
-        doc.tiers = clean
-      }
-      const p = await Promotion.create(doc)
-      return handleCORS(
-        NextResponse.json({
-          promotion: { id: p._id, ...p.toObject(), _id: undefined },
-        })
-      )
+      return handleVendorPromotionCreate(request)
     }
 
     // ---- PUT/DELETE /vendor/promotions/:id ----
     const promotionMatch = route.match(/^\/vendor\/promotions\/([A-Za-z0-9-]+)$/)
     if (promotionMatch && (method === 'PUT' || method === 'DELETE')) {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
-      }
-      await connectDB()
-      const id = promotionMatch[1]
-      const promo = await Promotion.findById(id)
-      if (!promo) {
-        return handleCORS(
-          NextResponse.json({ error: 'العرض غير موجود' }, { status: 404 })
-        )
-      }
-      if (promo.vendorId !== session.user.id && session.user.role !== 'ADMIN') {
-        return handleCORS(
-          NextResponse.json({ error: 'لا يمكنك تعديل هذا العرض' }, { status: 403 })
-        )
-      }
-      if (method === 'DELETE') {
-        await Promotion.deleteOne({ _id: id })
-        return handleCORS(NextResponse.json({ success: true }))
-      }
-      const body = await request.json().catch(() => ({}))
-      if (body.nameAr !== undefined) promo.nameAr = String(body.nameAr).trim().slice(0, 100)
-      if (body.descriptionAr !== undefined) promo.descriptionAr = String(body.descriptionAr).slice(0, 500)
-      if (body.isActive !== undefined) promo.isActive = !!body.isActive
-      if (body.priority !== undefined) promo.priority = parseInt(body.priority, 10) || 0
-      if (body.productIds !== undefined) promo.productIds = Array.isArray(body.productIds) ? body.productIds.slice(0, 100) : []
-      if (body.startDate !== undefined) promo.startDate = body.startDate ? new Date(body.startDate) : new Date()
-      if (body.endDate !== undefined) promo.endDate = body.endDate ? new Date(body.endDate) : null
-      if (promo.type === 'BUY_X_GET_Y') {
-        if (body.buyQty !== undefined) promo.buyQty = Math.max(1, parseInt(body.buyQty, 10) || 2)
-        if (body.getQty !== undefined) promo.getQty = Math.max(1, parseInt(body.getQty, 10) || 1)
-        if (body.getDiscountPercent !== undefined) promo.getDiscountPercent = Math.max(1, Math.min(100, parseInt(body.getDiscountPercent, 10) || 100))
-      } else if (promo.type === 'TIER' && Array.isArray(body.tiers)) {
-        const clean = []
-        for (let i = 0; i < body.tiers.length; i++) {
-          const t = body.tiers[i]
-          const minSpend = Number(t.minSpend)
-          const percent = Number(t.percent)
-          if (!Number.isFinite(minSpend) || minSpend < 0 || !Number.isFinite(percent) || percent < 1 || percent > 90) continue
-          clean.push({ minSpend: +minSpend.toFixed(3), percent: Math.round(percent) })
-        }
-        promo.tiers = clean
-      }
-      promo.updatedAt = new Date()
-      await promo.save()
-      return handleCORS(
-        NextResponse.json({
-          promotion: { id: promo._id, ...promo.toObject(), _id: undefined },
-        })
-      )
+      return handleVendorPromotionAction(promotionMatch[1], method, request)
     }
 
     // ---- GET /products/:id/promotions (public: promo badges for a product) ----
@@ -2591,383 +1851,39 @@ async function handleRoute(request, { params }) {
       /^\/products\/([A-Za-z0-9-]+)\/promotions$/
     )
     if (productPromosMatch && method === 'GET') {
-      await connectDB()
-      const id = productPromosMatch[1]
-      const p = await Product.findById(id).lean()
-      if (!p) {
-        return handleCORS(
-          NextResponse.json({ error: 'المنتج غير موجود' }, { status: 404 })
-        )
-      }
-      const now = new Date()
-      const all = await Promotion.find({
-        vendorId: p.vendorId,
-        isActive: true,
-        $and: [
-          { $or: [{ startDate: { $lte: now } }, { startDate: null }] },
-          { $or: [{ endDate: { $gte: now } }, { endDate: null }] },
-        ],
-      }).lean()
-      const applicable = all.filter((pr) =>
-        !pr.productIds?.length || pr.productIds.includes(String(id))
-      )
-      return handleCORS(
-        NextResponse.json({
-          promotions: applicable.map((pr) => ({
-            id: pr._id,
-            type: pr.type,
-            nameAr: pr.nameAr,
-            descriptionAr: pr.descriptionAr,
-            buyQty: pr.buyQty,
-            getQty: pr.getQty,
-            getDiscountPercent: pr.getDiscountPercent,
-            tiers: pr.tiers,
-          })),
-        })
-      )
+      return handleProductPromotions(productPromosMatch[1])
     }
 
 
+    // ---- POST /vendor/products/import (CSV import) ----
     if (route === '/vendor/products/import' && method === 'POST') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
-      }
-      await connectDB()
-      const dbUser = await User.findById(session.user.id).lean()
-      if (!dbUser || (dbUser.role !== 'VENDOR' && dbUser.role !== 'ADMIN')) {
-        return handleCORS(
-          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
-        )
-      }
-      const body = await request.json().catch(() => ({}))
-      const rows = Array.isArray(body?.rows) ? body.rows : []
-      if (rows.length === 0) {
-        return handleCORS(
-          NextResponse.json({ error: 'لا توجد صفوف لاستيرادها' }, { status: 400 })
-        )
-      }
-      if (rows.length > 200) {
-        return handleCORS(
-          NextResponse.json({ error: 'الحد الأقصى 200 منتج لكل استيراد' }, { status: 400 })
-        )
-      }
-      const dryRun = !!body?.dryRun
-      const validCategories = ['FOOD','FASHION','ELECTRONICS','OFFICE','HANDICRAFT','DIGITAL','OTHER']
-
-      const results = []
-      let createdCount = 0
-
-      for (let i = 0; i < rows.length; i++) {
-        const r = rows[i] || {}
-        const lineNo = i + 2 // +2 because spreadsheet row 1 is header
-        // Normalize field names (allow both English and alternate forms)
-        const nameAr = String(
-          r.nameAr ?? r.name_ar ?? r['اسم المنتج'] ?? r.name ?? ''
-        ).trim()
-        const nameEn = String(r.nameEn ?? r.name_en ?? r['الاسم الإنجليزي'] ?? '').trim()
-        const description = String(r.description ?? r['الوصف'] ?? '').slice(0, 3000)
-        const priceRaw = r.price ?? r['السعر']
-        const stockRaw = r.stock ?? r['المخزون']
-        const categoryRaw = String(r.category ?? r['الفئة'] ?? 'OTHER').toUpperCase().trim()
-        const lowStockThresholdRaw = r.lowStockThreshold ?? r['حد التنبيه'] ?? 5
-
-        if (!nameAr) {
-          results.push({ row: lineNo, ok: false, error: 'اسم المنتج مطلوب' })
-          continue
-        }
-        const price = Number(priceRaw)
-        if (!Number.isFinite(price) || price < 0) {
-          results.push({ row: lineNo, ok: false, nameAr, error: 'السعر غير صحيح' })
-          continue
-        }
-        const stock = Math.max(0, parseInt(stockRaw, 10) || 0)
-        const category = validCategories.includes(categoryRaw) ? categoryRaw : 'OTHER'
-        const lowStockThreshold = Math.max(0, parseInt(lowStockThresholdRaw, 10) || 0)
-
-        if (dryRun) {
-          results.push({ row: lineNo, ok: true, nameAr, preview: { price, stock, category, lowStockThreshold } })
-          continue
-        }
-
-        try {
-          const prod = await Product.create({
-            vendorId: session.user.id,
-            nameAr,
-            nameEn,
-            description,
-            price: +price.toFixed(3),
-            category,
-            images: [],
-            stock,
-            lowStockThreshold,
-            hasVariants: false,
-            variants: [],
-            isActive: true,
-            salesCount: 0,
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          })
-          createdCount += 1
-          if (stock > 0) {
-            await recordStockMovement({
-              productId: prod._id,
-              vendorId: session.user.id,
-              type: 'INIT',
-              qtyBefore: 0,
-              qtyAfter: stock,
-              qtyDelta: stock,
-              note: 'استيراد CSV',
-              createdBy: session.user.id,
-              createdByName: dbUser.name || '',
-            })
-          }
-          results.push({ row: lineNo, ok: true, productId: prod._id, nameAr })
-        } catch (e) {
-          results.push({ row: lineNo, ok: false, nameAr, error: e.message || 'فشل إنشاء المنتج' })
-        }
-      }
-
-      const okCount = results.filter((x) => x.ok).length
-      const failCount = results.length - okCount
-      return handleCORS(
-        NextResponse.json({
-          success: true,
-          dryRun,
-          total: rows.length,
-          okCount,
-          failCount,
-          createdCount,
-          results,
-        })
-      )
+      return handleProductsImport(request)
     }
 
     // ---- GET /vendor/products/import/template (CSV template download) ----
     if (route === '/vendor/products/import/template' && method === 'GET') {
-      // Return a UTF-8 CSV with BOM so Excel shows Arabic correctly.
-      const header = 'nameAr,nameEn,description,price,stock,category,lowStockThreshold'
-      const samples = [
-        'عسل سدر جبلي,Mountain Sidr Honey,عسل سدر طبيعي 100%,15.5,20,FOOD,3',
-        'قميص قطني,Cotton Shirt,قميص قطني فاخر,25,50,FASHION,5',
-        'سماعات بلوتوث,Bluetooth Headphones,سماعات لاسلكية,45,15,ELECTRONICS,2',
-      ]
-      const csv = '\uFEFF' + [header, ...samples].join('\n')
-      return new NextResponse(csv, {
-        status: 200,
-        headers: {
-          'Content-Type': 'text/csv; charset=utf-8',
-          'Content-Disposition': 'attachment; filename="products_template.csv"',
-          'Access-Control-Allow-Origin': '*',
-        },
-      })
+      return handleProductsImportTemplate()
     }
 
-    // ---- GET /vendor/inventory (vendor only — products + stock status + low-stock flags) ----
+    // ---- GET /vendor/inventory ----
     if (route === '/vendor/inventory' && method === 'GET') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
-      }
-      await connectDB()
-      const dbUser = await User.findById(session.user.id).lean()
-      if (!dbUser || (dbUser.role !== 'VENDOR' && dbUser.role !== 'ADMIN')) {
-        return handleCORS(
-          NextResponse.json({ error: 'صلاحيات بائع مطلوبة' }, { status: 403 })
-        )
-      }
-      const url = new URL(request.url)
-      const onlyLow = url.searchParams.get('lowStock') === '1'
-      const products = await Product.find({ vendorId: session.user.id }).lean()
-      const enriched = products.map((p) => ({
-        id: p._id,
-        nameAr: p.nameAr,
-        category: p.category,
-        images: (p.images || []).slice(0, 1),
-        price: p.price,
-        stock: p.stock,
-        lowStockThreshold: p.lowStockThreshold ?? 5,
-        isActive: p.isActive,
-        hasVariants: !!p.hasVariants,
-        variants: (p.variants || []).map((v) => ({
-          id: v.id,
-          name: v.name,
-          sku: v.sku,
-          stock: v.stock,
-          price: v.price,
-        })),
-        isLow: isLowStock(p),
-        lowItems: lowStockVariants(p),
-      }))
-      const result = onlyLow ? enriched.filter((p) => p.isLow) : enriched
-      return handleCORS(
-        NextResponse.json({
-          products: result,
-          summary: {
-            total: products.length,
-            active: products.filter((p) => p.isActive).length,
-            lowCount: enriched.filter((p) => p.isLow).length,
-          },
-        })
-      )
+      return handleVendorInventory(request)
     }
 
-    // ---- GET /products/:id/stock/movements (owner or admin) ----
+    // ---- GET /products/:id/stock/movements ----
     const stockMovementsMatch = route.match(
       /^\/products\/([A-Za-z0-9-]+)\/stock\/movements$/
     )
     if (stockMovementsMatch && method === 'GET') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
-      }
-      await connectDB()
-      const id = stockMovementsMatch[1]
-      const p = await Product.findById(id).lean()
-      if (!p) {
-        return handleCORS(
-          NextResponse.json({ error: 'المنتج غير موجود' }, { status: 404 })
-        )
-      }
-      if (p.vendorId !== session.user.id && session.user.role !== 'ADMIN') {
-        return handleCORS(
-          NextResponse.json({ error: 'لا يمكنك رؤية سجل هذا المنتج' }, { status: 403 })
-        )
-      }
-      const movements = await StockMovement.find({ productId: id })
-        .sort({ createdAt: -1 })
-        .limit(200)
-        .lean()
-      return handleCORS(
-        NextResponse.json({
-          movements: movements.map((m) => ({
-            id: m._id,
-            ...m,
-            _id: undefined,
-          })),
-        })
-      )
+      return handleStockMovements(stockMovementsMatch[1])
     }
 
-    // ---- POST /products/:id/stock/adjust (owner or admin — manual stock adjust) ----
+    // ---- POST /products/:id/stock/adjust ----
     const stockAdjustMatch = route.match(
       /^\/products\/([A-Za-z0-9-]+)\/stock\/adjust$/
     )
     if (stockAdjustMatch && method === 'POST') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(NextResponse.json({ error: 'غير مصرح' }, { status: 401 }))
-      }
-      await connectDB()
-      const id = stockAdjustMatch[1]
-      const product = await Product.findById(id)
-      if (!product) {
-        return handleCORS(
-          NextResponse.json({ error: 'المنتج غير موجود' }, { status: 404 })
-        )
-      }
-      if (product.vendorId !== session.user.id && session.user.role !== 'ADMIN') {
-        return handleCORS(
-          NextResponse.json({ error: 'لا يمكنك تعديل مخزون هذا المنتج' }, { status: 403 })
-        )
-      }
-      const body = await request.json().catch(() => ({}))
-      const type = String(body?.type || 'ADJUST').toUpperCase()
-      if (!['RESTOCK', 'ADJUST', 'RETURN'].includes(type)) {
-        return handleCORS(
-          NextResponse.json({ error: 'نوع الحركة غير صحيح' }, { status: 400 })
-        )
-      }
-      const delta = parseInt(body?.delta, 10)
-      if (!Number.isFinite(delta) || delta === 0) {
-        return handleCORS(
-          NextResponse.json({ error: 'قيمة التعديل غير صحيحة' }, { status: 400 })
-        )
-      }
-      const variantId = String(body?.variantId || '').trim()
-      const note = String(body?.note || '').slice(0, 300)
-      const dbUser = await User.findById(session.user.id).lean()
-
-      // Variant-specific adjust
-      if (variantId) {
-        if (!product.hasVariants || !product.variants?.length) {
-          return handleCORS(
-            NextResponse.json({ error: 'المنتج لا يحتوي على خيارات' }, { status: 400 })
-          )
-        }
-        const vIdx = product.variants.findIndex((v) => v.id === variantId)
-        if (vIdx < 0) {
-          return handleCORS(
-            NextResponse.json({ error: 'الخيار غير موجود' }, { status: 404 })
-          )
-        }
-        const v = product.variants[vIdx]
-        const before = Number(v.stock || 0)
-        const after = Math.max(0, before + delta)
-        const actualDelta = after - before
-        product.variants[vIdx].stock = after
-        // Recalculate aggregate stock as sum
-        product.stock = product.variants.reduce((s, x) => s + Number(x.stock || 0), 0)
-        product.updatedAt = new Date()
-        await product.save()
-        await recordStockMovement({
-          productId: product._id,
-          vendorId: product.vendorId,
-          variantId: v.id,
-          variantName: v.name,
-          type,
-          qtyBefore: before,
-          qtyAfter: after,
-          qtyDelta: actualDelta,
-          note,
-          createdBy: session.user.id,
-          createdByName: dbUser?.name || '',
-        })
-        return handleCORS(
-          NextResponse.json({
-            success: true,
-            newStock: after,
-            variantStock: after,
-            productStock: product.stock,
-            delta: actualDelta,
-          })
-        )
-      }
-
-      // Simple product adjust (no variant)
-      if (product.hasVariants) {
-        return handleCORS(
-          NextResponse.json(
-            { error: 'يجب تحديد الخيار (variantId) لهذا المنتج' },
-            { status: 400 }
-          )
-        )
-      }
-      const before = Number(product.stock || 0)
-      const after = Math.max(0, before + delta)
-      const actualDelta = after - before
-      product.stock = after
-      product.updatedAt = new Date()
-      await product.save()
-      await recordStockMovement({
-        productId: product._id,
-        vendorId: product.vendorId,
-        type,
-        qtyBefore: before,
-        qtyAfter: after,
-        qtyDelta: actualDelta,
-        note,
-        createdBy: session.user.id,
-        createdByName: dbUser?.name || '',
-      })
-      return handleCORS(
-        NextResponse.json({
-          success: true,
-          newStock: after,
-          productStock: after,
-          delta: actualDelta,
-        })
-      )
+      return handleStockAdjust(stockAdjustMatch[1], request)
     }
 
     /* ============================================================
