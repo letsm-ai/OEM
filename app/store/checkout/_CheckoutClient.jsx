@@ -34,6 +34,7 @@ export default function CheckoutClient({ tier, user, isLoggedIn = true }) {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(null)
   const [guestEmail, setGuestEmail] = useState(user?.email || '')
+  const [agreedToTerms, setAgreedToTerms] = useState(false)
 
   // Coupon state
   const [couponInput, setCouponInput] = useState('')
@@ -416,13 +417,45 @@ export default function CheckoutClient({ tier, user, isLoggedIn = true }) {
               )}
             </div>
 
+            <div className="mt-5 rounded-lg border border-gray-200 bg-gray-50 p-3">
+              <label className="flex cursor-pointer items-start gap-2 text-xs leading-relaxed text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={agreedToTerms}
+                  onChange={(e) => setAgreedToTerms(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 flex-shrink-0 accent-[#1B3A6B]"
+                />
+                <span>
+                  أوافق على{' '}
+                  <Link href="/terms" target="_blank" className="font-bold text-[#1B3A6B] underline hover:text-[#152c52]">
+                    شروط الاستخدام
+                  </Link>
+                  {' '}و{' '}
+                  <Link href="/privacy" target="_blank" className="font-bold text-[#1B3A6B] underline hover:text-[#152c52]">
+                    سياسة الخصوصية
+                  </Link>
+                  {' '}و{' '}
+                  <Link href="/refund" target="_blank" className="font-bold text-[#1B3A6B] underline hover:text-[#152c52]">
+                    سياسة الاسترجاع
+                  </Link>
+                  {' '}و{' '}
+                  <Link href="/shipping" target="_blank" className="font-bold text-[#1B3A6B] underline hover:text-[#152c52]">
+                    سياسة الشحن
+                  </Link>
+                  {' '}لمجلس رواد الأعمال العماني.
+                </span>
+              </label>
+            </div>
+
             <button
               type="submit"
-              disabled={loading}
-              className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#C9A84C] py-3 text-sm font-bold text-[#1B3A6B] hover:bg-[#b89440] disabled:opacity-50"
+              disabled={loading || !agreedToTerms}
+              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#C9A84C] py-3 text-sm font-bold text-[#1B3A6B] hover:bg-[#b89440] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {loading ? (
                 <><Loader2 className="h-4 w-4 animate-spin" /> جارٍ المعالجة...</>
+              ) : !agreedToTerms ? (
+                <><Lock className="h-4 w-4" /> يجب الموافقة على الشروط أولاً</>
               ) : (
                 <>تأكيد الطلب - {formatOMR(finalTotal)} ر.ع</>
               )}
