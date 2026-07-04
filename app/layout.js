@@ -3,6 +3,8 @@ import { Cairo } from 'next/font/google'
 import Providers from '@/components/Providers'
 import Navbar from '@/components/Navbar'
 import Footer from '@/components/Footer'
+import GoogleAnalytics from '@/components/GoogleAnalytics'
+import WhatsAppFab from '@/components/WhatsAppFab'
 
 const cairo = Cairo({
   subsets: ['arabic', 'latin'],
@@ -37,7 +39,9 @@ export default function RootLayout({ children }) {
           <Navbar />
           <main className="min-h-[calc(100vh-4rem)]">{children}</main>
           <Footer />
+          <WhatsAppFab />
         </Providers>
+        <GoogleAnalytics />
       </body>
     </html>
   )
