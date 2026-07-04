@@ -85,9 +85,11 @@ export default function Footer() {
 
         <div className="mt-10 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-6 text-xs text-gray-400">
           <div>© {year} مجلس رواد الأعمال العماني — جميع الحقوق محفوظة</div>
-          <div className="flex items-center gap-4">
-            <Link href="#" className="transition hover:text-[#C9A84C]">سياسة الخصوصية</Link>
-            <Link href="#" className="transition hover:text-[#C9A84C]">الشروط والأحكام</Link>
+          <div className="flex flex-wrap items-center gap-4">
+            <Link href="/privacy" className="transition hover:text-[#C9A84C]">سياسة الخصوصية</Link>
+            <Link href="/terms" className="transition hover:text-[#C9A84C]">الشروط والأحكام</Link>
+            <Link href="/refund" className="transition hover:text-[#C9A84C]">سياسة الاسترجاع</Link>
+            <Link href="/shipping" className="transition hover:text-[#C9A84C]">سياسة الشحن</Link>
           </div>
         </div>
       </div>
