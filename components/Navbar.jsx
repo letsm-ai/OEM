@@ -5,17 +5,19 @@ import Image from 'next/image'
 import { useSession, signOut } from 'next-auth/react'
 import { useEffect, useState } from 'react'
 import { Menu, X, LogOut, User as UserIcon } from 'lucide-react'
-
-const navLinks = [
-  { href: '/', label: 'الرئيسية' },
-  { href: '/store', label: 'المتجر' },
-  { href: '/consultations', label: 'الاستشارات' },
-  { href: '/directory', label: 'دليل الشركات' },
-  { href: '/membership', label: 'العضوية' },
-  { href: '/dashboard', label: 'حسابي' },
-]
+import { useI18n } from '@/lib/i18n/I18nContext'
+import LangSwitcher from '@/components/LangSwitcher'
 
 export default function Navbar() {
+  const { t } = useI18n()
+  const navLinks = [
+    { href: '/', label: t('nav.home') },
+    { href: '/store', label: t('nav.store') },
+    { href: '/consultations', label: t('nav.consultations') },
+    { href: '/directory', label: t('nav.directory') },
+    { href: '/membership', label: t('nav.membership') },
+    { href: '/dashboard', label: t('nav.dashboard') },
+  ]
   const { data: session, status } = useSession()
   const [open, setOpen] = useState(false)
   const [photo, setPhoto] = useState('')
@@ -71,37 +73,37 @@ export default function Navbar() {
                 href="/admin/analytics"
                 className="inline-flex items-center gap-1 rounded-md bg-[#1B3A6B] px-3 py-2 text-sm font-semibold text-white hover:bg-[#152c52]"
               >
-                الإحصائيات
+                {t('nav.admin.stats')}
               </Link>
               <Link
                 href="/admin/companies"
                 className="inline-flex items-center gap-1 rounded-md bg-[#C9A84C]/20 px-3 py-2 text-sm font-semibold text-[#8a6f2d] hover:bg-[#C9A84C]/30"
               >
-                الشركات
+                {t('nav.admin.companies')}
               </Link>
               <Link
                 href="/admin/experts"
                 className="inline-flex items-center gap-1 rounded-md bg-[#C9A84C]/20 px-3 py-2 text-sm font-semibold text-[#8a6f2d] hover:bg-[#C9A84C]/30"
               >
-                الخبراء
+                {t('nav.admin.experts')}
               </Link>
               <Link
                 href="/admin/vendor-applications"
                 className="inline-flex items-center gap-1 rounded-md bg-[#C9A84C]/20 px-3 py-2 text-sm font-semibold text-[#8a6f2d] hover:bg-[#C9A84C]/30"
               >
-                البائعون
+                {t('nav.admin.vendors')}
               </Link>
               <Link
                 href="/admin/coupons"
                 className="inline-flex items-center gap-1 rounded-md bg-[#C9A84C]/20 px-3 py-2 text-sm font-semibold text-[#8a6f2d] hover:bg-[#C9A84C]/30"
               >
-                الكوبونات
+                {t('nav.admin.coupons')}
               </Link>
               <Link
                 href="/admin/payouts"
                 className="inline-flex items-center gap-1 rounded-md bg-[#C9A84C]/20 px-3 py-2 text-sm font-semibold text-[#8a6f2d] hover:bg-[#C9A84C]/30"
               >
-                المدفوعات
+                {t('nav.admin.payouts')}
               </Link>
             </>
           )}
@@ -110,13 +112,14 @@ export default function Navbar() {
               href="/expert"
               className="inline-flex items-center gap-1 rounded-md bg-[#1B3A6B]/10 px-3 py-2 text-sm font-semibold text-[#1B3A6B] hover:bg-[#1B3A6B]/20"
             >
-              لوحة الخبير
+              {t('nav.expert.panel')}
             </Link>
           )}
         </nav>
 
         {/* Auth area */}
         <div className="hidden items-center gap-2 lg:flex">
+          <LangSwitcher />
           {status === 'loading' ? (
             <div className="h-9 w-24 animate-pulse rounded-md bg-gray-200" />
           ) : session?.user ? (
@@ -124,7 +127,7 @@ export default function Navbar() {
               <Link
                 href="/settings"
                 className="flex items-center gap-2 rounded-full bg-[#F8F9FA] px-3 py-1.5 transition hover:bg-[#eef1f5]"
-                title="إعدادات الحساب"
+                title={t('nav.settings')}
               >
                 {photo ? (
                   <img
@@ -144,7 +147,7 @@ export default function Navbar() {
                 className="inline-flex items-center gap-1 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
               >
                 <LogOut className="h-4 w-4" />
-                تسجيل الخروج
+                {t('nav.logout')}
               </button>
             </div>
           ) : (
@@ -153,13 +156,13 @@ export default function Navbar() {
                 href="/login"
                 className="rounded-md px-4 py-2 text-sm font-medium text-[#1B3A6B] hover:bg-[#F8F9FA]"
               >
-                تسجيل الدخول
+                {t('nav.login')}
               </Link>
               <Link
                 href="/signup"
                 className="rounded-md bg-[#1B3A6B] px-4 py-2 text-sm font-semibold text-white hover:bg-[#152c52]"
               >
-                انضم الآن
+                {t('nav.signup')}
               </Link>
             </>
           )}
@@ -190,17 +193,20 @@ export default function Navbar() {
               </Link>
             ))}
             <div className="my-2 h-px bg-gray-100" />
+            <div className="px-3 py-1">
+              <LangSwitcher variant="compact" />
+            </div>
             {session?.user ? (
               <>
                 <div className="px-3 py-2 text-sm text-gray-600">
-                  مرحباً، <span className="font-semibold text-[#1B3A6B]">{session.user.name}</span>
+                  {t('nav.welcome')} <span className="font-semibold text-[#1B3A6B]">{session.user.name}</span>
                 </div>
                 <Link
                   href="/settings"
                   onClick={() => setOpen(false)}
                   className="rounded-md px-3 py-2 text-sm font-medium text-[#1B3A6B] hover:bg-[#F8F9FA]"
                 >
-                  إعدادات الحساب
+                  {t('nav.settings')}
                 </Link>
                 <button
                   onClick={() => {
@@ -209,7 +215,7 @@ export default function Navbar() {
                   }}
                   className="rounded-md border border-gray-300 px-3 py-2 text-right text-sm font-medium text-gray-700 hover:bg-gray-50"
                 >
-                  تسجيل الخروج
+                  {t('nav.logout')}
                 </button>
               </>
             ) : (
@@ -219,14 +225,14 @@ export default function Navbar() {
                   onClick={() => setOpen(false)}
                   className="rounded-md px-3 py-2 text-sm font-medium text-[#1B3A6B] hover:bg-[#F8F9FA]"
                 >
-                  تسجيل الدخول
+                  {t('nav.login')}
                 </Link>
                 <Link
                   href="/signup"
                   onClick={() => setOpen(false)}
                   className="rounded-md bg-[#1B3A6B] px-3 py-2 text-center text-sm font-semibold text-white hover:bg-[#152c52]"
                 >
-                  انضم الآن
+                  {t('nav.signup')}
                 </Link>
               </>
             )}

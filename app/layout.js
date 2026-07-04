@@ -1,10 +1,13 @@
 import './globals.css'
+import { cookies } from 'next/headers'
 import { Cairo } from 'next/font/google'
 import Providers from '@/components/Providers'
 import Navbar from '@/components/Navbar'
 import Footer from '@/components/Footer'
 import GoogleAnalytics from '@/components/GoogleAnalytics'
 import WhatsAppFab from '@/components/WhatsAppFab'
+import { I18nProvider } from '@/lib/i18n/I18nContext'
+import { SUPPORTED_LOCALES, DEFAULT_LOCALE } from '@/lib/i18n/translations'
 
 const cairo = Cairo({
   subsets: ['arabic', 'latin'],
@@ -23,9 +26,13 @@ export const metadata = {
   },
 }
 
-export default function RootLayout({ children }) {
+export default async function RootLayout({ children }) {
+  const cookieStore = await cookies()
+  const langCookie = cookieStore.get('lang')?.value
+  const lang = SUPPORTED_LOCALES.includes(langCookie) ? langCookie : DEFAULT_LOCALE
+  const dir = lang === 'ar' ? 'rtl' : 'ltr'
   return (
-    <html lang="ar" dir="rtl" className={cairo.variable}>
+    <html lang={lang} dir={dir} className={cairo.variable}>
       <head>
         <script
           dangerouslySetInnerHTML={{
@@ -35,12 +42,14 @@ export default function RootLayout({ children }) {
         />
       </head>
       <body className={`${cairo.className} min-h-screen bg-[#F8F9FA] text-gray-900 antialiased`}>
-        <Providers>
-          <Navbar />
-          <main className="min-h-[calc(100vh-4rem)]">{children}</main>
-          <Footer />
-          <WhatsAppFab />
-        </Providers>
+        <I18nProvider initialLocale={lang}>
+          <Providers>
+            <Navbar />
+            <main className="min-h-[calc(100vh-4rem)]">{children}</main>
+            <Footer />
+            <WhatsAppFab />
+          </Providers>
+        </I18nProvider>
         <GoogleAnalytics />
       </body>
     </html>

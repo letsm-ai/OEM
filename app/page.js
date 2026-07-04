@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import Image from 'next/image'
+import { cookies } from 'next/headers'
 import {
   ShoppingBag,
   Users,
@@ -16,6 +17,7 @@ import {
 import { connectDB } from '@/lib/db'
 import { Product, Expert, Company } from '@/lib/models'
 import { TIER_META } from '@/lib/membership'
+import { translations, SUPPORTED_LOCALES, DEFAULT_LOCALE } from '@/lib/i18n/translations'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -49,6 +51,12 @@ async function getLandingData() {
 
 export default async function LandingPage() {
   const { products, experts, companies } = await getLandingData()
+  const cookieStore = await cookies()
+  const langCookie = cookieStore.get('lang')?.value
+  const lang = SUPPORTED_LOCALES.includes(langCookie) ? langCookie : DEFAULT_LOCALE
+  const t = (k) => translations[lang]?.[k] || translations[DEFAULT_LOCALE][k] || k
+  const isAr = lang === 'ar'
+  const ArrowIcon = isAr ? ArrowLeft : ArrowLeft // same icon; direction handled by dir attribute
   return (
     <div className="bg-[#F8F9FA]">
       {/* HERO */}
@@ -78,43 +86,42 @@ export default async function LandingPage() {
 
             <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-[#C9A84C]/40 bg-[#C9A84C]/10 px-4 py-1.5 text-sm text-[#E8D08C]">
               <span className="h-2 w-2 rounded-full bg-[#C9A84C]" />
-              منصة رواد الأعمال الأولى في سلطنة عُمان
+              {t('hero.badge')}
             </div>
             <h1 className="mb-6 text-4xl font-extrabold leading-tight md:text-6xl">
-              مجلس رواد الأعمال
-              <span className="mx-3 text-[#C9A84C]">العماني</span>
+              {t('hero.title1')}
+              <span className="mx-3 text-[#C9A84C]">{t('hero.title2')}</span>
             </h1>
             <p className="mx-auto mb-10 max-w-2xl text-lg text-gray-200 md:text-xl">
-              منظومة رواد الأعمال العمانيين — مكان واحد يجمعكم: متجر، استشارات،
-              دليل شركات، وعضويات حصرية لبناء شراكات حقيقية وتوسيع أعمالكم.
+              {t('hero.subtitle')}
             </p>
             <div className="flex flex-wrap items-center justify-center gap-4">
               <Link
                 href="/signup"
                 className="inline-flex items-center gap-2 rounded-lg bg-[#C9A84C] px-6 py-3 text-base font-semibold text-[#1B3A6B] shadow-lg transition hover:bg-[#b89440]"
               >
-                انضم إلى المجلس
-                <ArrowLeft className="h-5 w-5" />
+                {t('hero.cta.join')}
+                <ArrowLeft className={`h-5 w-5 ${isAr ? '' : 'rotate-180'}`} />
               </Link>
               <Link
                 href="/login"
                 className="inline-flex items-center gap-2 rounded-lg border border-white/30 bg-white/5 px-6 py-3 text-base font-semibold text-white backdrop-blur transition hover:bg-white/10"
               >
-                تسجيل الدخول
+                {t('nav.login')}
               </Link>
             </div>
             <div className="mt-12 grid grid-cols-3 gap-6 border-t border-white/10 pt-8 md:gap-12">
               <div>
                 <div className="text-2xl font-bold text-[#C9A84C] md:text-3xl">+500</div>
-                <div className="mt-1 text-xs text-gray-300 md:text-sm">رائد أعمال</div>
+                <div className="mt-1 text-xs text-gray-300 md:text-sm">{t('stats.entrepreneurs')}</div>
               </div>
               <div>
                 <div className="text-2xl font-bold text-[#C9A84C] md:text-3xl">+120</div>
-                <div className="mt-1 text-xs text-gray-300 md:text-sm">شركة مسجلة</div>
+                <div className="mt-1 text-xs text-gray-300 md:text-sm">{t('stats.companies')}</div>
               </div>
               <div>
                 <div className="text-2xl font-bold text-[#C9A84C] md:text-3xl">+50</div>
-                <div className="mt-1 text-xs text-gray-300 md:text-sm">خبير استشاري</div>
+                <div className="mt-1 text-xs text-gray-300 md:text-sm">{t('stats.experts')}</div>
               </div>
             </div>
           </div>
@@ -124,15 +131,15 @@ export default async function LandingPage() {
       {/* FEATURES */}
       <section className="container mx-auto px-4 py-20">
         <div className="mb-12 text-center">
-          <h2 className="mb-3 text-3xl font-bold text-[#1B3A6B] md:text-4xl">كل ما يحتاجه رائد الأعمال</h2>
-          <p className="mx-auto max-w-xl text-gray-600">خدمات متكاملة تساعدك على النمو والتشبيك والوصول لأسواق جديدة</p>
+          <h2 className="mb-3 text-3xl font-bold text-[#1B3A6B] md:text-4xl">{t('features.title')}</h2>
+          <p className="mx-auto max-w-xl text-gray-600">{t('features.subtitle')}</p>
         </div>
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
           {[
-            { icon: ShoppingBag, title: 'المتجر', desc: 'اعرض منتجاتك وبع مباشرة لأعضاء المجلس', href: '/store' },
-            { icon: GraduationCap, title: 'الاستشارات', desc: 'احجز جلسات مع خبراء متخصصين في مجالك', href: '/consultations' },
-            { icon: Briefcase, title: 'دليل الشركات', desc: 'تعرّف على شركات رواد الأعمال العمانيين', href: '/directory' },
-            { icon: Users, title: 'العضويات', desc: 'باقات عضوية متدرجة تفتح لك مزايا حصرية', href: '/membership' },
+            { icon: ShoppingBag, title: t('features.store.title'), desc: t('features.store.desc'), href: '/store' },
+            { icon: GraduationCap, title: t('features.expert.title'), desc: t('features.expert.desc'), href: '/consultations' },
+            { icon: Briefcase, title: t('features.dir.title'), desc: t('features.dir.desc'), href: '/directory' },
+            { icon: Users, title: t('features.mem.title'), desc: t('features.mem.desc'), href: '/membership' },
           ].map((f) => (
             <Link
               key={f.title}
@@ -156,13 +163,13 @@ export default async function LandingPage() {
             <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
               <div>
                 <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-[#C9A84C]/10 px-3 py-1 text-xs font-medium text-[#1B3A6B]">
-                  <Sparkles className="h-3.5 w-3.5 text-[#C9A84C]" /> منتجات مميّزة
+                  <Sparkles className="h-3.5 w-3.5 text-[#C9A84C]" /> {t('products.badge')}
                 </div>
-                <h2 className="text-2xl font-bold text-[#1B3A6B] md:text-3xl">الأكثر مبيعاً وتقييماً</h2>
-                <p className="mt-1 text-sm text-gray-500">منتجات مختارة من تجارنا المعتمدين</p>
+                <h2 className="text-2xl font-bold text-[#1B3A6B] md:text-3xl">{t('products.title')}</h2>
+                <p className="mt-1 text-sm text-gray-500">{t('products.subtitle')}</p>
               </div>
               <Link href="/store" className="inline-flex items-center gap-1.5 rounded-lg border border-[#1B3A6B] bg-white px-4 py-2 text-sm font-semibold text-[#1B3A6B] hover:bg-[#1B3A6B] hover:text-white">
-                عرض الكل <ArrowLeft className="h-4 w-4" />
+                {t('products.viewAll')} <ArrowLeft className={`h-4 w-4 ${isAr ? '' : 'rotate-180'}`} />
               </Link>
             </div>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
@@ -171,15 +178,15 @@ export default async function LandingPage() {
                   <div className="flex h-32 items-center justify-center bg-gradient-to-bl from-gray-50 to-gray-100 text-4xl">
                     {p.images?.[0] ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={p.images[0]} alt={p.nameAr || p.nameEn} className="h-full w-full object-cover" />
+                      <img src={p.images[0]} alt={(isAr ? p.nameAr : p.nameEn) || p.nameAr || p.nameEn} className="h-full w-full object-cover" />
                     ) : (
                       '🛍️'
                     )}
                   </div>
                   <div className="p-3">
-                    <div className="line-clamp-1 text-sm font-bold text-[#1B3A6B] group-hover:text-[#C9A84C]">{p.nameAr || p.nameEn}</div>
+                    <div className="line-clamp-1 text-sm font-bold text-[#1B3A6B] group-hover:text-[#C9A84C]">{(isAr ? p.nameAr : p.nameEn) || p.nameAr || p.nameEn}</div>
                     <div className="mt-1 flex items-center justify-between">
-                      <span className="text-sm font-extrabold text-[#C9A84C]">{(p.price || 0).toFixed(2)} ر.ع</span>
+                      <span className="text-sm font-extrabold text-[#C9A84C]">{(p.price || 0).toFixed(2)} {t('products.currency')}</span>
                       {p.rating > 0 && (
                         <span className="inline-flex items-center gap-0.5 text-[11px] text-gray-500">
                           <Star className="h-3 w-3 fill-[#C9A84C] text-[#C9A84C]" />
@@ -201,13 +208,13 @@ export default async function LandingPage() {
           <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
             <div>
               <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700">
-                <GraduationCap className="h-3.5 w-3.5" /> أفضل الخبراء
+                <GraduationCap className="h-3.5 w-3.5" /> {t('experts.badge')}
               </div>
-              <h2 className="text-2xl font-bold text-[#1B3A6B] md:text-3xl">احجز استشارتك اليوم</h2>
-              <p className="mt-1 text-sm text-gray-500">خبراء معتمدون في مختلف القطاعات</p>
+              <h2 className="text-2xl font-bold text-[#1B3A6B] md:text-3xl">{t('experts.title')}</h2>
+              <p className="mt-1 text-sm text-gray-500">{t('experts.subtitle')}</p>
             </div>
             <Link href="/consultations" className="inline-flex items-center gap-1.5 rounded-lg border border-[#1B3A6B] bg-white px-4 py-2 text-sm font-semibold text-[#1B3A6B] hover:bg-[#1B3A6B] hover:text-white">
-              تصفح الخبراء <ArrowLeft className="h-4 w-4" />
+              {t('experts.viewAll')} <ArrowLeft className={`h-4 w-4 ${isAr ? '' : 'rotate-180'}`} />
             </Link>
           </div>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -217,12 +224,12 @@ export default async function LandingPage() {
                   {(e.name || '?').charAt(0)}
                 </div>
                 <div className="font-bold text-[#1B3A6B] group-hover:text-indigo-700">{e.name}</div>
-                <div className="mt-0.5 text-xs text-gray-500 line-clamp-1">{e.specialtyAr || e.specialty}</div>
+                <div className="mt-0.5 text-xs text-gray-500 line-clamp-1">{isAr ? (e.specialtyAr || e.specialty) : (e.specialty || e.specialtyAr)}</div>
                 <div className="mt-3 flex items-center justify-between text-[11px]">
                   <span className="inline-flex items-center gap-0.5 font-bold text-[#C9A84C]">
                     <Star className="h-3 w-3 fill-[#C9A84C]" /> {(e.rating || 0).toFixed(1)}
                   </span>
-                  <span className="text-gray-500">{e.totalSessions || 0} جلسة</span>
+                  <span className="text-gray-500">{e.totalSessions || 0} {t('experts.sessions')}</span>
                 </div>
               </Link>
             ))}
@@ -237,13 +244,13 @@ export default async function LandingPage() {
             <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
               <div>
                 <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-700">
-                  <Building2 className="h-3.5 w-3.5" /> شركات حديثة الانضمام
+                  <Building2 className="h-3.5 w-3.5" /> {t('companies.badge')}
                 </div>
-                <h2 className="text-2xl font-bold text-[#1B3A6B] md:text-3xl">رواد الأعمال الجدد</h2>
-                <p className="mt-1 text-sm text-gray-500">تعرّف على آخر الشركات المنضمة للمجلس</p>
+                <h2 className="text-2xl font-bold text-[#1B3A6B] md:text-3xl">{t('companies.title')}</h2>
+                <p className="mt-1 text-sm text-gray-500">{t('companies.subtitle')}</p>
               </div>
               <Link href="/directory" className="inline-flex items-center gap-1.5 rounded-lg border border-[#1B3A6B] bg-white px-4 py-2 text-sm font-semibold text-[#1B3A6B] hover:bg-[#1B3A6B] hover:text-white">
-                دليل الشركات <ArrowLeft className="h-4 w-4" />
+                {t('companies.viewAll')} <ArrowLeft className={`h-4 w-4 ${isAr ? '' : 'rotate-180'}`} />
               </Link>
             </div>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -254,7 +261,7 @@ export default async function LandingPage() {
                       <Building2 className="h-5 w-5" />
                     </div>
                     <div className="flex-1">
-                      <div className="font-bold text-[#1B3A6B] group-hover:text-cyan-700 line-clamp-1">{c.nameAr || c.nameEn}</div>
+                      <div className="font-bold text-[#1B3A6B] group-hover:text-cyan-700 line-clamp-1">{isAr ? (c.nameAr || c.nameEn) : (c.nameEn || c.nameAr)}</div>
                       {c.industry && <div className="mt-0.5 text-xs text-gray-500">{c.industry}</div>}
                       {c.governorate && (
                         <div className="mt-2 inline-flex items-center gap-1 text-[11px] text-gray-500">
@@ -275,15 +282,15 @@ export default async function LandingPage() {
         <div className="container mx-auto px-4">
           <div className="grid items-center gap-12 lg:grid-cols-2">
             <div>
-              <h2 className="mb-4 text-3xl font-bold text-[#1B3A6B] md:text-4xl">لماذا مجلس رواد الأعمال العماني؟</h2>
+              <h2 className="mb-4 text-3xl font-bold text-[#1B3A6B] md:text-4xl">{t('value.title')}</h2>
               <p className="mb-8 text-gray-600 leading-relaxed">
-                نحن نؤمن أن رواد الأعمال العمانيين يستحقون منصة وطنية تجمعهم، تدعمهم، وتفتح لهم أبواب الفرص المحلية والإقليمية.
+                {t('value.subtitle')}
               </p>
               <div className="space-y-5">
                 {[
-                  { icon: Shield, title: 'موثوقية عالية', desc: 'جميع الشركات والخبراء يمرّون بعملية تحقق واعتماد' },
-                  { icon: TrendingUp, title: 'فرص نمو حقيقية', desc: 'وصول مباشر لعملاء وشركاء وخبراء من خلال المنصة' },
-                  { icon: Users, title: 'مجتمع فاعل', desc: 'شبكة من رواد الأعمال العمانيين في قطاعات متنوعة' },
+                  { icon: Shield, title: t('value.trust.title'), desc: t('value.trust.desc') },
+                  { icon: TrendingUp, title: t('value.growth.title'), desc: t('value.growth.desc') },
+                  { icon: Users, title: t('value.community.title'), desc: t('value.community.desc') },
                 ].map((v) => (
                   <div key={v.title} className="flex gap-4">
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#C9A84C]/10 text-[#C9A84C]">
@@ -299,26 +306,26 @@ export default async function LandingPage() {
             </div>
             <div className="relative">
               <div className="relative overflow-hidden rounded-2xl bg-gradient-to-bl from-[#1B3A6B] to-[#152c52] p-8 text-white shadow-2xl">
-                <div className="mb-6 text-sm font-medium text-[#C9A84C]">مستوى العضوية</div>
+                <div className="mb-6 text-sm font-medium text-[#C9A84C]">{t('value.membership.label')}</div>
                 <div className="space-y-3">
                   {(['FREE', 'BASIC', 'GOLD', 'PLATINUM']).map((key) => {
-                    const t = TIER_META[key]
+                    const meta = TIER_META[key]
                     const isHighlighted = key === 'GOLD'
                     return (
                       <div
                         key={key}
                         className={`flex items-center justify-between rounded-lg ${isHighlighted ? 'bg-[#C9A84C]/20 border border-[#C9A84C]/50' : 'bg-white/10'} px-4 py-3`}
                       >
-                        <span className="font-semibold">{t.nameAr}</span>
+                        <span className="font-semibold">{t(`tier.${key}`)}</span>
                         <span className="text-sm">
-                          <span className="text-lg font-bold text-[#C9A84C]">{t.price}</span> ر.ع / سنوياً
+                          <span className="text-lg font-bold text-[#C9A84C]">{meta.price}</span> {t('value.membership.priceSuffix')}
                         </span>
                       </div>
                     )
                   })}
                 </div>
                 <Link href="/signup" className="mt-6 block w-full rounded-lg bg-[#C9A84C] py-3 text-center font-semibold text-[#1B3A6B] transition hover:bg-[#b89440]">
-                  ابدأ بالعضوية المجانية
+                  {t('value.membership.cta')}
                 </Link>
               </div>
             </div>
@@ -337,16 +344,16 @@ export default async function LandingPage() {
         />
         <div className="relative container mx-auto px-4 py-16 text-center">
           <Sparkles className="mx-auto mb-4 h-10 w-10 text-[#C9A84C]" />
-          <h2 className="mb-4 text-3xl font-extrabold md:text-4xl">انضم إلى المجلس اليوم</h2>
+          <h2 className="mb-4 text-3xl font-extrabold md:text-4xl">{t('joincta.title')}</h2>
           <p className="mx-auto mb-8 max-w-2xl text-gray-200">
-            ابدأ رحلتك مع شبكة رواد الأعمال العمانيين — تواصل، تعلّم، نَمِّ أعمالك، وكن جزءاً من نهضة الاقتصاد الوطني.
+            {t('joincta.subtitle')}
           </p>
           <div className="flex flex-wrap items-center justify-center gap-4">
             <Link href="/signup" className="inline-flex items-center gap-2 rounded-lg bg-[#C9A84C] px-6 py-3 text-base font-bold text-[#1B3A6B] shadow-lg transition hover:bg-[#b89440]">
-              إنشاء حساب مجاني <ArrowLeft className="h-5 w-5" />
+              {t('joincta.signup')} <ArrowLeft className={`h-5 w-5 ${isAr ? '' : 'rotate-180'}`} />
             </Link>
             <Link href="/membership" className="inline-flex items-center gap-2 rounded-lg border border-white/30 bg-white/5 px-6 py-3 text-base font-semibold text-white backdrop-blur hover:bg-white/10">
-              تصفّح باقات العضوية
+              {t('joincta.browse')}
             </Link>
           </div>
         </div>
