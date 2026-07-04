@@ -12,6 +12,7 @@ import {
   sectorLabel,
   governorateLabel,
 } from '@/lib/directory'
+import { getServerT } from '@/lib/i18n/server'
 
 export const dynamic = 'force-dynamic'
 
@@ -26,6 +27,7 @@ const PAID_TIERS = ['BASIC', 'GOLD', 'PLATINUM']
 const FREE_PER_SECTOR_LIMIT = 5
 
 export default async function DirectoryPage({ searchParams }) {
+  const { t } = await getServerT()
   const params = searchParams || {}
   const search = (params.search || '').toString().trim()
   const sector = SECTOR_KEYS.includes(params.sector) ? params.sector : ''
@@ -125,18 +127,18 @@ export default async function DirectoryPage({ searchParams }) {
           <div>
             <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-[#1B3A6B]/5 px-3 py-1 text-xs font-medium text-[#1B3A6B]">
               <Building2 className="h-4 w-4" />
-              دليل الشركات العمانية
+              {t('dir.badge')}
             </div>
             <h1 className="text-3xl font-extrabold text-[#1B3A6B] md:text-4xl">
-              شركات رواد الأعمال العمانيين
+              {t('dir.title')}
             </h1>
             <p className="mt-1 text-sm text-gray-600">
-              {visible.length} شركة معتمدة
-              {hasFilter && ' بعد التصفية'}
+              {visible.length} {t('dir.count.suffix')}
+              {hasFilter && ` ${t('dir.count.filtered')}`}
               {hiddenCount > 0 && (
                 <span className="ms-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
                   <Lock className="h-3 w-3" />
-                  +{hiddenCount} شركة مخفية
+                  +{hiddenCount} {t('dir.count.hidden')}
                 </span>
               )}
             </p>
@@ -146,7 +148,7 @@ export default async function DirectoryPage({ searchParams }) {
             className="inline-flex items-center gap-2 rounded-lg bg-[#1B3A6B] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#152c52]"
           >
             <Plus className="h-4 w-4" />
-            أضف شركتك
+            {t('dir.addCompany')}
           </Link>
         </div>
 
@@ -181,7 +183,7 @@ export default async function DirectoryPage({ searchParams }) {
                   href="/directory"
                   className="text-xs font-medium text-gray-500 underline-offset-2 hover:underline"
                 >
-                  مسح التصفية
+                  {t('dir.clearFilter')}
                 </Link>
               </div>
             )}
@@ -201,10 +203,10 @@ export default async function DirectoryPage({ searchParams }) {
                   </div>
                   <div className="flex-1 min-w-[220px]">
                     <h3 className="text-base font-extrabold text-[#1B3A6B]">
-                      اكتشف {hiddenCount} شركة إضافية
+                      {t('dir.upgrade.title').replace('{n}', hiddenCount)}
                     </h3>
                     <p className="mt-0.5 text-sm text-gray-700">
-                      نعرض الآن 5 شركات فقط من كل قطاع للزوار. اشترك بالعضوية الأساسية فما فوق لرؤية الدليل كاملاً.
+                      {t('dir.upgrade.body')}
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -214,13 +216,13 @@ export default async function DirectoryPage({ searchParams }) {
                           href="/signup"
                           className="inline-flex items-center gap-1.5 rounded-lg bg-[#1B3A6B] px-4 py-2 text-sm font-bold text-white hover:bg-[#152c52]"
                         >
-                          أنشئ حساباً مجاناً
+                          {t('dir.upgrade.signup')}
                         </Link>
                         <Link
                           href="/membership"
                           className="inline-flex items-center gap-1.5 rounded-lg bg-[#C9A84C] px-4 py-2 text-sm font-bold text-[#1B3A6B] hover:bg-[#b89440]"
                         >
-                          تصفّح العضويات
+                          {t('dir.upgrade.browse')}
                         </Link>
                       </>
                     ) : (
@@ -228,7 +230,7 @@ export default async function DirectoryPage({ searchParams }) {
                         href="/membership"
                         className="inline-flex items-center gap-1.5 rounded-lg bg-[#C9A84C] px-4 py-2 text-sm font-bold text-[#1B3A6B] hover:bg-[#b89440]"
                       >
-                        رقّ عضويتك الآن
+                        {t('dir.upgrade.now')}
                       </Link>
                     )}
                   </div>

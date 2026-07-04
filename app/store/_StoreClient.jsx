@@ -8,6 +8,7 @@ import { PRODUCT_CATEGORIES, categoryLabel, categoryEmoji, SUBCATEGORIES } from 
 import ProductCard from '@/components/ProductCard'
 import { useCart } from '@/components/CartContext'
 import { useWishlist } from '@/components/WishlistContext'
+import { useI18n } from '@/lib/i18n/I18nContext'
 
 export default function StoreClient({ initialProducts }) {
   return (
@@ -22,6 +23,7 @@ function StoreInner({ initialProducts }) {
   const sp = useSearchParams()
   const { totals } = useCart()
   const { count: favCount } = useWishlist()
+  const { t, isRTL, isAr } = useI18n()
   const category = sp.get('category') || ''
   const subcategory = sp.get('subcategory') || ''
   const search = sp.get('search') || ''
@@ -80,13 +82,13 @@ function StoreInner({ initialProducts }) {
         <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-[#1B3A6B]/5 px-3 py-1 text-xs font-medium text-[#1B3A6B]">
-              <StoreIcon className="h-4 w-4" /> متجر المجلس
+              <StoreIcon className="h-4 w-4" /> {t('store.badge')}
             </div>
             <h1 className="text-2xl font-extrabold text-[#1B3A6B] md:text-3xl">
-              تسوّق من رواد الأعمال العمانيين
+              {t('store.title')}
             </h1>
             <p className="mt-0.5 text-sm text-gray-500">
-              {initialProducts.length} منتج من تجّارنا المعتمدين
+              {initialProducts.length} {t('store.subtitle.count')}
             </p>
           </div>
           <Link
@@ -94,9 +96,9 @@ function StoreInner({ initialProducts }) {
             className="relative inline-flex items-center gap-2 rounded-lg bg-[#1B3A6B] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#152c52]"
           >
             <ShoppingCart className="h-4 w-4" />
-            السلة
+            {t('store.cart')}
             {totals.unitCount > 0 && (
-              <span className="absolute -top-2 -left-2 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-[#C9A84C] px-1 text-[11px] font-bold text-[#1B3A6B]">
+              <span className={`absolute -top-2 ${isRTL ? '-left-2' : '-right-2'} flex h-5 min-w-[20px] items-center justify-center rounded-full bg-[#C9A84C] px-1 text-[11px] font-bold text-[#1B3A6B]`}>
                 {totals.unitCount}
               </span>
             )}
@@ -110,7 +112,7 @@ function StoreInner({ initialProducts }) {
             className="relative inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:border-red-200 hover:text-red-600"
           >
             <Heart className={`h-3.5 w-3.5 ${favCount > 0 ? 'fill-red-500 text-red-500' : ''}`} />
-            المفضلة
+            {t('store.wishlist')}
             {favCount > 0 && (
               <span className="ms-1 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
                 {favCount}
@@ -121,7 +123,7 @@ function StoreInner({ initialProducts }) {
             href="/store/vendor"
             className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:border-[#1B3A6B] hover:text-[#1B3A6B]"
           >
-            <StoreIcon className="h-3.5 w-3.5" /> البائعون
+            <StoreIcon className="h-3.5 w-3.5" /> {t('store.vendors')}
           </Link>
         </div>
 
@@ -130,6 +132,7 @@ function StoreInner({ initialProducts }) {
           onResults={setAiResults}
           activeQuery={aiResults?.query || ''}
           onClear={() => setAiResults(null)}
+          t={t}
         />
 
         {/* Search + Sort + Filters toggle */}
@@ -139,7 +142,7 @@ function StoreInner({ initialProducts }) {
             <input
               name="q"
               defaultValue={search}
-              placeholder="ابحث عن منتج..."
+              placeholder={t('store.search.placeholder')}
               className="flex-1 bg-transparent text-sm outline-none"
             />
           </form>
@@ -147,7 +150,7 @@ function StoreInner({ initialProducts }) {
             onClick={() => setShowFilters(!showFilters)}
             className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${activeFilterCount > 0 ? 'border-[#C9A84C] bg-[#C9A84C]/15 text-[#1B3A6B]' : 'border-gray-300 bg-white text-gray-700'}`}
           >
-            <SlidersHorizontal className="h-3.5 w-3.5" /> فلاتر
+            <SlidersHorizontal className="h-3.5 w-3.5" /> {t('store.filters')}
             {activeFilterCount > 0 && (
               <span className="ms-1 rounded-full bg-[#1B3A6B] px-1.5 text-[10px] font-bold text-white">{activeFilterCount}</span>
             )}
@@ -157,10 +160,10 @@ function StoreInner({ initialProducts }) {
             onChange={(e) => setParam('sort', e.target.value === 'newest' ? '' : e.target.value)}
             className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 outline-none"
           >
-            <option value="newest">الأحدث</option>
-            <option value="popular">الأكثر مبيعاً</option>
-            <option value="price_asc">السعر: منخفض → مرتفع</option>
-            <option value="price_desc">السعر: مرتفع → منخفض</option>
+            <option value="newest">{t('store.sort.newest')}</option>
+            <option value="popular">{t('store.sort.popular')}</option>
+            <option value="price_asc">{t('store.sort.price_asc')}</option>
+            <option value="price_desc">{t('store.sort.price_desc')}</option>
           </select>
         </div>
 
@@ -168,24 +171,24 @@ function StoreInner({ initialProducts }) {
         {showFilters && (
           <div className="mb-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
             <div className="mb-3 flex items-center justify-between">
-              <div className="text-sm font-bold text-[#1B3A6B]">الفلاتر المتقدمة</div>
+              <div className="text-sm font-bold text-[#1B3A6B]">{t('store.filters.advanced')}</div>
               {activeFilterCount > 0 && (
                 <button onClick={clearAllFilters} className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[11px] font-semibold text-red-700 hover:bg-red-100">
-                  <X className="h-3 w-3" /> مسح الكل
+                  <X className="h-3 w-3" /> {t('store.filters.clearAll')}
                 </button>
               )}
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <div>
-                <label className="mb-1 block text-[11px] font-semibold text-gray-700">نطاق السعر (ر.ع)</label>
+                <label className="mb-1 block text-[11px] font-semibold text-gray-700">{t('store.filters.priceRange')}</label>
                 <div className="flex items-center gap-1">
-                  <input type="number" min="0" step="0.5" defaultValue={minPrice} onBlur={(e) => setParam('minPrice', e.target.value)} placeholder="من" className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-xs outline-none focus:border-[#1B3A6B]" />
+                  <input type="number" min="0" step="0.5" defaultValue={minPrice} onBlur={(e) => setParam('minPrice', e.target.value)} placeholder={t('store.filters.priceFrom')} className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-xs outline-none focus:border-[#1B3A6B]" />
                   <span className="text-gray-400">—</span>
-                  <input type="number" min="0" step="0.5" defaultValue={maxPrice} onBlur={(e) => setParam('maxPrice', e.target.value)} placeholder="إلى" className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-xs outline-none focus:border-[#1B3A6B]" />
+                  <input type="number" min="0" step="0.5" defaultValue={maxPrice} onBlur={(e) => setParam('maxPrice', e.target.value)} placeholder={t('store.filters.priceTo')} className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-xs outline-none focus:border-[#1B3A6B]" />
                 </div>
               </div>
               <div>
-                <label className="mb-1 block text-[11px] font-semibold text-gray-700">التقييم</label>
+                <label className="mb-1 block text-[11px] font-semibold text-gray-700">{t('store.filters.rating')}</label>
                 <div className="flex gap-1">
                   {[0, 3, 4].map((r) => (
                     <button
@@ -193,13 +196,13 @@ function StoreInner({ initialProducts }) {
                       onClick={() => setParam('minRating', String(minRating) === String(r) ? '' : String(r))}
                       className={`inline-flex items-center gap-0.5 rounded-md border px-2 py-1 text-[11px] font-semibold transition ${Number(minRating) === r ? 'border-[#C9A84C] bg-[#C9A84C]/15 text-[#1B3A6B]' : 'border-gray-300 bg-white text-gray-600'}`}
                     >
-                      {r === 0 ? 'الكل' : (<><Star className="h-3 w-3 fill-[#C9A84C] text-[#C9A84C]" /> {r}+</>)}
+                      {r === 0 ? t('store.filters.ratingAll') : (<><Star className="h-3 w-3 fill-[#C9A84C] text-[#C9A84C]" /> {r}+</>)}
                     </button>
                   ))}
                 </div>
               </div>
               <div>
-                <label className="mb-1 block text-[11px] font-semibold text-gray-700">الشحن</label>
+                <label className="mb-1 block text-[11px] font-semibold text-gray-700">{t('store.filters.shipping')}</label>
                 <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-gray-300 bg-white px-2 py-1.5 text-[11px] font-semibold text-gray-700 hover:bg-gray-50">
                   <input
                     type="checkbox"
@@ -207,25 +210,25 @@ function StoreInner({ initialProducts }) {
                     onChange={(e) => setParam('freeShipping', e.target.checked ? '1' : '')}
                     className="h-3.5 w-3.5 accent-[#C9A84C]"
                   />
-                  🚚 شحن مجاني (≥30 ر.ع)
+                  {t('store.filters.freeShipping')}
                 </label>
               </div>
             </div>
             {/* Popular tags cloud */}
             {popularTags.length > 0 && (
               <div className="mt-3 border-t border-gray-100 pt-3">
-                <div className="mb-1.5 text-[11px] font-semibold text-gray-700">العلامات الأكثر شيوعاً</div>
+                <div className="mb-1.5 text-[11px] font-semibold text-gray-700">{t('store.filters.popularTags')}</div>
                 <div className="flex flex-wrap gap-1.5">
-                  {popularTags.map((t) => {
-                    const active = tags.split(',').map((x) => x.trim()).includes(t.tag)
+                  {popularTags.map((tag) => {
+                    const active = tags.split(',').map((x) => x.trim()).includes(tag.tag)
                     return (
                       <button
-                        key={t.tag}
-                        onClick={() => toggleTag(t.tag)}
+                        key={tag.tag}
+                        onClick={() => toggleTag(tag.tag)}
                         className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold transition ${active ? 'border-[#C9A84C] bg-[#C9A84C] text-[#1B3A6B]' : 'border-gray-300 bg-white text-gray-700 hover:border-[#1B3A6B]'}`}
                       >
-                        #{t.tag}
-                        <span className="text-[9px] opacity-60">({t.count})</span>
+                        #{tag.tag}
+                        <span className="text-[9px] opacity-60">({tag.count})</span>
                       </button>
                     )
                   })}
@@ -240,7 +243,7 @@ function StoreInner({ initialProducts }) {
           <CategoryPill
             active={!category}
             onClick={() => setParam('category', '')}
-            label="الكل"
+            label={t('store.category.all')}
             emoji="🛍️"
           />
           {PRODUCT_CATEGORIES.map((c) => (
@@ -261,7 +264,7 @@ function StoreInner({ initialProducts }) {
               onClick={() => setParam('subcategory', '')}
               className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${!subcategory ? 'border-[#1B3A6B] bg-[#1B3A6B] text-white' : 'border-gray-200 bg-white text-gray-600 hover:border-[#1B3A6B] hover:text-[#1B3A6B]'}`}
             >
-              الكل
+              {t('store.category.all')}
             </button>
             {SUBCATEGORIES[category].map((s) => (
               <button
@@ -283,7 +286,7 @@ function StoreInner({ initialProducts }) {
               <div className="flex items-start gap-2">
                 <Sparkles className="mt-0.5 h-5 w-5 text-purple-600" />
                 <div>
-                  <div className="text-xs font-semibold text-purple-700">نتائج البحث الذكي • {aiResults.count} منتج</div>
+                  <div className="text-xs font-semibold text-purple-700">{t('store.ai.resultsBanner')} • {aiResults.count} {t('store.ai.products')}</div>
                   <div className="text-sm font-bold text-[#1B3A6B]">&ldquo;{aiResults.query}&rdquo;</div>
                   {aiResults.interpretation_ar && (
                     <div className="mt-1 text-xs text-gray-600">{aiResults.interpretation_ar}</div>
@@ -294,15 +297,15 @@ function StoreInner({ initialProducts }) {
                 onClick={() => setAiResults(null)}
                 className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50"
               >
-                <X className="h-3 w-3" /> إغلاق
+                <X className="h-3 w-3" /> {t('store.ai.close')}
               </button>
             </div>
 
             {aiResults.products.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-gray-300 bg-white p-12 text-center">
                 <Sparkles className="mx-auto h-10 w-10 text-purple-400" />
-                <h3 className="mt-3 text-lg font-bold text-gray-700">لم نجد منتجات تطابق طلبك</h3>
-                <p className="mt-1 text-sm text-gray-500">جرّب صياغة الاستعلام بشكل مختلف أو امسح البحث الذكي</p>
+                <h3 className="mt-3 text-lg font-bold text-gray-700">{t('store.ai.noMatch')}</h3>
+                <p className="mt-1 text-sm text-gray-500">{t('store.ai.noMatchHint')}</p>
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
@@ -315,8 +318,8 @@ function StoreInner({ initialProducts }) {
         ) : initialProducts.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-gray-300 bg-white p-12 text-center">
             <ShoppingBag className="mx-auto h-10 w-10 text-gray-400" />
-            <h3 className="mt-3 text-lg font-bold text-gray-700">لا توجد منتجات مطابقة</h3>
-            <p className="mt-1 text-sm text-gray-500">جرِّب تعديل البحث أو مسح الفلتر</p>
+            <h3 className="mt-3 text-lg font-bold text-gray-700">{t('store.empty.title')}</h3>
+            <p className="mt-1 text-sm text-gray-500">{t('store.empty.hint')}</p>
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
@@ -354,7 +357,7 @@ const AI_EXAMPLES = [
   'إكسسوارات هاتف بتقييم ممتاز',
 ]
 
-function AiSearchBar({ onResults, activeQuery, onClear }) {
+function AiSearchBar({ onResults, activeQuery, onClear, t }) {
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -376,7 +379,7 @@ function AiSearchBar({ onResults, activeQuery, onClear }) {
       })
       const data = await res.json()
       if (!res.ok) {
-        setError(data?.error || 'فشل البحث الذكي')
+        setError(data?.error || t('store.ai.error'))
         return
       }
       setQuery(text)
@@ -392,7 +395,7 @@ function AiSearchBar({ onResults, activeQuery, onClear }) {
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
       }, 100)
     } catch (e) {
-      setError('تعذّر الاتصال بخدمة البحث الذكي')
+      setError(t('store.ai.error.network'))
     } finally {
       setLoading(false)
     }
@@ -411,8 +414,8 @@ function AiSearchBar({ onResults, activeQuery, onClear }) {
             <Sparkles className="h-4 w-4" />
           </div>
           <div>
-            <div className="text-sm font-bold text-[#1B3A6B]">البحث الذكي بالذكاء الاصطناعي</div>
-            <div className="text-[11px] text-gray-500">صف ما تبحث عنه بلغتك الطبيعية</div>
+            <div className="text-sm font-bold text-[#1B3A6B]">{t('store.ai.title')}</div>
+            <div className="text-[11px] text-gray-500">{t('store.ai.subtitle')}</div>
           </div>
         </div>
         {activeQuery && (
@@ -420,7 +423,7 @@ function AiSearchBar({ onResults, activeQuery, onClear }) {
             onClick={() => { setQuery(''); onClear?.() }}
             className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-[11px] font-semibold text-gray-700 hover:bg-gray-50"
           >
-            <X className="h-3 w-3" /> مسح
+            <X className="h-3 w-3" /> {t('store.ai.clear')}
           </button>
         )}
       </div>
@@ -431,7 +434,7 @@ function AiSearchBar({ onResults, activeQuery, onClear }) {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="مثال: أحذية رياضية رخيصة للشتاء بتقييم 4 نجوم..."
+            placeholder={t('store.ai.placeholder')}
             className="flex-1 bg-transparent text-sm outline-none placeholder:text-gray-400"
             maxLength={200}
             disabled={loading}
@@ -449,11 +452,11 @@ function AiSearchBar({ onResults, activeQuery, onClear }) {
         >
           {loading ? (
             <>
-              <Loader2 className="h-4 w-4 animate-spin" /> جاري البحث...
+              <Loader2 className="h-4 w-4 animate-spin" /> {t('store.ai.searching')}
             </>
           ) : (
             <>
-              <Sparkles className="h-4 w-4" /> ابحث بالذكاء
+              <Sparkles className="h-4 w-4" /> {t('store.ai.search')}
             </>
           )}
         </button>
@@ -468,7 +471,7 @@ function AiSearchBar({ onResults, activeQuery, onClear }) {
       {/* Example chips */}
       {!activeQuery && !loading && (
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] font-semibold text-gray-500">جرّب:</span>
+          <span className="text-[11px] font-semibold text-gray-500">{t('store.ai.try')}</span>
           {AI_EXAMPLES.map((ex) => (
             <button
               key={ex}

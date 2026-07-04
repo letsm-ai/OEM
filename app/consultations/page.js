@@ -5,10 +5,12 @@ import ExpertCard from '@/components/ExpertCard'
 import ExpertFilters from './_ExpertFilters'
 import { SPECIALTY_KEYS, specialtyLabel } from '@/lib/experts'
 import { GraduationCap, Users, Plus } from 'lucide-react'
+import { getServerT } from '@/lib/i18n/server'
 
 export const dynamic = 'force-dynamic'
 
 export default async function ConsultationsPage({ searchParams }) {
+  const { t } = await getServerT()
   const params = searchParams || {}
   const specialty = SPECIALTY_KEYS.includes(params.specialty)
     ? params.specialty
@@ -38,14 +40,14 @@ export default async function ConsultationsPage({ searchParams }) {
           <div>
             <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-[#1B3A6B]/5 px-3 py-1 text-xs font-medium text-[#1B3A6B]">
               <GraduationCap className="h-4 w-4" />
-              منصة الاستشارات
+              {t('consult.badge')}
             </div>
             <h1 className="text-3xl font-extrabold text-[#1B3A6B] md:text-4xl">
-              خبراء مجلس رواد الأعمال
+              {t('consult.title')}
             </h1>
             <p className="mt-1 text-sm text-gray-600">
-              {enriched.length} خبير معتمد
-              {specialty && ` في ${specialtyLabel(specialty)}`}
+              {enriched.length} {t('consult.count.suffix')}
+              {specialty && ` ${t('consult.count.in')} ${specialtyLabel(specialty)}`}
             </p>
           </div>
           <Link
@@ -53,7 +55,7 @@ export default async function ConsultationsPage({ searchParams }) {
             className="inline-flex items-center gap-2 rounded-lg border border-[#1B3A6B] bg-white px-4 py-2.5 text-sm font-semibold text-[#1B3A6B] transition hover:bg-[#1B3A6B] hover:text-white"
           >
             <Plus className="h-4 w-4" />
-            انضم كخبير
+            {t('consult.becomeExpert')}
           </Link>
         </div>
 
@@ -66,10 +68,10 @@ export default async function ConsultationsPage({ searchParams }) {
               <div className="rounded-2xl border border-dashed border-gray-300 bg-white p-12 text-center">
                 <Users className="mx-auto h-10 w-10 text-gray-400" />
                 <h3 className="mt-3 text-lg font-bold text-gray-700">
-                  لا يوجد خبراء حالياً في هذا التخصص
+                  {t('consult.empty.title')}
                 </h3>
                 <p className="mt-1 text-sm text-gray-500">
-                  جرّب تخصصاً آخر أو عد لاحقاً
+                  {t('consult.empty.hint')}
                 </p>
               </div>
             ) : (
