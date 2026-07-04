@@ -1,0 +1,48 @@
+{
+  "name": "مجلس رواد الأعمال العماني | Omani Entrepreneur Majles",
+  "short_name": "مجلس رواد الأعمال",
+  "description": "منصة رواد الأعمال الأولى في سلطنة عُمان — متجر، دليل شركات، استشارات، وعضويات.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F8F9FA",
+  "theme_color": "#1B3A6B",
+  "lang": "ar",
+  "dir": "rtl",
+  "categories": ["business", "shopping", "productivity"],
+  "icons": [
+    { "src": "/icons/icon-72x72.png", "sizes": "72x72", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-96x96.png", "sizes": "96x96", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-128x128.png", "sizes": "128x128", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-144x144.png", "sizes": "144x144", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-152x152.png", "sizes": "152x152", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-192x192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-384x384.png", "sizes": "384x384", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512x512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/maskable-512x512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "المتجر",
+      "short_name": "المتجر",
+      "description": "تسوّق من رواد الأعمال العمانيين",
+      "url": "/store",
+      "icons": [{ "src": "/icons/icon-192x192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "الاستشارات",
+      "short_name": "الاستشارات",
+      "description": "احجز جلسة مع خبير",
+      "url": "/consultations",
+      "icons": [{ "src": "/icons/icon-192x192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "دليل الشركات",
+      "short_name": "الدليل",
+      "description": "تصفّح الشركات العمانية",
+      "url": "/directory",
+      "icons": [{ "src": "/icons/icon-192x192.png", "sizes": "192x192" }]
+    }
+  ]
+}
