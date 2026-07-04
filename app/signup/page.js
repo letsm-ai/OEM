@@ -5,9 +5,11 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { signIn } from 'next-auth/react'
 import { Loader2, UserPlus } from 'lucide-react'
+import { useI18n } from '@/lib/i18n/I18nContext'
 
 export default function SignupPage() {
   const router = useRouter()
+  const { t, isRTL } = useI18n()
   const [form, setForm] = useState({ name: '', email: '', password: '' })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -24,7 +26,7 @@ export default function SignupPage() {
       })
       const data = await res.json()
       if (!res.ok) {
-        setError(data.error || 'حدث خطأ ما')
+        setError(data.error || t('auth.signup.error.generic'))
         setLoading(false)
         return
       }
@@ -42,10 +44,12 @@ export default function SignupPage() {
       router.push('/dashboard')
       router.refresh()
     } catch (err) {
-      setError('تعذر إنشاء الحساب، حاول مرة أخرى')
+      setError(t('auth.signup.error.network'))
       setLoading(false)
     }
   }
+
+  const emailAlign = isRTL ? 'text-right' : 'text-left'
 
   return (
     <div className="flex min-h-[calc(100vh-4rem)] items-center justify-center bg-[#F8F9FA] px-4 py-12">
@@ -56,10 +60,10 @@ export default function SignupPage() {
               <UserPlus className="h-6 w-6 text-[#1B3A6B]" />
             </div>
             <h1 className="text-2xl font-bold text-[#1B3A6B]">
-              إنشاء حساب جديد
+              {t('auth.signup.title')}
             </h1>
             <p className="mt-1 text-sm text-gray-500">
-              انضم إلى مجلس رواد الأعمال العماني
+              {t('auth.signup.subtitle')}
             </p>
           </div>
 
@@ -72,7 +76,7 @@ export default function SignupPage() {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="mb-1 block text-sm font-medium text-gray-700">
-                الاسم الكامل
+                {t('auth.signup.name')}
               </label>
               <input
                 type="text"
@@ -80,12 +84,12 @@ export default function SignupPage() {
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm outline-none transition focus:border-[#1B3A6B] focus:ring-2 focus:ring-[#1B3A6B]/10"
-                placeholder="مثال: أحمد السعدي"
+                placeholder={t('auth.signup.namePlaceholder')}
               />
             </div>
             <div>
               <label className="mb-1 block text-sm font-medium text-gray-700">
-                البريد الإلكتروني
+                {t('auth.login.email')}
               </label>
               <input
                 type="email"
@@ -93,13 +97,13 @@ export default function SignupPage() {
                 dir="ltr"
                 value={form.email}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
-                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-right text-sm outline-none transition focus:border-[#1B3A6B] focus:ring-2 focus:ring-[#1B3A6B]/10"
+                className={`w-full rounded-lg border border-gray-300 px-4 py-2.5 ${emailAlign} text-sm outline-none transition focus:border-[#1B3A6B] focus:ring-2 focus:ring-[#1B3A6B]/10`}
                 placeholder="name@example.com"
               />
             </div>
             <div>
               <label className="mb-1 block text-sm font-medium text-gray-700">
-                كلمة المرور
+                {t('auth.login.password')}
               </label>
               <input
                 type="password"
@@ -108,7 +112,7 @@ export default function SignupPage() {
                 value={form.password}
                 onChange={(e) => setForm({ ...form, password: e.target.value })}
                 className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm outline-none transition focus:border-[#1B3A6B] focus:ring-2 focus:ring-[#1B3A6B]/10"
-                placeholder="6 أحرف على الأقل"
+                placeholder={t('auth.signup.passwordPlaceholder')}
               />
             </div>
             <button
@@ -119,21 +123,21 @@ export default function SignupPage() {
               {loading ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  جارِ إنشاء الحساب...
+                  {t('auth.signup.loading')}
                 </>
               ) : (
-                'إنشاء الحساب'
+                t('auth.signup.submit')
               )}
             </button>
           </form>
 
           <p className="mt-6 text-center text-sm text-gray-600">
-            لديك حساب بالفعل؟{' '}
+            {t('auth.signup.haveAccount')}{' '}
             <Link
               href="/login"
               className="font-semibold text-[#1B3A6B] hover:underline"
             >
-              سجّل الدخول
+              {t('auth.signup.loginNow')}
             </Link>
           </p>
         </div>

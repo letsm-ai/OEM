@@ -4,18 +4,32 @@ import { useEffect, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { Check, X, Crown, Loader2, Sparkles, Star } from 'lucide-react'
-import { TIER_META, formatArabicDate } from '@/lib/membership'
+import { TIER_META, formatLocaleDate } from '@/lib/membership'
+import { useI18n } from '@/lib/i18n/I18nContext'
 
 const ORDER = ['FREE', 'BASIC', 'GOLD', 'PLATINUM']
 
 export default function MembershipPage() {
   const { data: session, status, update } = useSession()
   const router = useRouter()
+  const { t, lang, isAr, isRTL } = useI18n()
 
   const [me, setMe] = useState(null)
   const [loadingTier, setLoadingTier] = useState(null)
   const [confirm, setConfirm] = useState(null) // tier pending confirmation
   const [toast, setToast] = useState(null)
+
+  // Localised name / tagline / benefits helper
+  const meta = (key) => {
+    const m = TIER_META[key]
+    return {
+      ...m,
+      name: isAr ? m.nameAr : (m.nameEn || m.nameAr),
+      tag: isAr ? m.tagline : (m.taglineEn || m.tagline),
+      benefitsList: isAr ? m.benefits : (m.benefitsEn || m.benefits),
+      limitsList: isAr ? m.limits : (m.limitsEn || m.limits),
+    }
+  }
 
   // Fetch fresh user info to get membershipExpiry
   useEffect(() => {
@@ -51,18 +65,19 @@ export default function MembershipPage() {
       })
       const data = await res.json()
       if (!res.ok) {
-        setToast({ type: 'error', msg: data.error || 'تعذر الاشتراك' })
+        setToast({ type: 'error', msg: data.error || t('mem.toast.error') })
       } else {
         setMe(data.user)
         // Refresh NextAuth token so session.membershipTier updates too
         await update()
-        setToast({
-          type: 'success',
-          msg: `تم تفعيل باقة ${TIER_META[confirm].nameAr} بنجاح!`,
-        })
+        const m = meta(confirm)
+        const successMsg = isAr
+          ? `${t('mem.toast.success.prefix')} ${m.name} ${t('mem.toast.success.suffix')}`
+          : `${t('mem.toast.success.prefix')} ${m.name} ${t('mem.toast.success.suffix')}`
+        setToast({ type: 'success', msg: successMsg })
       }
     } catch (e) {
-      setToast({ type: 'error', msg: 'خطأ في الشبكة' })
+      setToast({ type: 'error', msg: t('mem.toast.network') })
     } finally {
       setLoadingTier(null)
       setConfirm(null)
@@ -70,19 +85,23 @@ export default function MembershipPage() {
     }
   }
 
+  const currentMeta = meta(currentTier)
+  const confirmMeta = confirm ? meta(confirm) : null
+  const toastSide = isRTL ? 'right-6' : 'left-6'
+
   return (
     <div className="min-h-screen bg-[#F8F9FA] py-12">
       {/* Header */}
       <div className="container mx-auto px-4 text-center">
         <div className="mx-auto inline-flex items-center gap-2 rounded-full border border-[#C9A84C]/40 bg-[#C9A84C]/10 px-4 py-1.5 text-xs font-medium text-[#8a6f2d]">
           <Sparkles className="h-4 w-4" />
-          باقات العضوية
+          {t('mem.badge')}
         </div>
         <h1 className="mt-4 text-3xl font-extrabold text-[#1B3A6B] md:text-5xl">
-          اختر الباقة المناسبة لأعمالك
+          {t('mem.title')}
         </h1>
         <p className="mx-auto mt-3 max-w-2xl text-gray-600">
-          ادفع أعمالك للأمام مع مزايا متدرجة تلبي احتياجاتك. جميع الأسعار سنوية بالريال العماني.
+          {t('mem.subtitle')}
         </p>
       </div>
 
@@ -93,17 +112,17 @@ export default function MembershipPage() {
             <div className="flex items-center gap-3">
               <Crown className="h-5 w-5 text-[#C9A84C]" />
               <div>
-                <div className="text-xs text-gray-500">باقتك الحالية</div>
+                <div className="text-xs text-gray-500">{t('mem.current.label')}</div>
                 <div className="text-sm font-bold text-[#1B3A6B]">
-                  {TIER_META[currentTier].nameAr}
+                  {currentMeta.name}
                 </div>
               </div>
             </div>
             {me?.membershipExpiry && currentTier !== 'FREE' && (
-              <div className="text-left">
-                <div className="text-xs text-gray-500">تاريخ الانتهاء</div>
+              <div className={isRTL ? 'text-left' : 'text-right'}>
+                <div className="text-xs text-gray-500">{t('mem.expiry.label')}</div>
                 <div className="text-sm font-semibold text-gray-800">
-                  {formatArabicDate(me.membershipExpiry)}
+                  {formatLocaleDate(me.membershipExpiry, lang)}
                 </div>
               </div>
             )}
@@ -115,10 +134,10 @@ export default function MembershipPage() {
       <div className="container mx-auto mt-10 px-4">
         <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
           {ORDER.map((key) => {
-            const t = TIER_META[key]
+            const m = meta(key)
             const isCurrent = currentTier === key
             const isFree = key === 'FREE'
-            const isPopular = !!t.popular
+            const isPopular = !!m.popular
             return (
               <div
                 key={key}
@@ -130,44 +149,44 @@ export default function MembershipPage() {
               >
                 {isPopular && (
                   <div className="absolute -top-3 right-1/2 translate-x-1/2 rounded-full bg-[#C9A84C] px-3 py-1 text-xs font-bold text-[#1B3A6B]">
-                    <Star className="mr-1 inline h-3 w-3" /> {t.tagline}
+                    <Star className={`inline h-3 w-3 ${isRTL ? 'ml-1' : 'mr-1'}`} /> {m.tag}
                   </div>
                 )}
                 {isCurrent && (
-                  <div className="absolute -top-3 left-4 rounded-full bg-[#1B3A6B] px-3 py-1 text-xs font-bold text-white">
-                    باقتك الحالية
+                  <div className={`absolute -top-3 ${isRTL ? 'left-4' : 'right-4'} rounded-full bg-[#1B3A6B] px-3 py-1 text-xs font-bold text-white`}>
+                    {t('mem.current.badge')}
                   </div>
                 )}
 
                 <div className="mb-4">
-                  <div className={`text-sm font-semibold ${t.textClass}`}>
-                    {t.tagline}
+                  <div className={`text-sm font-semibold ${m.textClass}`}>
+                    {m.tag}
                   </div>
                   <h3 className="mt-1 text-2xl font-bold text-[#1B3A6B]">
-                    {t.nameAr}
+                    {m.name}
                   </h3>
                 </div>
 
                 <div className="mb-6">
                   <div className="flex items-baseline gap-1">
                     <span className="text-4xl font-extrabold text-[#1B3A6B]">
-                      {t.price}
+                      {m.price}
                     </span>
-                    <span className="text-sm text-gray-500">ر.ع</span>
+                    <span className="text-sm text-gray-500">{t('mem.priceUnit')}</span>
                   </div>
                   <div className="mt-1 text-xs text-gray-500">
-                    {isFree ? 'مجاني إلى الأبد' : 'سنوياً'}
+                    {isFree ? t('mem.forever') : t('mem.yearly')}
                   </div>
                 </div>
 
                 <ul className="mb-6 flex-1 space-y-2.5">
-                  {t.benefits.map((b) => (
+                  {m.benefitsList.map((b) => (
                     <li key={b} className="flex items-start gap-2 text-sm">
                       <Check className="mt-0.5 h-4 w-4 shrink-0 text-green-600" />
                       <span className="text-gray-700">{b}</span>
                     </li>
                   ))}
-                  {t.limits?.map((l) => (
+                  {m.limitsList?.map((l) => (
                     <li
                       key={l}
                       className="flex items-start gap-2 text-sm text-gray-400"
@@ -183,7 +202,7 @@ export default function MembershipPage() {
                     disabled
                     className="w-full rounded-lg border border-gray-200 bg-gray-50 py-2.5 text-sm font-semibold text-gray-500"
                   >
-                    باقتك الحالية
+                    {t('mem.current.badge')}
                   </button>
                 ) : isFree ? (
                   <button
@@ -191,13 +210,13 @@ export default function MembershipPage() {
                       status === 'authenticated'
                         ? setToast({
                             type: 'info',
-                            msg: 'الباقة المجانية متاحة افتراضياً',
+                            msg: t('mem.toast.freeInfo'),
                           })
                         : router.push('/signup')
                     }
                     className="w-full rounded-lg border border-gray-300 bg-white py-2.5 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
                   >
-                    {status === 'authenticated' ? 'افتراضي' : 'انشئ حساب مجاني'}
+                    {status === 'authenticated' ? t('mem.free.default') : t('mem.free.signup')}
                   </button>
                 ) : (
                   <button
@@ -212,12 +231,12 @@ export default function MembershipPage() {
                     {loadingTier === key ? (
                       <>
                         <Loader2 className="h-4 w-4 animate-spin" />
-                        جاري...
+                        {t('mem.subscribing')}
                       </>
                     ) : (
                       <>
                         <Crown className="h-4 w-4" />
-                        اشترك الآن
+                        {t('mem.subscribe')}
                       </>
                     )}
                   </button>
@@ -232,17 +251,16 @@ export default function MembershipPage() {
       <div className="container mx-auto mt-12 px-4">
         <div className="mx-auto max-w-3xl rounded-xl border border-gray-200 bg-white p-6 text-center">
           <h4 className="mb-2 font-bold text-[#1B3A6B]">
-            خصومات الأعضاء تطبق تلقائياً
+            {t('mem.discountNote.title')}
           </h4>
           <p className="text-sm text-gray-600">
-            عند الشراء من المتجر أو حجز الاستشارات، سيتم خصم نسبة باقتك مباشرة من السعر النهائي.
-            تنتهي باقات العضوية بعد سنة واحدة ويمكنك تجديدها أو تغييرها في أي وقت.
+            {t('mem.discountNote.body')}
           </p>
         </div>
       </div>
 
       {/* Confirmation Modal */}
-      {confirm && (
+      {confirm && confirmMeta && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
             <div className="mb-4 flex items-center justify-center">
@@ -251,34 +269,34 @@ export default function MembershipPage() {
               </div>
             </div>
             <h3 className="mb-2 text-center text-xl font-bold text-[#1B3A6B]">
-              تأكيد الاشتراك
+              {t('mem.confirm.title')}
             </h3>
             <p className="mb-4 text-center text-sm text-gray-600">
-              الاشتراك في باقة{' '}
+              {t('mem.confirm.body.prefix')}{' '}
               <span className="font-bold text-[#1B3A6B]">
-                {TIER_META[confirm].nameAr}
+                {confirmMeta.name}
               </span>{' '}
-              بمبلغ{' '}
+              {t('mem.confirm.body.amount')}{' '}
               <span className="font-bold text-[#1B3A6B]">
-                {TIER_META[confirm].price} ر.ع
+                {confirmMeta.price} {t('mem.priceUnit')}
               </span>{' '}
-              سنوياً؟
+              {t('mem.confirm.body.suffix')}
             </p>
             <div className="mb-5 rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-2 text-center text-xs text-yellow-800">
-              ملاحظة: الدفع تجريبي في هذه المرحلة ولن يتم خصم أي مبلغ فعلي.
+              {t('mem.confirm.note')}
             </div>
             <div className="flex gap-3">
               <button
                 onClick={() => setConfirm(null)}
                 className="flex-1 rounded-lg border border-gray-300 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50"
               >
-                إلغاء
+                {t('mem.confirm.cancel')}
               </button>
               <button
                 onClick={confirmSubscribe}
                 className="flex-1 rounded-lg bg-[#1B3A6B] py-2.5 text-sm font-semibold text-white hover:bg-[#152c52]"
               >
-                تأكيد الاشتراك
+                {t('mem.confirm.confirm')}
               </button>
             </div>
           </div>
@@ -287,7 +305,7 @@ export default function MembershipPage() {
 
       {/* Toast */}
       {toast && (
-        <div className="fixed bottom-6 right-6 z-50 max-w-sm">
+        <div className={`fixed bottom-6 ${toastSide} z-50 max-w-sm`}>
           <div
             className={`rounded-lg px-5 py-3 text-sm font-medium shadow-lg ${
               toast.type === 'success'

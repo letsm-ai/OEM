@@ -5,11 +5,13 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { signIn } from 'next-auth/react'
 import { Loader2, LogIn } from 'lucide-react'
+import { useI18n } from '@/lib/i18n/I18nContext'
 
 function LoginForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const callbackUrl = searchParams.get('callbackUrl') || '/dashboard'
+  const { t, isRTL } = useI18n()
 
   const [form, setForm] = useState({ email: '', password: '' })
   const [loading, setLoading] = useState(false)
@@ -33,15 +35,17 @@ function LoginForm() {
     router.refresh()
   }
 
+  const emailAlign = isRTL ? 'text-right' : 'text-left'
+
   return (
     <div className="rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
       <div className="mb-6 text-center">
         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-[#1B3A6B]/10">
           <LogIn className="h-6 w-6 text-[#1B3A6B]" />
         </div>
-        <h1 className="text-2xl font-bold text-[#1B3A6B]">تسجيل الدخول</h1>
+        <h1 className="text-2xl font-bold text-[#1B3A6B]">{t('auth.login.title')}</h1>
         <p className="mt-1 text-sm text-gray-500">
-          أهلاً بعودتك إلى مجلس رواد الأعمال
+          {t('auth.login.subtitle')}
         </p>
       </div>
 
@@ -54,7 +58,7 @@ function LoginForm() {
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label className="mb-1 block text-sm font-medium text-gray-700">
-            البريد الإلكتروني
+            {t('auth.login.email')}
           </label>
           <input
             type="email"
@@ -62,20 +66,20 @@ function LoginForm() {
             dir="ltr"
             value={form.email}
             onChange={(e) => setForm({ ...form, email: e.target.value })}
-            className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-right text-sm outline-none transition focus:border-[#1B3A6B] focus:ring-2 focus:ring-[#1B3A6B]/10"
+            className={`w-full rounded-lg border border-gray-300 px-4 py-2.5 ${emailAlign} text-sm outline-none transition focus:border-[#1B3A6B] focus:ring-2 focus:ring-[#1B3A6B]/10`}
             placeholder="name@example.com"
           />
         </div>
         <div>
           <div className="mb-1 flex items-center justify-between">
             <label className="block text-sm font-medium text-gray-700">
-              كلمة المرور
+              {t('auth.login.password')}
             </label>
             <Link
               href="/forgot-password"
               className="text-xs font-medium text-[#1B3A6B] hover:underline"
             >
-              نسيت كلمة المرور؟
+              {t('auth.login.forgot')}
             </Link>
           </div>
           <input
@@ -95,21 +99,21 @@ function LoginForm() {
           {loading ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" />
-              جارِ تسجيل الدخول...
+              {t('auth.login.loading')}
             </>
           ) : (
-            'تسجيل الدخول'
+            t('auth.login.submit')
           )}
         </button>
       </form>
 
       <p className="mt-6 text-center text-sm text-gray-600">
-        ليس لديك حساب؟{' '}
+        {t('auth.login.noAccount')}{' '}
         <Link
           href="/signup"
           className="font-semibold text-[#1B3A6B] hover:underline"
         >
-          أنشئ حساباً جديداً
+          {t('auth.login.createAccount')}
         </Link>
       </p>
     </div>
