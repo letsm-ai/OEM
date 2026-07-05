@@ -2,6 +2,12 @@ const withPWA = require('next-pwa')({
   dest: 'public',
   register: true,
   skipWaiting: true,
+  // Force the new SW to take control of open pages immediately.
+  clientsClaim: true,
+  // Cleanup old (versioned) caches on activate.
+  cleanupOutdatedCaches: true,
+  // Bump this string to invalidate ALL caches on next deploy.
+  cacheId: 'majles-v2',
   // Disable PWA in development to avoid stale cache while coding.
   disable: process.env.NODE_ENV === 'development',
   // Do not precache API responses or NextAuth internals.
@@ -11,22 +17,24 @@ const withPWA = require('next-pwa')({
       urlPattern: /^https:\/\/fonts\.(?:googleapis|gstatic)\.com\/.*/i,
       handler: 'CacheFirst',
       options: {
-        cacheName: 'google-fonts',
+        cacheName: 'google-fonts-v2',
         expiration: { maxEntries: 20, maxAgeSeconds: 60 * 60 * 24 * 365 },
       },
     },
     {
+      // Images: StaleWhileRevalidate ensures broken cached copies get replaced
+      // on the next visit automatically (was CacheFirst — could stick forever).
       urlPattern: /\.(?:png|jpg|jpeg|svg|gif|webp|ico)$/i,
-      handler: 'CacheFirst',
+      handler: 'StaleWhileRevalidate',
       options: {
-        cacheName: 'images',
+        cacheName: 'images-v2',
         expiration: { maxEntries: 100, maxAgeSeconds: 60 * 60 * 24 * 30 },
       },
     },
     {
       urlPattern: /\.(?:js|css|woff2?)$/i,
       handler: 'StaleWhileRevalidate',
-      options: { cacheName: 'static-assets' },
+      options: { cacheName: 'static-assets-v2' },
     },
     {
       // Cache GET data APIs (products/companies/experts listings) briefly.
@@ -35,7 +43,7 @@ const withPWA = require('next-pwa')({
         /^\/api\/(products|companies|experts|tags)/.test(url.pathname),
       handler: 'NetworkFirst',
       options: {
-        cacheName: 'api-data',
+        cacheName: 'api-data-v2',
         expiration: { maxEntries: 60, maxAgeSeconds: 60 * 5 },
         networkTimeoutSeconds: 5,
       },
@@ -94,6 +102,14 @@ const nextConfig = {
         source: '/manifest.webmanifest',
         headers: [
           { key: 'Content-Type', value: 'application/manifest+json' },
+        ],
+      },
+      {
+        source: '/reset',
+        headers: [
+          { key: 'Cache-Control', value: 'no-cache, no-store, must-revalidate' },
+          { key: 'Pragma', value: 'no-cache' },
+          { key: 'Expires', value: '0' },
         ],
       },
     ]
