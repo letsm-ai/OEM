@@ -19,6 +19,7 @@ import {
   ArrowLeft,
   Sparkles,
 } from 'lucide-react'
+import PushToggleButton from '@/components/PushToggleButton'
 
 const ROLE_LABELS = {
   ADMIN: 'مسؤول',
@@ -187,6 +188,11 @@ export default async function DashboardPage() {
               </span>
             }
           />
+        </div>
+
+        {/* Push notifications toggle */}
+        <div className="mt-8">
+          <PushToggleButton />
         </div>
 
         {/* Quick links */}

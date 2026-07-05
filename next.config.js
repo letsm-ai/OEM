@@ -41,8 +41,8 @@ const withPWA = require('next-pwa')({
       },
     },
     {
-      // Do NOT cache auth or write endpoints — always network only.
-      urlPattern: /^\/api\/(auth|checkout|webhooks|signup|me|admin|membership)/,
+      // Do NOT cache auth / write / push endpoints — always network only.
+      urlPattern: /^\/api\/(auth|checkout|webhooks|signup|me|admin|membership|push)/,
       handler: 'NetworkOnly',
     },
   ],

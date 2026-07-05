@@ -105,6 +105,13 @@ import {
   handleMyReviewStatus,
 } from '@/lib/api/reviews'
 import {
+  handlePushPublicKey,
+  handlePushSubscribe,
+  handlePushUnsubscribe,
+  handlePushBroadcast,
+  handlePushStats,
+} from '@/lib/api/push'
+import {
   validateCouponForUser,
   handleCouponValidate,
   handleAdminCouponsList,
@@ -331,6 +338,23 @@ async function handleRoute(request, { params }) {
     // -------- Public shipping quote --------
     if (route === '/shipping/quote' && method === 'POST') {
       return handleShippingQuote(request)
+    }
+
+    // -------- Web Push (VAPID) --------
+    if (route === '/push/public-key' && method === 'GET') {
+      return handleCORS(await handlePushPublicKey())
+    }
+    if (route === '/push/subscribe' && method === 'POST') {
+      return handleCORS(await handlePushSubscribe(request))
+    }
+    if (route === '/push/unsubscribe' && method === 'POST') {
+      return handleCORS(await handlePushUnsubscribe(request))
+    }
+    if (route === '/admin/push/broadcast' && method === 'POST') {
+      return handleCORS(await handlePushBroadcast(request))
+    }
+    if (route === '/admin/push/stats' && method === 'GET') {
+      return handleCORS(await handlePushStats())
     }
 
     // -------- SIGNUP --------

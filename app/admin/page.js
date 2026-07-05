@@ -13,6 +13,7 @@ import {
   Store,
   Tag,
   ShoppingBag,
+  Bell,
   ArrowLeft,
 } from 'lucide-react'
 
@@ -41,6 +42,7 @@ export default async function AdminHubPage() {
     { href: '/admin/vendor-applications', label: 'طلبات البائعين', desc: 'تفعيل الحسابات التجارية', Icon: Store, color: 'from-pink-500 to-pink-700' },
     { href: '/admin/payouts', label: 'المدفوعات', desc: 'أرصدة البائعين وطلبات السحب', Icon: ShoppingBag, color: 'from-orange-500 to-orange-700' },
     { href: '/admin/coupons', label: 'الكوبونات', desc: 'إنشاء وإدارة الخصومات', Icon: Tag, color: 'from-rose-500 to-rose-700' },
+    { href: '/admin/notifications', label: 'الإشعارات', desc: 'إرسال إشعارات Push للمشتركين', Icon: Bell, color: 'from-teal-500 to-teal-700' },
   ]
 
   return (
