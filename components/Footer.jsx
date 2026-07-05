@@ -91,6 +91,7 @@ export default function Footer() {
         <div className="mt-10 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-6 text-xs text-gray-400">
           <div>© {year} {brandName} — {t('footer.copyright')}</div>
           <div className="flex flex-wrap items-center gap-4">
+            <Link href="/help/user" className="transition hover:text-[#C9A84C]">{t('footer.help')}</Link>
             <Link href="/privacy" className="transition hover:text-[#C9A84C]">{t('footer.privacy')}</Link>
             <Link href="/terms" className="transition hover:text-[#C9A84C]">{t('footer.terms')}</Link>
             <Link href="/refund" className="transition hover:text-[#C9A84C]">{t('footer.refund')}</Link>

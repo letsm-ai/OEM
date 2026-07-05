@@ -14,6 +14,7 @@ import {
   Tag,
   ShoppingBag,
   Bell,
+  BookOpen,
   ArrowLeft,
 } from 'lucide-react'
 
@@ -43,6 +44,7 @@ export default async function AdminHubPage() {
     { href: '/admin/payouts', label: 'المدفوعات', desc: 'أرصدة البائعين وطلبات السحب', Icon: ShoppingBag, color: 'from-orange-500 to-orange-700' },
     { href: '/admin/coupons', label: 'الكوبونات', desc: 'إنشاء وإدارة الخصومات', Icon: Tag, color: 'from-rose-500 to-rose-700' },
     { href: '/admin/notifications', label: 'الإشعارات', desc: 'إرسال إشعارات Push للمشتركين', Icon: Bell, color: 'from-teal-500 to-teal-700' },
+    { href: '/help/admin', label: 'دليل الأدمن', desc: 'مرجع شامل لإدارة المنصة', Icon: BookOpen, color: 'from-slate-500 to-slate-700' },
   ]
 
   return (
