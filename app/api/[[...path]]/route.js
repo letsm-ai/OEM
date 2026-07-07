@@ -115,6 +115,9 @@ import {
 import {
   handleUnsubscribeGet,
   handleUnsubscribePost,
+  handleAdminOptOutList,
+  handleAdminOptOutExport,
+  handleAdminOptOutDelete,
 } from '@/lib/api/unsubscribe'
 import {
   validateCouponForUser,
@@ -368,6 +371,18 @@ async function handleRoute(request, { params }) {
     }
     if (route === '/unsubscribe' && method === 'POST') {
       return handleCORS(await handleUnsubscribePost(request))
+    }
+
+    // -------- Admin: EmailOptOut management --------
+    if (route === '/admin/email-optouts' && method === 'GET') {
+      return handleCORS(await handleAdminOptOutList(request))
+    }
+    if (route === '/admin/email-optouts/export' && method === 'GET') {
+      return await handleAdminOptOutExport()
+    }
+    const adminOptOutMatch = route.match(/^\/admin\/email-optouts\/([^/]+)$/)
+    if (adminOptOutMatch && method === 'DELETE') {
+      return handleCORS(await handleAdminOptOutDelete(adminOptOutMatch[1]))
     }
 
     // -------- SIGNUP --------
