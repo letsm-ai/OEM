@@ -47,7 +47,7 @@ export function I18nProvider({ initialLocale = DEFAULT_LOCALE, children }) {
   )
 
   return (
-    <I18nContext.Provider value={{ lang, setLang, t, isRTL: lang === 'ar' }}>
+    <I18nContext.Provider value={{ lang, setLang, t, isAr: lang === 'ar', isRTL: lang === 'ar' }}>
       {children}
     </I18nContext.Provider>
   )
@@ -61,7 +61,8 @@ export function useI18n() {
       lang: DEFAULT_LOCALE,
       setLang: () => {},
       t: (k) => translations[DEFAULT_LOCALE][k] || k,
-      isRTL: true,
+      isAr: DEFAULT_LOCALE === 'ar',
+      isRTL: DEFAULT_LOCALE === 'ar',
     }
   }
   return ctx

@@ -12,6 +12,7 @@ import {
 } from '@/lib/api/shipping'
 import {
   handleMembershipSubscribe,
+  handleMembershipVerify,
   handleMembershipHistory,
   handleMembershipDiscount,
 } from '@/lib/api/membership'
@@ -702,6 +703,9 @@ async function handleRoute(request, { params }) {
     // -------- MEMBERSHIP routes --------
     if (route === '/membership/subscribe' && method === 'POST') {
       return handleMembershipSubscribe(request)
+    }
+    if (route === '/membership/verify' && method === 'POST') {
+      return handleMembershipVerify(request)
     }
     if (route === '/membership/history' && method === 'GET') {
       return handleMembershipHistory()
@@ -2465,41 +2469,99 @@ async function handleRoute(request, { params }) {
       await connectDB()
       try {
         if (eventType === 'checkout.completed' || eventType === 'payment.succeeded') {
-          // Identify the order via session_id (checkout) or client_reference_id (payment)
           const sid = data.session_id
           const clientRef = data.client_reference_id
-          const invoiceId = data.checkout_invoice || data.invoice
-          const query = sid
-            ? { thawaniSessionId: sid }
-            : clientRef
-              ? { _id: clientRef }
-              : invoiceId
-                ? { thawaniInvoice: String(invoiceId) }
-                : null
-          if (query) {
-            const order = await Order.findOne(query)
-            if (order && order.status !== 'PAID') {
-              const buyer = await User.findById(order.buyerId).lean()
-              if (data.payment_id) order.paymentId = data.payment_id
-              await order.save()
-              await finalizeOrderPayment(order, buyer)
+          const metadata = data.metadata || {}
+          const isMembership =
+            metadata.kind === 'membership' ||
+            String(clientRef || '').startsWith('mem_')
+
+          // -------- Membership activation --------
+          if (isMembership) {
+            const memId =
+              metadata.membership_id ||
+              String(clientRef || '').replace(/^mem_/, '')
+            const mem =
+              (memId && (await Membership.findById(memId))) ||
+              (sid && (await Membership.findOne({ thawaniSessionId: sid })))
+            if (mem && mem.paymentStatus !== 'PAID') {
+              const meta = TIER_META[mem.tier]
+              const user = await User.findByIdAndUpdate(
+                mem.userId,
+                { membershipTier: mem.tier, membershipExpiry: mem.endDate },
+                { new: true }
+              ).lean()
+              mem.paymentStatus = 'PAID'
+              if (data.payment_id) mem.paymentId = data.payment_id
+              await mem.save()
+              if (user && meta) {
+                sendSubscriptionEmail({
+                  to: user.email,
+                  name: user.name,
+                  tierAr: meta.nameAr,
+                  amount: meta.price,
+                  expiryFormatted: formatArabicDate(mem.endDate),
+                }).catch((e) =>
+                  console.error('subscription email failed:', e)
+                )
+              }
+            }
+          } else {
+            // -------- Order payment (existing behaviour) --------
+            const invoiceId = data.checkout_invoice || data.invoice
+            const query = sid
+              ? { thawaniSessionId: sid }
+              : clientRef
+                ? { _id: clientRef }
+                : invoiceId
+                  ? { thawaniInvoice: String(invoiceId) }
+                  : null
+            if (query) {
+              const order = await Order.findOne(query)
+              if (order && order.status !== 'PAID') {
+                const buyer = await User.findById(order.buyerId).lean()
+                if (data.payment_id) order.paymentId = data.payment_id
+                await order.save()
+                await finalizeOrderPayment(order, buyer)
+              }
             }
           }
         } else if (eventType === 'payment.failed') {
           const sid = data.session_id
-          const invoiceId = data.checkout_invoice || data.invoice
-          const query = sid
-            ? { thawaniSessionId: sid }
-            : invoiceId
-              ? { thawaniInvoice: String(invoiceId) }
-              : null
-          if (query) {
-            const order = await Order.findOne(query)
-            if (order && order.status === 'PENDING') {
-              order.status = 'FAILED'
-              order.paymentStatus = 'FAILED'
-              order.updatedAt = new Date()
-              await order.save()
+          const clientRef = data.client_reference_id
+          const metadata = data.metadata || {}
+          const isMembership =
+            metadata.kind === 'membership' ||
+            String(clientRef || '').startsWith('mem_')
+
+          if (isMembership) {
+            const memId =
+              metadata.membership_id ||
+              String(clientRef || '').replace(/^mem_/, '')
+            const mem = memId
+              ? await Membership.findById(memId)
+              : sid
+                ? await Membership.findOne({ thawaniSessionId: sid })
+                : null
+            if (mem && mem.paymentStatus === 'PENDING') {
+              mem.paymentStatus = 'FAILED'
+              await mem.save()
+            }
+          } else {
+            const invoiceId = data.checkout_invoice || data.invoice
+            const query = sid
+              ? { thawaniSessionId: sid }
+              : invoiceId
+                ? { thawaniInvoice: String(invoiceId) }
+                : null
+            if (query) {
+              const order = await Order.findOne(query)
+              if (order && order.status === 'PENDING') {
+                order.status = 'FAILED'
+                order.paymentStatus = 'FAILED'
+                order.updatedAt = new Date()
+                await order.save()
+              }
             }
           }
         }

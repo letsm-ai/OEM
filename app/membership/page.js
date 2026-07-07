@@ -66,20 +66,40 @@ export default function MembershipPage() {
       const data = await res.json()
       if (!res.ok) {
         setToast({ type: 'error', msg: data.error || t('mem.toast.error') })
-      } else {
-        setMe(data.user)
-        // Refresh NextAuth token so session.membershipTier updates too
-        await update()
-        const m = meta(confirm)
-        const successMsg = isAr
-          ? `${t('mem.toast.success.prefix')} ${m.name} ${t('mem.toast.success.suffix')}`
-          : `${t('mem.toast.success.prefix')} ${m.name} ${t('mem.toast.success.suffix')}`
-        setToast({ type: 'success', msg: successMsg })
+        setLoadingTier(null)
+        setConfirm(null)
+        setTimeout(() => setToast(null), 4000)
+        return
       }
+
+      // ---- LIVE Thawani flow: redirect the buyer to the checkout page ----
+      if (data.requiresPayment && data.redirectUrl) {
+        setToast({
+          type: 'success',
+          msg: isAr
+            ? 'جارٍ تحويلك إلى بوابة الدفع الآمنة...'
+            : 'Redirecting you to the secure payment gateway...',
+        })
+        // Small delay so the toast is visible, then hard-redirect
+        setTimeout(() => {
+          window.location.href = data.redirectUrl
+        }, 600)
+        return
+      }
+
+      // ---- Fallback (dev / mock — activates immediately) ----
+      if (data.user) setMe(data.user)
+      await update()
+      const m = meta(confirm)
+      const successMsg = isAr
+        ? `${t('mem.toast.success.prefix')} ${m.name} ${t('mem.toast.success.suffix')}`
+        : `${t('mem.toast.success.prefix')} ${m.name} ${t('mem.toast.success.suffix')}`
+      setToast({ type: 'success', msg: successMsg })
     } catch (e) {
       setToast({ type: 'error', msg: t('mem.toast.network') })
     } finally {
-      setLoadingTier(null)
+      // Only clear loading if we didn't redirect
+      setLoadingTier((prev) => (prev === confirm ? null : prev))
       setConfirm(null)
       setTimeout(() => setToast(null), 4000)
     }
