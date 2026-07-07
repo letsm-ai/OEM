@@ -113,6 +113,10 @@ import {
   handlePushStats,
 } from '@/lib/api/push'
 import {
+  handleUnsubscribeGet,
+  handleUnsubscribePost,
+} from '@/lib/api/unsubscribe'
+import {
   validateCouponForUser,
   handleCouponValidate,
   handleAdminCouponsList,
@@ -356,6 +360,14 @@ async function handleRoute(request, { params }) {
     }
     if (route === '/admin/push/stats' && method === 'GET') {
       return handleCORS(await handlePushStats())
+    }
+
+    // -------- Email unsubscribe (public) --------
+    if (route === '/unsubscribe' && method === 'GET') {
+      return handleUnsubscribeGet(request)
+    }
+    if (route === '/unsubscribe' && method === 'POST') {
+      return handleCORS(await handleUnsubscribePost(request))
     }
 
     // -------- SIGNUP --------
