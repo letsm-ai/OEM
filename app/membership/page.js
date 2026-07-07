@@ -87,14 +87,16 @@ export default function MembershipPage() {
         return
       }
 
-      // ---- Fallback (dev / mock — activates immediately) ----
-      if (data.user) setMe(data.user)
-      await update()
-      const m = meta(confirm)
-      const successMsg = isAr
-        ? `${t('mem.toast.success.prefix')} ${m.name} ${t('mem.toast.success.suffix')}`
-        : `${t('mem.toast.success.prefix')} ${m.name} ${t('mem.toast.success.suffix')}`
-      setToast({ type: 'success', msg: successMsg })
+      // ---- Any other response is treated as an error (defensive) ----
+      // The API MUST return { requiresPayment, redirectUrl } for paid tiers.
+      // If we got here, something is misconfigured — do NOT locally activate anything.
+      console.error('[membership] unexpected subscribe response', data)
+      setToast({
+        type: 'error',
+        msg: isAr
+          ? 'تعذّر بدء عملية الدفع. الرجاء المحاولة لاحقاً أو التواصل مع الدعم.'
+          : 'Could not start payment. Please try again later or contact support.',
+      })
     } catch (e) {
       setToast({ type: 'error', msg: t('mem.toast.network') })
     } finally {
