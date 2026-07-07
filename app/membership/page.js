@@ -302,8 +302,8 @@ export default function MembershipPage() {
               </span>{' '}
               {t('mem.confirm.body.suffix')}
             </p>
-            <div className="mb-5 rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-2 text-center text-xs text-yellow-800">
-              {t('mem.confirm.note')}
+            <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-center text-xs text-blue-800">
+              🔒 {t('mem.confirm.note')}
             </div>
             <div className="flex gap-3">
               <button

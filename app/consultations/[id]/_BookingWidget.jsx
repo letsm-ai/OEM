@@ -380,8 +380,8 @@ export default function BookingWidget({
                         {error}
                       </div>
                     )}
-                    <div className="mt-3 rounded-lg border border-yellow-200 bg-yellow-50 px-3 py-1.5 text-xs text-yellow-800">
-                      ⚠️ الدفع تجريبي — لن يتم خصم مبلغ فعلي
+                    <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs text-blue-800">
+                      🔒 الدفع يتم مباشرة مع الخبير — لا يتم تحصيل الدفع إلكترونياً في هذه المرحلة.
                     </div>
                   </div>
                 )}

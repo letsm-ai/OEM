@@ -235,21 +235,20 @@ export default function CheckoutClient({ tier, user, isLoggedIn = true }) {
               </div>
             </section>
 
-            {/* Payment */}
+            {/* Payment info banner (actual method selector lives in the summary) */}
             <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
               <div className="mb-3 flex items-center gap-2">
                 <CreditCard className="h-5 w-5 text-[#1B3A6B]" />
                 <h2 className="text-sm font-bold text-[#1B3A6B]">طريقة الدفع</h2>
               </div>
-              <label className="flex cursor-pointer items-center gap-3 rounded-xl border-2 border-[#1B3A6B] bg-[#1B3A6B]/5 p-3">
-                <input type="radio" defaultChecked className="h-4 w-4 accent-[#1B3A6B]" />
-                <div>
-                  <div className="text-sm font-bold text-[#1B3A6B]">دفع تجريبي (Mock)</div>
-                  <div className="text-[11px] text-gray-500">سيتم تفعيل بوابة Thawani / Stripe قريباً</div>
+              <div className="rounded-xl border-2 border-[#1B3A6B] bg-[#1B3A6B]/5 p-3 text-sm text-[#1B3A6B]">
+                <div className="font-bold">دفع آمن عبر بوابة Thawani 🔒</div>
+                <div className="mt-0.5 text-[11px] text-gray-600">
+                  اختر طريقة الدفع (بطاقة أو الدفع عند الاستلام) من ملخّص الطلب على اليمين.
                 </div>
-              </label>
+              </div>
               <div className="mt-3 flex items-center gap-1 text-[11px] text-gray-500">
-                <Lock className="h-3 w-3" /> المعاملات محمية ومشفّرة
+                <Lock className="h-3 w-3" /> المعاملات محمية ومشفّرة عبر Thawani (PCI-DSS)
               </div>
             </section>
           </div>
