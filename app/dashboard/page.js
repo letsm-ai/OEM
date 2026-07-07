@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { connectDB } from '@/lib/db'
-import { User } from '@/lib/models'
+import { User, VendorApplication } from '@/lib/models'
 import {
   TIER_META,
   TIER_DISCOUNT,
@@ -18,6 +18,10 @@ import {
   Percent,
   ArrowLeft,
   Sparkles,
+  Store,
+  Hourglass,
+  XCircle,
+  Lock,
 } from 'lucide-react'
 import PushToggleButton from '@/components/PushToggleButton'
 
@@ -51,6 +55,24 @@ export default async function DashboardPage() {
   const expiry = user.membershipExpiry
     ? formatArabicDate(user.membershipExpiry)
     : null
+
+  // ---- Vendor / store status for the "Create Store" quick action ----
+  const isVendor = user.role === 'VENDOR' || user.role === 'ADMIN'
+  const canApplyVendor = ['GOLD', 'PLATINUM'].includes(tier)
+  const vendorApp = !isVendor
+    ? await VendorApplication.findOne({ userId: session.user.id })
+        .sort({ createdAt: -1 })
+        .lean()
+    : null
+  const vendorState = isVendor
+    ? 'ACTIVE'
+    : vendorApp?.status === 'PENDING'
+      ? 'PENDING'
+      : vendorApp?.status === 'REJECTED'
+        ? 'REJECTED'
+        : canApplyVendor
+          ? 'CAN_APPLY'
+          : 'LOCKED'
 
   // Compute days remaining
   let daysLeft = null
@@ -197,6 +219,7 @@ export default async function DashboardPage() {
 
         {/* Quick links */}
         <div className="mt-8 grid gap-4 md:grid-cols-2">
+          <StoreQuickAction state={vendorState} />
           <QuickAction
             href="/consultations/my-bookings"
             title="استشاراتي المحجوزة"
@@ -265,6 +288,76 @@ function QuickAction({ href, title, desc }) {
         <div className="mt-1 text-xs text-gray-500">{desc}</div>
       </div>
       <ArrowLeft className="h-5 w-5 text-gray-400 transition group-hover:-translate-x-1 group-hover:text-[#C9A84C]" />
+    </Link>
+  )
+}
+
+/**
+ * "Create Store / My Store" quick-action card — contextual to the current
+ * user's role, tier and pending vendor application (mirrors /dashboard/vendor).
+ */
+function StoreQuickAction({ state }) {
+  const map = {
+    ACTIVE: {
+      title: 'متجري',
+      desc: 'إدارة المنتجات، الطلبات، والأرصدة',
+      badge: { text: 'نشِط', className: 'bg-green-100 text-green-700' },
+      icon: Store,
+      iconClass: 'text-green-600',
+    },
+    PENDING: {
+      title: 'طلب متجرك قيد المراجعة',
+      desc: 'سنشعرك فور اعتماد طلب فتح المتجر',
+      badge: { text: 'قيد المراجعة', className: 'bg-amber-100 text-amber-800' },
+      icon: Hourglass,
+      iconClass: 'text-amber-600',
+    },
+    REJECTED: {
+      title: 'أعد تقديم طلب المتجر',
+      desc: 'تم رفض طلبك السابق — عدّل البيانات وحاول مجدداً',
+      badge: { text: 'مرفوض', className: 'bg-red-100 text-red-700' },
+      icon: XCircle,
+      iconClass: 'text-red-500',
+    },
+    CAN_APPLY: {
+      title: 'افتح متجرك الآن',
+      desc: 'اعرض منتجاتك في المتجر الإلكتروني لأعضاء المجلس',
+      badge: { text: 'جديد', className: 'bg-[#C9A84C]/20 text-[#8a6f2d]' },
+      icon: Store,
+      iconClass: 'text-[#C9A84C]',
+    },
+    LOCKED: {
+      title: 'افتح متجرك الخاص',
+      desc: 'تحتاج عضوية ذهبية أو بلاتينية لفتح متجرك',
+      badge: { text: 'ذهبي فأعلى', className: 'bg-purple-100 text-purple-700' },
+      icon: Lock,
+      iconClass: 'text-gray-400',
+    },
+  }
+  const m = map[state] || map.CAN_APPLY
+  const Icon = m.icon
+  const href = state === 'LOCKED' ? '/membership' : '/dashboard/vendor'
+
+  return (
+    <Link
+      href={href}
+      className="group relative flex items-center justify-between overflow-hidden rounded-xl border border-gray-200 bg-gradient-to-bl from-white to-[#F8F9FA] p-5 transition hover:border-[#C9A84C] hover:shadow-md"
+    >
+      <div className="flex items-center gap-3">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white ring-1 ring-gray-100">
+          <Icon className={`h-5 w-5 ${m.iconClass}`} />
+        </div>
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="font-bold text-[#1B3A6B]">{m.title}</div>
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${m.badge.className}`}>
+              {m.badge.text}
+            </span>
+          </div>
+          <div className="mt-1 text-xs text-gray-500">{m.desc}</div>
+        </div>
+      </div>
+      <ArrowLeft className="h-5 w-5 shrink-0 text-gray-400 transition group-hover:-translate-x-1 group-hover:text-[#C9A84C]" />
     </Link>
   )
 }
