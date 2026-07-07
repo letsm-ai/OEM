@@ -4,7 +4,7 @@ import Link from 'next/link'
 import Image from 'next/image'
 import { useSession, signOut } from 'next-auth/react'
 import { useEffect, useState } from 'react'
-import { Menu, X, LogOut, User as UserIcon } from 'lucide-react'
+import { Menu, X, LogOut, User as UserIcon, BookOpen, Sparkles } from 'lucide-react'
 import { useI18n } from '@/lib/i18n/I18nContext'
 import LangSwitcher from '@/components/LangSwitcher'
 
@@ -67,6 +67,18 @@ export default function Navbar() {
               {l.label}
             </Link>
           ))}
+          {/* Highlighted User Guide — draws new users' attention */}
+          <Link
+            href="/help/user"
+            className="group relative inline-flex items-center gap-1.5 rounded-md bg-gradient-to-bl from-[#C9A84C] to-[#b89440] px-3 py-2 text-sm font-bold text-white shadow-sm ring-1 ring-[#C9A84C]/40 transition hover:shadow-md hover:brightness-110"
+          >
+            <BookOpen className="h-4 w-4" />
+            {t('nav.help')}
+            <span className="pointer-events-none absolute -top-1.5 -left-1.5 flex h-3 w-3 items-center justify-center">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-white/70 opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-white" />
+            </span>
+          </Link>
           {session?.user?.role === 'ADMIN' && (
             <>
               <Link
@@ -192,6 +204,16 @@ export default function Navbar() {
                 {l.label}
               </Link>
             ))}
+            {/* Highlighted User Guide in mobile menu */}
+            <Link
+              href="/help/user"
+              onClick={() => setOpen(false)}
+              className="inline-flex items-center justify-center gap-2 rounded-md bg-gradient-to-bl from-[#C9A84C] to-[#b89440] px-3 py-2.5 text-sm font-bold text-white shadow-sm ring-1 ring-[#C9A84C]/40"
+            >
+              <BookOpen className="h-4 w-4" />
+              {t('nav.help')}
+              <Sparkles className="h-3.5 w-3.5" />
+            </Link>
             <div className="my-2 h-px bg-gray-100" />
             <div className="px-3 py-1">
               <LangSwitcher variant="compact" />

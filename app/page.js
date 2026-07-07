@@ -39,12 +39,16 @@ async function getLandingData() {
         .limit(6)
         .lean(),
     ])
+    console.log(
+      `[landing] products=${products.length} experts=${experts.length} companies=${companies.length}`
+    )
     return {
       products: products.map((p) => ({ id: p._id, ...p, _id: undefined })),
       experts: experts.map((e) => ({ id: e._id, ...e, _id: undefined })),
       companies: companies.map((c) => ({ id: c._id, ...c, _id: undefined })),
     }
-  } catch {
+  } catch (e) {
+    console.error('[landing] fetch failed:', e?.message || e)
     return { products: [], experts: [], companies: [] }
   }
 }
