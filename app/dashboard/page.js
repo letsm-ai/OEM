@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { connectDB } from '@/lib/db'
-import { User, VendorApplication } from '@/lib/models'
+import { User, VendorApplication, Expert } from '@/lib/models'
 import {
   TIER_META,
   TIER_DISCOUNT,
@@ -78,6 +78,12 @@ export default async function DashboardPage() {
         : canApplyVendor
           ? 'CAN_APPLY'
           : 'LOCKED'
+
+  // ---- Expert profile detection (drives the "أرباحي" quick-action card) ----
+  const expertProfile = await Expert.findOne({ userId: session.user.id })
+    .select('status')
+    .lean()
+  const isApprovedExpert = expertProfile?.status === 'APPROVED'
 
   // ---- Trial + Free-mode state (drive dashboard banners) ----
   const trialPolicy = await getTrialPolicy()
@@ -331,6 +337,25 @@ export default async function DashboardPage() {
         {/* Quick links */}
         <div className="mt-8 grid gap-4 md:grid-cols-2">
           <StoreQuickAction state={vendorState} />
+          {isApprovedExpert && (
+            <Link
+              href="/dashboard/expert"
+              className="group relative flex items-center justify-between gap-3 overflow-hidden rounded-xl border border-emerald-200 bg-gradient-to-bl from-emerald-50 to-white p-5 transition hover:border-emerald-500 hover:shadow-md"
+            >
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-[#1B3A6B]">أرباحي (لوحة الخبير)</span>
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                    خبير معتمد
+                  </span>
+                </div>
+                <div className="mt-1 text-xs text-gray-500">
+                  إجمالي الجلسات، الدخل، عمولة المنصّة، وصافي مستحقّاتك
+                </div>
+              </div>
+              <ArrowLeft className="h-5 w-5 text-emerald-600 transition group-hover:-translate-x-1" />
+            </Link>
+          )}
           <QuickAction
             href="/consultations/my-bookings"
             title="استشاراتي المحجوزة"

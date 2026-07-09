@@ -40,6 +40,7 @@ import {
   handleExpertSlots,
   handleExpertDetail,
   handleAppointmentBook,
+  handleExpertEarnings,
   handleAppointmentsList,
   handleAppointmentCancel,
   handleAppointmentReview,
@@ -1129,6 +1130,11 @@ async function handleRoute(request, { params }) {
     // ---- GET /experts/me ----
     if (route === '/experts/me' && method === 'GET') {
       return handleExpertMe()
+    }
+
+    // ---- GET /experts/me/earnings ----
+    if (route === '/experts/me/earnings' && method === 'GET') {
+      return handleCORS(await handleExpertEarnings())
     }
 
     // ---- PUT /experts/me ----
