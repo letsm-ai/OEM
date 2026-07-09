@@ -35,10 +35,21 @@ export default function SettingsClient() {
   const load = async () => {
     setLoading(true)
     try {
-      const res = await fetch('/api/admin/settings')
+      const res = await fetch('/api/admin/settings', { credentials: 'include' })
+      if (res.status === 401) {
+        window.location.href =
+          '/login?callbackUrl=' + encodeURIComponent('/admin/settings')
+        return
+      }
+      if (res.status === 403) {
+        setToast({ type: 'error', msg: 'صلاحيات غير كافية — تحتاج حساب أدمن' })
+        return
+      }
       const d = await res.json()
       if (res.ok) setS(d.settings)
-      else setToast({ type: 'error', msg: d.error || 'تعذر التحميل' })
+      else setToast({ type: 'error', msg: friendlyError(d.error) })
+    } catch {
+      setToast({ type: 'error', msg: 'تعذّر الاتصال بالخادم' })
     } finally {
       setLoading(false)
     }
@@ -68,22 +79,51 @@ export default function SettingsClient() {
       }
       const res = await fetch('/api/admin/settings', {
         method: 'PATCH',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       })
-      const d = await res.json()
+      if (res.status === 401) {
+        setToast({
+          type: 'error',
+          msg: 'انتهت جلستك — سيتم توجيهك لتسجيل الدخول',
+        })
+        setTimeout(() => {
+          window.location.href =
+            '/login?callbackUrl=' + encodeURIComponent('/admin/settings')
+        }, 1500)
+        return
+      }
+      if (res.status === 403) {
+        setToast({ type: 'error', msg: 'صلاحيات غير كافية — تحتاج حساب أدمن' })
+        return
+      }
+      const d = await res.json().catch(() => ({}))
       if (!res.ok) {
-        setToast({ type: 'error', msg: d.error || 'تعذر الحفظ' })
+        setToast({ type: 'error', msg: friendlyError(d.error) })
         return
       }
       setS(d.settings)
-      setToast({ type: 'ok', msg: 'تم الحفظ بنجاح! التغييرات فعالة خلال 30 ثانية للجميع.' })
+      setToast({
+        type: 'ok',
+        msg: 'تم الحفظ بنجاح! التغييرات فعّالة خلال 30 ثانية للجميع.',
+      })
       setTimeout(() => setToast(null), 5000)
     } catch {
-      setToast({ type: 'error', msg: 'تعذر الاتصال بالخادم' })
+      setToast({ type: 'error', msg: 'تعذّر الاتصال بالخادم' })
     } finally {
       setSaving(false)
     }
+  }
+
+  // Map raw backend error codes to friendly Arabic messages
+  function friendlyError(code) {
+    const map = {
+      auth: 'انتهت جلستك — الرجاء تسجيل الدخول مجدداً',
+      forbidden: 'صلاحيات غير كافية — تحتاج حساب أدمن',
+      no_changes: 'لم تُعدَّل أي حقول',
+    }
+    return map[code] || code || 'تعذّر الحفظ'
   }
 
   if (loading || !s) {
