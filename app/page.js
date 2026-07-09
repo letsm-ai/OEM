@@ -161,21 +161,21 @@ export default async function LandingPage() {
       </section>
 
       {/* FEATURED PRODUCTS */}
-      {products.length > 0 && (
-        <section className="bg-white py-16">
-          <div className="container mx-auto px-4">
-            <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
-              <div>
-                <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-[#C9A84C]/10 px-3 py-1 text-xs font-medium text-[#1B3A6B]">
-                  <Sparkles className="h-3.5 w-3.5 text-[#C9A84C]" /> {t('products.badge')}
-                </div>
-                <h2 className="text-2xl font-bold text-[#1B3A6B] md:text-3xl">{t('products.title')}</h2>
-                <p className="mt-1 text-sm text-gray-500">{t('products.subtitle')}</p>
+      <section className="bg-white py-16">
+        <div className="container mx-auto px-4">
+          <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-[#C9A84C]/10 px-3 py-1 text-xs font-medium text-[#1B3A6B]">
+                <Sparkles className="h-3.5 w-3.5 text-[#C9A84C]" /> {t('products.badge')}
               </div>
-              <Link href="/store" className="inline-flex items-center gap-1.5 rounded-lg border border-[#1B3A6B] bg-white px-4 py-2 text-sm font-semibold text-[#1B3A6B] hover:bg-[#1B3A6B] hover:text-white">
-                {t('products.viewAll')} <ArrowLeft className={`h-4 w-4 ${isAr ? '' : 'rotate-180'}`} />
-              </Link>
+              <h2 className="text-2xl font-bold text-[#1B3A6B] md:text-3xl">{t('products.title')}</h2>
+              <p className="mt-1 text-sm text-gray-500">{t('products.subtitle')}</p>
             </div>
+            <Link href="/store" className="inline-flex items-center gap-1.5 rounded-lg border border-[#1B3A6B] bg-white px-4 py-2 text-sm font-semibold text-[#1B3A6B] hover:bg-[#1B3A6B] hover:text-white">
+              {t('products.viewAll')} <ArrowLeft className={`h-4 w-4 ${isAr ? '' : 'rotate-180'}`} />
+            </Link>
+          </div>
+          {products.length > 0 ? (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
               {products.map((p) => (
                 <Link key={p.id} href={`/store/${p.id}`} className="group overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm transition hover:shadow-md">
@@ -202,25 +202,40 @@ export default async function LandingPage() {
                 </Link>
               ))}
             </div>
-          </div>
-        </section>
-      )}
+          ) : (
+            <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-[#C9A84C]/40 bg-gradient-to-bl from-[#C9A84C]/5 to-white px-6 py-14 text-center">
+              <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-[#C9A84C]/10 text-[#C9A84C]">
+                <ShoppingBag className="h-7 w-7" />
+              </div>
+              <h3 className="text-lg font-bold text-[#1B3A6B]">{t('empty.products.title')}</h3>
+              <p className="mt-2 max-w-md text-sm text-gray-500">{t('empty.products.desc')}</p>
+              <Link
+                href="/signup?role=vendor"
+                className="mt-5 inline-flex items-center gap-2 rounded-lg bg-[#C9A84C] px-5 py-2.5 text-sm font-semibold text-[#1B3A6B] shadow-sm transition hover:bg-[#b89440]"
+              >
+                {t('empty.products.cta')}
+                <ArrowLeft className={`h-4 w-4 ${isAr ? '' : 'rotate-180'}`} />
+              </Link>
+            </div>
+          )}
+        </div>
+      </section>
 
       {/* TOP EXPERTS */}
-      {experts.length > 0 && (
-        <section className="container mx-auto px-4 py-16">
-          <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700">
-                <GraduationCap className="h-3.5 w-3.5" /> {t('experts.badge')}
-              </div>
-              <h2 className="text-2xl font-bold text-[#1B3A6B] md:text-3xl">{t('experts.title')}</h2>
-              <p className="mt-1 text-sm text-gray-500">{t('experts.subtitle')}</p>
+      <section className="container mx-auto px-4 py-16">
+        <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700">
+              <GraduationCap className="h-3.5 w-3.5" /> {t('experts.badge')}
             </div>
-            <Link href="/consultations" className="inline-flex items-center gap-1.5 rounded-lg border border-[#1B3A6B] bg-white px-4 py-2 text-sm font-semibold text-[#1B3A6B] hover:bg-[#1B3A6B] hover:text-white">
-              {t('experts.viewAll')} <ArrowLeft className={`h-4 w-4 ${isAr ? '' : 'rotate-180'}`} />
-            </Link>
+            <h2 className="text-2xl font-bold text-[#1B3A6B] md:text-3xl">{t('experts.title')}</h2>
+            <p className="mt-1 text-sm text-gray-500">{t('experts.subtitle')}</p>
           </div>
+          <Link href="/consultations" className="inline-flex items-center gap-1.5 rounded-lg border border-[#1B3A6B] bg-white px-4 py-2 text-sm font-semibold text-[#1B3A6B] hover:bg-[#1B3A6B] hover:text-white">
+            {t('experts.viewAll')} <ArrowLeft className={`h-4 w-4 ${isAr ? '' : 'rotate-180'}`} />
+          </Link>
+        </div>
+        {experts.length > 0 ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {experts.map((e) => (
               <Link key={e.id} href={`/expert/${e.id}`} className="group rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-indigo-300 hover:shadow-md">
@@ -238,26 +253,40 @@ export default async function LandingPage() {
               </Link>
             ))}
           </div>
-        </section>
-      )}
+        ) : (
+          <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-indigo-200 bg-gradient-to-bl from-indigo-50/50 to-white px-6 py-14 text-center">
+            <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-indigo-100 text-indigo-600">
+              <GraduationCap className="h-7 w-7" />
+            </div>
+            <h3 className="text-lg font-bold text-[#1B3A6B]">{t('empty.experts.title')}</h3>
+            <p className="mt-2 max-w-md text-sm text-gray-500">{t('empty.experts.desc')}</p>
+            <Link
+              href="/dashboard/expert-application"
+              className="mt-5 inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700"
+            >
+              {t('empty.experts.cta')}
+              <ArrowLeft className={`h-4 w-4 ${isAr ? '' : 'rotate-180'}`} />
+            </Link>
+          </div>
+        )}
+      </section>
 
       {/* RECENTLY JOINED COMPANIES */}
-      {companies.length > 0 && (
-        <section className="bg-white py-16">
-          <div className="container mx-auto px-4">
-            <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
-              <div>
-                <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-700">
-                  <Building2 className="h-3.5 w-3.5" /> {t('companies.badge')}
-                </div>
-                <h2 className="text-2xl font-bold text-[#1B3A6B] md:text-3xl">{t('companies.title')}</h2>
-                <p className="mt-1 text-sm text-gray-500">{t('companies.subtitle')}</p>
+      <section className="bg-white py-16">
+        <div className="container mx-auto px-4">
+          <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-700">
+                <Building2 className="h-3.5 w-3.5" /> {t('companies.badge')}
               </div>
-              <Link href="/directory" className="inline-flex items-center gap-1.5 rounded-lg border border-[#1B3A6B] bg-white px-4 py-2 text-sm font-semibold text-[#1B3A6B] hover:bg-[#1B3A6B] hover:text-white">
-                {t('companies.viewAll')} <ArrowLeft className={`h-4 w-4 ${isAr ? '' : 'rotate-180'}`} />
-              </Link>
+              <h2 className="text-2xl font-bold text-[#1B3A6B] md:text-3xl">{t('companies.title')}</h2>
+              <p className="mt-1 text-sm text-gray-500">{t('companies.subtitle')}</p>
             </div>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <Link href="/directory" className="inline-flex items-center gap-1.5 rounded-lg border border-[#1B3A6B] bg-white px-4 py-2 text-sm font-semibold text-[#1B3A6B] hover:bg-[#1B3A6B] hover:text-white">
+              {t('companies.viewAll')} <ArrowLeft className={`h-4 w-4 ${isAr ? '' : 'rotate-180'}`} />
+            </Link>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {companies.map((c) => (
                 <Link key={c.id} href={`/directory/${c.id}`} className="group rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition hover:border-cyan-300 hover:shadow-md">
                   <div className="flex items-start gap-3">
@@ -277,9 +306,24 @@ export default async function LandingPage() {
                 </Link>
               ))}
             </div>
+          {companies.length === 0 && (
+            <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-cyan-200 bg-gradient-to-bl from-cyan-50/50 to-white px-6 py-14 text-center">
+              <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-cyan-100 text-cyan-600">
+                <Building2 className="h-7 w-7" />
+              </div>
+              <h3 className="text-lg font-bold text-[#1B3A6B]">{t('empty.companies.title')}</h3>
+              <p className="mt-2 max-w-md text-sm text-gray-500">{t('empty.companies.desc')}</p>
+              <Link
+                href="/directory/register"
+                className="mt-5 inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-cyan-700"
+              >
+                {t('empty.companies.cta')}
+                <ArrowLeft className={`h-4 w-4 ${isAr ? '' : 'rotate-180'}`} />
+              </Link>
+            </div>
+          )}
           </div>
         </section>
-      )}
 
       {/* VALUE PROPS */}
       <section className="bg-[#F8F9FA] py-20">
