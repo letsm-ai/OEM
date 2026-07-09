@@ -62,7 +62,8 @@ export default async function DashboardPage() {
 
   // ---- Vendor / store status for the "Create Store" quick action ----
   const isVendor = user.role === 'VENDOR' || user.role === 'ADMIN'
-  const canApplyVendor = ['GOLD', 'PLATINUM'].includes(tier)
+  // Everyone can open a store now (FREE tier gets 5-product cap enforced at product-create time).
+  const canApplyVendor = true
   const vendorApp = !isVendor
     ? await VendorApplication.findOne({ userId: session.user.id })
         .sort({ createdAt: -1 })
