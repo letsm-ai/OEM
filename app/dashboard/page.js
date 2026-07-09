@@ -193,6 +193,32 @@ export default async function DashboardPage() {
           </div>
         </div>
 
+        {/* ADMIN quick-access banner — visible ONLY for admins */}
+        {user.role === 'ADMIN' && (
+          <Link
+            href="/admin"
+            className="group mb-8 flex items-center justify-between gap-3 overflow-hidden rounded-2xl border-2 border-red-500/30 bg-gradient-to-l from-red-600 via-red-500 to-rose-500 p-5 text-white shadow-lg transition hover:shadow-xl hover:brightness-110"
+          >
+            <div className="flex items-center gap-4">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/20 backdrop-blur ring-2 ring-white/30">
+                <Shield className="h-6 w-6" />
+              </div>
+              <div>
+                <div className="text-base font-extrabold md:text-lg">
+                  لوحة التحكّم الإدارية
+                </div>
+                <div className="text-xs opacity-95">
+                  إدارة المستخدمين، الإعدادات، المدفوعات، والمزيد
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 rounded-xl bg-white/15 px-3 py-2 text-xs font-bold ring-1 ring-white/30 transition group-hover:bg-white/25">
+              دخول
+              <ArrowLeft className="h-4 w-4 transition group-hover:-translate-x-1" />
+            </div>
+          </Link>
+        )}
+
         {/* Membership card */}
         <div className="mb-8 overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-4 border-b border-gray-100 bg-gradient-to-bl from-[#F8F9FA] to-white px-6 py-4">
