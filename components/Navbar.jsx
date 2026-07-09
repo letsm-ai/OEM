@@ -4,7 +4,7 @@ import Link from 'next/link'
 import Image from 'next/image'
 import { useSession, signOut } from 'next-auth/react'
 import { useEffect, useState } from 'react'
-import { Menu, X, LogOut, User as UserIcon, BookOpen, Sparkles } from 'lucide-react'
+import { Menu, X, LogOut, User as UserIcon, BookOpen, Sparkles, Shield } from 'lucide-react'
 import { useI18n } from '@/lib/i18n/I18nContext'
 import LangSwitcher from '@/components/LangSwitcher'
 
@@ -80,44 +80,13 @@ export default function Navbar() {
             </span>
           </Link>
           {session?.user?.role === 'ADMIN' && (
-            <>
-              <Link
-                href="/admin/analytics"
-                className="inline-flex items-center gap-1 rounded-md bg-[#1B3A6B] px-3 py-2 text-sm font-semibold text-white hover:bg-[#152c52]"
-              >
-                {t('nav.admin.stats')}
-              </Link>
-              <Link
-                href="/admin/companies"
-                className="inline-flex items-center gap-1 rounded-md bg-[#C9A84C]/20 px-3 py-2 text-sm font-semibold text-[#8a6f2d] hover:bg-[#C9A84C]/30"
-              >
-                {t('nav.admin.companies')}
-              </Link>
-              <Link
-                href="/admin/experts"
-                className="inline-flex items-center gap-1 rounded-md bg-[#C9A84C]/20 px-3 py-2 text-sm font-semibold text-[#8a6f2d] hover:bg-[#C9A84C]/30"
-              >
-                {t('nav.admin.experts')}
-              </Link>
-              <Link
-                href="/admin/vendor-applications"
-                className="inline-flex items-center gap-1 rounded-md bg-[#C9A84C]/20 px-3 py-2 text-sm font-semibold text-[#8a6f2d] hover:bg-[#C9A84C]/30"
-              >
-                {t('nav.admin.vendors')}
-              </Link>
-              <Link
-                href="/admin/coupons"
-                className="inline-flex items-center gap-1 rounded-md bg-[#C9A84C]/20 px-3 py-2 text-sm font-semibold text-[#8a6f2d] hover:bg-[#C9A84C]/30"
-              >
-                {t('nav.admin.coupons')}
-              </Link>
-              <Link
-                href="/admin/payouts"
-                className="inline-flex items-center gap-1 rounded-md bg-[#C9A84C]/20 px-3 py-2 text-sm font-semibold text-[#8a6f2d] hover:bg-[#C9A84C]/30"
-              >
-                {t('nav.admin.payouts')}
-              </Link>
-            </>
+            <Link
+              href="/admin"
+              className="inline-flex items-center gap-1.5 rounded-md bg-[#1B3A6B] px-3 py-2 text-sm font-semibold text-white hover:bg-[#152c52]"
+            >
+              <Shield className="h-4 w-4" />
+              {t('nav.admin.panel')}
+            </Link>
           )}
           {session?.user?.role === 'EXPERT' && (
             <Link
@@ -218,6 +187,16 @@ export default function Navbar() {
             <div className="px-3 py-1">
               <LangSwitcher variant="compact" />
             </div>
+            {session?.user?.role === 'ADMIN' && (
+              <Link
+                href="/admin"
+                onClick={() => setOpen(false)}
+                className="inline-flex items-center justify-center gap-2 rounded-md bg-[#1B3A6B] px-3 py-2.5 text-sm font-semibold text-white"
+              >
+                <Shield className="h-4 w-4" />
+                {t('nav.admin.panel')}
+              </Link>
+            )}
             {session?.user ? (
               <>
                 <div className="px-3 py-2 text-sm text-gray-600">
