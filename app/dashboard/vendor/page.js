@@ -17,7 +17,9 @@ export default async function VendorDashboardPage() {
   const user = await User.findById(session.user.id).lean()
   const isVendor = user?.role === 'VENDOR' || user?.role === 'ADMIN'
   const tier = user?.membershipTier || 'FREE'
-  const canApply = ['GOLD', 'PLATINUM'].includes(tier)
+  // Everyone can apply as a vendor now — FREE tier is limited to 5 products
+  // (enforced at product-create time). Higher tiers get unlimited products.
+  const canApply = true
 
   if (isVendor) {
     return <VendorDashboardClient />

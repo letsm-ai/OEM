@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2, Send, AlertTriangle } from 'lucide-react'
+import VendorAgreementGate from '@/components/VendorAgreementGate'
 
 export default function VendorApplyFormClient() {
   const router = useRouter()
@@ -11,6 +12,7 @@ export default function VendorApplyFormClient() {
   const [phone, setPhone] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [agreementAccepted, setAgreementAccepted] = useState(false)
 
   const submit = async (e) => {
     e.preventDefault()
@@ -20,15 +22,37 @@ export default function VendorApplyFormClient() {
     const res = await fetch('/api/vendor/apply', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ businessName, businessDescription, phone }),
+      body: JSON.stringify({
+        businessName,
+        businessDescription,
+        phone,
+        agreementAccepted: true, // gate is enforced before this render
+      }),
     })
     const data = await res.json().catch(() => ({}))
     setLoading(false)
     if (!res.ok) return setError(data.error || 'تعذّر إرسال الطلب')
     router.refresh()
   }
+
+  // Stage 1: mandatory vendor contract acceptance
+  if (!agreementAccepted) {
+    return (
+      <div className="mt-4">
+        <VendorAgreementGate onAccept={() => setAgreementAccepted(true)} />
+      </div>
+    )
+  }
+
+  // Stage 2: business details form
   return (
     <form onSubmit={submit} className="mt-4 space-y-3">
+      <div className="mb-3 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-2.5 text-xs text-emerald-800">
+        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-600 text-[10px] font-bold text-white">
+          ✓
+        </span>
+        تمّت الموافقة على عقد البائع — تابع بإدخال بيانات المتجر
+      </div>
       <div>
         <label className="mb-1 block text-xs font-medium text-gray-700">اسم المتجر/النشاط *</label>
         <input
