@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Loader2, Upload, X, CheckCircle2 } from 'lucide-react'
 import { SPECIALTIES } from '@/lib/experts'
 import { SocialFormFields } from '@/components/SocialIcons'
+import ExpertAgreementGate from '@/components/ExpertAgreementGate'
 
 const MAX_PHOTO = 500 * 1024
 const MAX_CV = 2 * 1024 * 1024 // 2MB for CV
@@ -31,6 +32,7 @@ export default function BecomeExpertForm() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [done, setDone] = useState(false)
+  const [agreementAccepted, setAgreementAccepted] = useState(false)
 
   const onPhoto = (e) => {
     const f = e.target.files?.[0]
@@ -80,6 +82,7 @@ export default function BecomeExpertForm() {
       email: form.email,
       website: form.website,
       social: form.social,
+      agreementAccepted: true, // gate is enforced by ExpertAgreementGate before this render
     }
     try {
       const res = await fetch('/api/experts/apply', {
@@ -113,6 +116,15 @@ export default function BecomeExpertForm() {
       </div>
     )
   }
+
+  // Stage 1: mandatory contract acceptance — show first, before the form.
+  if (!agreementAccepted) {
+    return (
+      <ExpertAgreementGate onAccept={() => setAgreementAccepted(true)} />
+    )
+  }
+
+  // Stage 2: application form (only reachable after accepting the contract)
 
   return (
     <form
