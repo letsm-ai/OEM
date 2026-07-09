@@ -15,6 +15,8 @@ import {
   handleMembershipVerify,
   handleMembershipHistory,
   handleMembershipDiscount,
+  handleMembershipStartTrial,
+  handleMembershipTrialStatus,
 } from '@/lib/api/membership'
 import {
   handleCompaniesList,
@@ -119,6 +121,10 @@ import {
   handleAdminOptOutExport,
   handleAdminOptOutDelete,
 } from '@/lib/api/unsubscribe'
+import {
+  handleAdminSettingsGet,
+  handleAdminSettingsPatch,
+} from '@/lib/api/admin-settings'
 import {
   validateCouponForUser,
   handleCouponValidate,
@@ -383,6 +389,14 @@ async function handleRoute(request, { params }) {
     const adminOptOutMatch = route.match(/^\/admin\/email-optouts\/([^/]+)$/)
     if (adminOptOutMatch && method === 'DELETE') {
       return handleCORS(await handleAdminOptOutDelete(adminOptOutMatch[1]))
+    }
+
+    // -------- Admin: Site Settings (prices, discounts, free-mode, trial, etc.) --------
+    if (route === '/admin/settings' && method === 'GET') {
+      return handleCORS(await handleAdminSettingsGet())
+    }
+    if (route === '/admin/settings' && method === 'PATCH') {
+      return handleCORS(await handleAdminSettingsPatch(request))
     }
 
     // -------- SIGNUP --------
@@ -739,6 +753,12 @@ async function handleRoute(request, { params }) {
     }
     if (route === '/membership/discount' && method === 'POST') {
       return handleMembershipDiscount(request)
+    }
+    if (route === '/membership/start-trial' && method === 'POST') {
+      return handleCORS(await handleMembershipStartTrial(request))
+    }
+    if (route === '/membership/trial-status' && method === 'GET') {
+      return handleCORS(await handleMembershipTrialStatus())
     }
 
     /* ============================================================

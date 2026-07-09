@@ -16,6 +16,7 @@ import {
   Bell,
   BookOpen,
   MailX,
+  Sliders,
   ArrowLeft,
 } from 'lucide-react'
 
@@ -46,6 +47,7 @@ export default async function AdminHubPage() {
     { href: '/admin/coupons', label: 'الكوبونات', desc: 'إنشاء وإدارة الخصومات', Icon: Tag, color: 'from-rose-500 to-rose-700' },
     { href: '/admin/notifications', label: 'الإشعارات', desc: 'إرسال إشعارات Push للمشتركين', Icon: Bell, color: 'from-teal-500 to-teal-700' },
     { href: '/admin/email-optouts', label: 'إلغاء اشتراك الإيميل', desc: 'إدارة قائمة الملغين وتصدير CSV', Icon: MailX, color: 'from-red-500 to-red-700' },
+    { href: '/admin/settings', label: 'إعدادات المنصّة', desc: 'الأسعار، المجانية الشاملة، التجربة المجانية', Icon: Sliders, color: 'from-indigo-500 to-indigo-700' },
     { href: '/help/admin', label: 'دليل الأدمن', desc: 'مرجع شامل لإدارة المنصة', Icon: BookOpen, color: 'from-slate-500 to-slate-700' },
   ]
 

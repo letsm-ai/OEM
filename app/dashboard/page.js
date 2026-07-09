@@ -9,6 +9,7 @@ import {
   TIER_DISCOUNT,
   formatArabicDate,
 } from '@/lib/membership'
+import { getTrialPolicy, isFreeModeActive, getSettings } from '@/lib/settings'
 import {
   User as UserIcon,
   Mail,
@@ -22,8 +23,11 @@ import {
   Hourglass,
   XCircle,
   Lock,
+  Gift,
+  Zap,
 } from 'lucide-react'
 import PushToggleButton from '@/components/PushToggleButton'
+import TrialStartButton from '@/components/TrialStartButton'
 
 const ROLE_LABELS = {
   ADMIN: 'مسؤول',
@@ -74,6 +78,26 @@ export default async function DashboardPage() {
           ? 'CAN_APPLY'
           : 'LOCKED'
 
+  // ---- Trial + Free-mode state (drive dashboard banners) ----
+  const trialPolicy = await getTrialPolicy()
+  const freeModeActive = await isFreeModeActive()
+  const settings = await getSettings()
+  const now = new Date()
+  const isOnTrial =
+    user.trialUsed &&
+    user.trialEnd &&
+    new Date(user.trialEnd) > now &&
+    tier !== 'FREE'
+  const trialDaysLeft = isOnTrial
+    ? Math.max(0, Math.ceil((new Date(user.trialEnd) - now) / (1000 * 60 * 60 * 24)))
+    : 0
+  const canStartTrial =
+    trialPolicy.enabled &&
+    !user.trialUsed &&
+    (tier === 'FREE' ||
+      !user.membershipExpiry ||
+      new Date(user.membershipExpiry) <= now)
+
   // Compute days remaining
   let daysLeft = null
   if (user.membershipExpiry) {
@@ -84,6 +108,66 @@ export default async function DashboardPage() {
   return (
     <div className="container mx-auto px-4 py-10">
       <div className="mx-auto max-w-5xl">
+        {/* Free-mode banner (site-wide promo controlled by admin) */}
+        {freeModeActive && (settings.freeMode.bannerAr || settings.freeMode.bannerEn) && (
+          <div className="mb-6 flex items-center gap-3 rounded-2xl border border-amber-300 bg-gradient-to-l from-amber-50 to-amber-100 p-4 text-amber-900 shadow-sm">
+            <Zap className="h-8 w-8 shrink-0 text-amber-500" />
+            <div className="flex-1 text-sm font-bold">
+              {settings.freeMode.bannerAr || settings.freeMode.bannerEn}
+            </div>
+            <Link
+              href="/membership"
+              className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-bold text-white hover:bg-amber-600"
+            >
+              اشترك الآن
+            </Link>
+          </div>
+        )}
+
+        {/* Trial in progress banner */}
+        {isOnTrial && (
+          <div className="mb-6 flex items-center gap-3 rounded-2xl border border-purple-200 bg-gradient-to-l from-purple-50 to-white p-4 shadow-sm">
+            <Gift className="h-8 w-8 shrink-0 text-purple-500" />
+            <div className="flex-1">
+              <div className="text-sm font-bold text-purple-900">
+                أنت في تجربة مجانية لباقة {tierMeta.nameAr}
+              </div>
+              <div className="mt-0.5 text-xs text-purple-700">
+                تبقّى <span className="font-extrabold">{trialDaysLeft}</span> يوم من تجربتك — اشترك قبل الانتهاء للاستمرار.
+              </div>
+            </div>
+            <Link
+              href="/membership"
+              className="rounded-lg bg-purple-500 px-3 py-1.5 text-xs font-bold text-white hover:bg-purple-600"
+            >
+              اشترك
+            </Link>
+          </div>
+        )}
+
+        {/* Trial CTA for eligible new users */}
+        {canStartTrial && !isOnTrial && !freeModeActive && (
+          <div className="mb-6 rounded-2xl border border-[#C9A84C]/40 bg-gradient-to-l from-[#C9A84C]/10 to-white p-5 shadow-sm">
+            <div className="mb-3 flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#C9A84C] text-white">
+                <Gift className="h-5 w-5" />
+              </div>
+              <div>
+                <div className="text-base font-extrabold text-[#1B3A6B]">
+                  🎁 جرّب أي باقة مدفوعة مجاناً لمدة {trialPolicy.durationDays} يوم!
+                </div>
+                <div className="mt-0.5 text-xs text-gray-600">
+                  استكشف جميع المزايا بدون أي دفع — تجربة لمرة واحدة لكل مستخدم.
+                </div>
+              </div>
+            </div>
+            <TrialStartButton
+              allowedTier={trialPolicy.allowedTier || ''}
+              durationDays={trialPolicy.durationDays}
+            />
+          </div>
+        )}
+
         {/* Welcome */}
         <div className="mb-8 rounded-2xl bg-gradient-to-bl from-[#1B3A6B] to-[#152c52] p-8 text-white">
           <div className="flex flex-wrap items-center justify-between gap-4">

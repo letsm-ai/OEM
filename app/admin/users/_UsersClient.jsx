@@ -107,6 +107,37 @@ export default function UsersClient({ currentUserId }) {
         ))}
       </div>
 
+      {/* Tier filter cards — quick view of members per plan */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {[
+          { tier: 'FREE',     label: 'مجاني',    count: t.byTier?.FREE || 0,     color: 'from-gray-500 to-gray-700',   ring: 'ring-gray-200' },
+          { tier: 'BASIC',    label: 'أساسي',    count: t.byTier?.BASIC || 0,    color: 'from-blue-500 to-blue-700',   ring: 'ring-blue-200' },
+          { tier: 'GOLD',     label: 'ذهبي',     count: t.byTier?.GOLD || 0,     color: 'from-[#C9A84C] to-[#8a6f2d]', ring: 'ring-[#C9A84C]/40' },
+          { tier: 'PLATINUM', label: 'بلاتيني',  count: t.byTier?.PLATINUM || 0, color: 'from-purple-500 to-purple-700', ring: 'ring-purple-200' },
+        ].map((c) => {
+          const active = filters.tier === c.tier
+          return (
+            <button
+              key={c.tier}
+              onClick={() => {
+                setFilters({ ...filters, tier: active ? '' : c.tier })
+                setPage(1)
+              }}
+              className={`group relative overflow-hidden rounded-xl border bg-white p-4 text-right shadow-sm transition hover:shadow-md ${
+                active ? `border-transparent ring-2 ${c.ring}` : 'border-gray-200'
+              }`}
+            >
+              <div className={`pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-l ${c.color}`} />
+              <div className="text-xs font-semibold text-gray-500">{c.label}</div>
+              <div className="mt-1 text-2xl font-extrabold text-[#1B3A6B]">{c.count}</div>
+              <div className="mt-1 text-[11px] text-gray-400">
+                {active ? 'اضغط لإلغاء التصفية' : 'اضغط للتصفية'}
+              </div>
+            </button>
+          )
+        })}
+      </div>
+
       {/* Filters */}
       <div className="rounded-2xl border border-gray-200 bg-white p-3 shadow-sm">
         <div className="flex flex-wrap items-center gap-2">
