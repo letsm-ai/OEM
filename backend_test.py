@@ -1,540 +1,648 @@
 #!/usr/bin/env python3
 """
-Backend test for Thawani Payment Integration - Membership Subscriptions
-Tests the three endpoints with focus on webhook (which doesn't require auth)
+ROUTE SPLIT REGRESSION TEST — Phase 2 & 3
+Tests 24 API routes moved from catch-all to dedicated files.
 """
 
 import requests
-import json
 import time
-import hmac
-import hashlib
-from datetime import datetime, timedelta
+import json
 from pymongo import MongoClient
 import bcrypt
+from datetime import datetime, timedelta
+import uuid
 
-# Configuration
-BASE_URL = "http://localhost:3000"
-API_BASE = f"{BASE_URL}/api"
+BASE_URL = "https://omani-startup-hub.preview.emergentagent.com/api"
 MONGO_URL = "mongodb://localhost:27017/majles"
-WEBHOOK_SECRET = "whsec_En5ST9J899HlRYvQw3i9Xio9VZj0MR"
 
-def get_mongo_client():
-    """Get MongoDB client"""
-    return MongoClient(MONGO_URL)
+# Test user credentials
+TIMESTAMP = int(time.time())
+MEMBER_EMAIL = f"route_test_member_{TIMESTAMP}@test.com"
+ADMIN_EMAIL = f"route_test_admin_{TIMESTAMP}@test.com"
+GOLD_EMAIL = f"route_test_gold_{TIMESTAMP}@test.com"
+PASSWORD = "Password123"
 
-def compute_hmac_signature(raw_body, timestamp, secret):
-    """Compute HMAC-SHA256 signature for Thawani webhook"""
-    text = f"{raw_body}-{timestamp}"
-    signature = hmac.new(
-        secret.encode('ascii'),
-        text.encode('ascii'),
-        hashlib.sha256
-    ).hexdigest()
-    return signature
+print("=" * 80)
+print("ROUTE SPLIT REGRESSION TEST — 24 Routes")
+print("=" * 80)
 
-def test_subscribe_unauthenticated():
-    """Test A1: POST /api/membership/subscribe without auth"""
-    print("\n" + "="*80)
-    print("TEST A1: POST /api/membership/subscribe (Unauthenticated)")
-    print("="*80)
-    
+# MongoDB connection
+client = MongoClient(MONGO_URL)
+db = client['majles']
+
+def create_test_user(email, name, role="MEMBER", tier="FREE"):
+    """Create a test user via signup and promote via MongoDB"""
     try:
-        response = requests.post(f"{API_BASE}/membership/subscribe", json={"tier": "BASIC"})
-        if response.status_code == 401:
-            print("✅ A1 PASSED: Unauthenticated request returns 401")
-            return True
-        else:
-            print(f"❌ A1 FAILED: Expected 401, got {response.status_code}")
-            return False
+        # Signup
+        resp = requests.post(f"{BASE_URL}/signup", json={
+            "name": name,
+            "email": email,
+            "password": PASSWORD
+        }, timeout=10)
+        
+        if resp.status_code != 200:
+            print(f"❌ Signup failed for {email}: {resp.status_code} {resp.text[:200]}")
+            return None
+        
+        user_data = resp.json()
+        user_id = user_data.get("user", {}).get("id")
+        
+        # Promote role and tier via MongoDB
+        if role != "MEMBER" or tier != "FREE":
+            update_data = {}
+            if role != "MEMBER":
+                update_data["role"] = role
+            if tier != "FREE":
+                update_data["membershipTier"] = tier
+                update_data["membershipExpiry"] = datetime.utcnow() + timedelta(days=365)
+            
+            db.users.update_one({"_id": user_id}, {"$set": update_data})
+        
+        print(f"✅ Created user: {email} (role={role}, tier={tier})")
+        return user_id
     except Exception as e:
-        print(f"❌ A1 FAILED: {e}")
-        return False
+        print(f"❌ Error creating user {email}: {e}")
+        return None
 
-def test_verify_unauthenticated():
-    """Test B1: POST /api/membership/verify without auth"""
-    print("\n" + "="*80)
-    print("TEST B1: POST /api/membership/verify (Unauthenticated)")
-    print("="*80)
-    
+def login_user(email, password):
+    """Login via NextAuth and return session"""
     try:
-        response = requests.post(f"{API_BASE}/membership/verify", json={"membershipId": "test"})
-        if response.status_code == 401:
-            print("✅ B1 PASSED: Unauthenticated request returns 401")
-            return True
-        else:
-            print(f"❌ B1 FAILED: Expected 401, got {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"❌ B1 FAILED: {e}")
-        return False
-
-def test_webhook_signature_validation():
-    """Test C1: Webhook signature validation"""
-    print("\n" + "="*80)
-    print("TEST C1: POST /api/webhooks/thawani (Signature Validation)")
-    print("="*80)
-    
-    results = {"no_signature": False, "bad_signature": False}
-    
-    payload = {"event_type": "checkout.completed", "data": {}}
-    raw_body = json.dumps(payload)
-    timestamp = str(int(time.time()))
-    
-    # Test with no signature
-    try:
-        response = requests.post(
-            f"{API_BASE}/webhooks/thawani",
-            data=raw_body,
-            headers={"Content-Type": "application/json"}
-        )
-        if response.status_code == 401:
-            print("✅ C1a PASSED: No signature returns 401")
-            results["no_signature"] = True
-        else:
-            print(f"❌ C1a FAILED: Expected 401, got {response.status_code}")
-    except Exception as e:
-        print(f"❌ C1a FAILED: {e}")
-    
-    # Test with bad signature
-    try:
-        response = requests.post(
-            f"{API_BASE}/webhooks/thawani",
-            data=raw_body,
-            headers={
-                "Content-Type": "application/json",
-                "thawani-signature": "bad_signature",
-                "thawani-timestamp": timestamp
-            }
-        )
-        if response.status_code == 401:
-            print("✅ C1b PASSED: Bad signature returns 401")
-            results["bad_signature"] = True
-        else:
-            print(f"❌ C1b FAILED: Expected 401, got {response.status_code}")
-    except Exception as e:
-        print(f"❌ C1b FAILED: {e}")
-    
-    return results["no_signature"] and results["bad_signature"]
-
-def test_webhook_checkout_completed():
-    """Test C2: Webhook checkout.completed event"""
-    print("\n" + "="*80)
-    print("TEST C2: POST /api/webhooks/thawani (checkout.completed)")
-    print("="*80)
-    
-    try:
-        # Create a test user and PENDING membership directly in DB
-        client = get_mongo_client()
-        db = client["majles"]
+        session = requests.Session()
         
-        timestamp = int(time.time())
-        user_id = f"test_user_webhook_{timestamp}"
+        # Get CSRF token
+        csrf_resp = session.get(f"{BASE_URL}/auth/csrf", timeout=10)
+        csrf_token = csrf_resp.json().get("csrfToken")
         
-        # Create user
-        hashed = bcrypt.hashpw("Password123".encode('utf-8'), bcrypt.gensalt())
-        user_doc = {
-            "_id": user_id,
-            "name": f"Test User {timestamp}",
-            "email": f"test_webhook_{timestamp}@test.com",
-            "password": hashed.decode('utf-8'),
-            "role": "MEMBER",
-            "membershipTier": "FREE",
-            "membershipExpiry": None,
-            "phone": "",
-            "photo": "",
-            "createdAt": datetime.utcnow(),
-            "updatedAt": datetime.utcnow()
-        }
-        db.users.insert_one(user_doc)
-        print(f"✅ Created test user: {user_doc['email']}")
-        
-        # Create PENDING membership
-        now = datetime.utcnow()
-        end_date = now + timedelta(days=365)
-        membership_id = f"test_mem_{timestamp}"
-        session_id = f"test_session_{timestamp}"
-        
-        membership_doc = {
-            "_id": membership_id,
-            "userId": user_id,
-            "tier": "BASIC",
-            "startDate": now,
-            "endDate": end_date,
-            "amountPaid": 50,
-            "paymentStatus": "PENDING",
-            "thawaniSessionId": session_id,
-            "createdAt": now,
-            "updatedAt": now
-        }
-        db.memberships.insert_one(membership_doc)
-        print(f"✅ Created PENDING membership: {membership_id}")
-        
-        # Send webhook with valid HMAC
-        payload = {
-            "event_type": "checkout.completed",
-            "data": {
-                "session_id": session_id,
-                "metadata": {
-                    "kind": "membership",
-                    "membership_id": membership_id
-                }
-            }
-        }
-        raw_body = json.dumps(payload)
-        webhook_timestamp = str(int(time.time()))
-        signature = compute_hmac_signature(raw_body, webhook_timestamp, WEBHOOK_SECRET)
-        
-        response = requests.post(
-            f"{API_BASE}/webhooks/thawani",
-            data=raw_body,
-            headers={
-                "Content-Type": "application/json",
-                "thawani-signature": signature,
-                "thawani-timestamp": webhook_timestamp
-            }
+        # Login
+        login_resp = session.post(
+            f"{BASE_URL}/auth/callback/credentials",
+            data={
+                "csrfToken": csrf_token,
+                "email": email,
+                "password": password,
+                "callbackUrl": "/",
+                "json": "true"
+            },
+            timeout=10
         )
         
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("received") == True:
-                print("✅ C2 WEBHOOK RECEIVED: 200 with received:true")
-                
-                # Wait for async processing
-                time.sleep(2)
-                
-                # Verify DB changes
-                membership = db.memberships.find_one({"_id": membership_id})
-                user = db.users.find_one({"_id": user_id})
-                
-                if not membership:
-                    print("❌ C2 FAILED: Membership not found in DB")
-                    return False
-                
-                if not user:
-                    print("❌ C2 FAILED: User not found in DB")
-                    return False
-                
-                # Check membership status
-                if membership.get("paymentStatus") != "PAID":
-                    print(f"❌ C2 FAILED: Membership.paymentStatus should be PAID, got {membership.get('paymentStatus')}")
-                    return False
-                
-                print(f"✅ C2 DB CHECK: Membership.paymentStatus = {membership.get('paymentStatus')}")
-                
-                # Check user tier
-                if user.get("membershipTier") != "BASIC":
-                    print(f"❌ C2 FAILED: User.membershipTier should be BASIC, got {user.get('membershipTier')}")
-                    return False
-                
-                print(f"✅ C2 DB CHECK: User.membershipTier = {user.get('membershipTier')}")
-                
-                # Check user expiry
-                if not user.get("membershipExpiry"):
-                    print(f"❌ C2 FAILED: User.membershipExpiry not set")
-                    return False
-                
-                print(f"✅ C2 DB CHECK: User.membershipExpiry = {user.get('membershipExpiry')}")
-                
-                print("✅ C2 PASSED: checkout.completed activates membership correctly")
-                return True
-            else:
-                print(f"❌ C2 FAILED: Response incorrect: {data}")
-                return False
+        if login_resp.status_code == 200:
+            print(f"✅ Logged in: {email}")
+            return session
         else:
-            print(f"❌ C2 FAILED: Expected 200, got {response.status_code} - {response.text}")
-            return False
+            print(f"❌ Login failed for {email}: {login_resp.status_code}")
+            return None
     except Exception as e:
-        print(f"❌ C2 FAILED: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        print(f"❌ Login error for {email}: {e}")
+        return None
 
-def test_webhook_idempotency():
-    """Test C3: Webhook idempotency"""
-    print("\n" + "="*80)
-    print("TEST C3: POST /api/webhooks/thawani (Idempotency)")
-    print("="*80)
+# Setup: Create test users
+print("\n" + "=" * 80)
+print("SETUP: Creating test users")
+print("=" * 80)
+
+member_id = create_test_user(MEMBER_EMAIL, "Test Member", "MEMBER", "FREE")
+admin_id = create_test_user(ADMIN_EMAIL, "Test Admin", "ADMIN", "PLATINUM")
+gold_id = create_test_user(GOLD_EMAIL, "Test Gold User", "MEMBER", "GOLD")
+
+if not all([member_id, admin_id, gold_id]):
+    print("❌ Failed to create test users. Exiting.")
+    exit(1)
+
+# Login sessions
+member_session = login_user(MEMBER_EMAIL, PASSWORD)
+admin_session = login_user(ADMIN_EMAIL, PASSWORD)
+gold_session = login_user(GOLD_EMAIL, PASSWORD)
+
+if not all([member_session, admin_session, gold_session]):
+    print("❌ Failed to login test users. Exiting.")
+    exit(1)
+
+# Test counters
+total_tests = 0
+passed_tests = 0
+failed_tests = 0
+
+def test_endpoint(name, method, path, session=None, expected_status=None, body=None, description=""):
+    """Test an endpoint and track results"""
+    global total_tests, passed_tests, failed_tests
+    total_tests += 1
     
     try:
-        # Create a test user and PAID membership
-        client = get_mongo_client()
-        db = client["majles"]
+        url = f"{BASE_URL}{path}"
         
-        timestamp = int(time.time())
-        user_id = f"test_user_idempotent_{timestamp}"
-        
-        # Create user
-        hashed = bcrypt.hashpw("Password123".encode('utf-8'), bcrypt.gensalt())
-        user_doc = {
-            "_id": user_id,
-            "name": f"Test User {timestamp}",
-            "email": f"test_idempotent_{timestamp}@test.com",
-            "password": hashed.decode('utf-8'),
-            "role": "MEMBER",
-            "membershipTier": "BASIC",  # Already activated
-            "membershipExpiry": datetime.utcnow() + timedelta(days=365),
-            "phone": "",
-            "photo": "",
-            "createdAt": datetime.utcnow(),
-            "updatedAt": datetime.utcnow()
-        }
-        db.users.insert_one(user_doc)
-        
-        # Create PAID membership
-        now = datetime.utcnow()
-        end_date = now + timedelta(days=365)
-        membership_id = f"test_mem_paid_{timestamp}"
-        session_id = f"test_session_paid_{timestamp}"
-        
-        membership_doc = {
-            "_id": membership_id,
-            "userId": user_id,
-            "tier": "BASIC",
-            "startDate": now,
-            "endDate": end_date,
-            "amountPaid": 50,
-            "paymentStatus": "PAID",  # Already paid
-            "thawaniSessionId": session_id,
-            "createdAt": now,
-            "updatedAt": now
-        }
-        db.memberships.insert_one(membership_doc)
-        print(f"✅ Created PAID membership: {membership_id}")
-        
-        # Send webhook (replay)
-        payload = {
-            "event_type": "checkout.completed",
-            "data": {
-                "session_id": session_id,
-                "metadata": {
-                    "kind": "membership",
-                    "membership_id": membership_id
-                }
-            }
-        }
-        raw_body = json.dumps(payload)
-        webhook_timestamp = str(int(time.time()))
-        signature = compute_hmac_signature(raw_body, webhook_timestamp, WEBHOOK_SECRET)
-        
-        response = requests.post(
-            f"{API_BASE}/webhooks/thawani",
-            data=raw_body,
-            headers={
-                "Content-Type": "application/json",
-                "thawani-signature": signature,
-                "thawani-timestamp": webhook_timestamp
-            }
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("received") == True:
-                print("✅ C3 WEBHOOK RECEIVED: 200 with received:true (idempotent)")
-                
-                # Wait a bit
-                time.sleep(1)
-                
-                # Verify DB unchanged
-                membership = db.memberships.find_one({"_id": membership_id})
-                user = db.users.find_one({"_id": user_id})
-                
-                if (membership and membership.get("paymentStatus") == "PAID" and
-                    user and user.get("membershipTier") == "BASIC"):
-                    print("✅ C3 PASSED: Replay doesn't re-modify (idempotent)")
-                    return True
-                else:
-                    print(f"❌ C3 FAILED: DB state changed unexpectedly")
-                    return False
-            else:
-                print(f"❌ C3 FAILED: Response incorrect: {data}")
-                return False
+        if method == "GET":
+            resp = session.get(url, timeout=10) if session else requests.get(url, timeout=10)
+        elif method == "POST":
+            resp = session.post(url, json=body, timeout=10) if session else requests.post(url, json=body, timeout=10)
+        elif method == "PUT":
+            resp = session.put(url, json=body, timeout=10) if session else requests.put(url, json=body, timeout=10)
+        elif method == "DELETE":
+            resp = session.delete(url, timeout=10) if session else requests.delete(url, timeout=10)
         else:
-            print(f"❌ C3 FAILED: Expected 200, got {response.status_code}")
-            return False
+            print(f"❌ {name}: Unknown method {method}")
+            failed_tests += 1
+            return None
+        
+        if expected_status and resp.status_code != expected_status:
+            print(f"❌ {name}: Expected {expected_status}, got {resp.status_code} - {description}")
+            print(f"   Response: {resp.text[:200]}")
+            failed_tests += 1
+            return None
+        
+        print(f"✅ {name}: {resp.status_code} - {description}")
+        passed_tests += 1
+        return resp
     except Exception as e:
-        print(f"❌ C3 FAILED: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        print(f"❌ {name}: Exception - {e}")
+        failed_tests += 1
+        return None
 
-def test_webhook_payment_failed():
-    """Test C4: Webhook payment.failed event"""
-    print("\n" + "="*80)
-    print("TEST C4: POST /api/webhooks/thawani (payment.failed)")
-    print("="*80)
-    
-    try:
-        # Create a test user and PENDING membership
-        client = get_mongo_client()
-        db = client["majles"]
-        
-        timestamp = int(time.time())
-        user_id = f"test_user_failed_{timestamp}"
-        
-        # Create user
-        hashed = bcrypt.hashpw("Password123".encode('utf-8'), bcrypt.gensalt())
-        user_doc = {
-            "_id": user_id,
-            "name": f"Test User {timestamp}",
-            "email": f"test_failed_{timestamp}@test.com",
-            "password": hashed.decode('utf-8'),
-            "role": "MEMBER",
-            "membershipTier": "FREE",
-            "membershipExpiry": None,
-            "phone": "",
-            "photo": "",
-            "createdAt": datetime.utcnow(),
-            "updatedAt": datetime.utcnow()
-        }
-        db.users.insert_one(user_doc)
-        
-        # Create PENDING membership
-        now = datetime.utcnow()
-        end_date = now + timedelta(days=365)
-        membership_id = f"test_mem_fail_{timestamp}"
-        session_id = f"test_session_fail_{timestamp}"
-        
-        membership_doc = {
-            "_id": membership_id,
-            "userId": user_id,
-            "tier": "GOLD",
-            "startDate": now,
-            "endDate": end_date,
-            "amountPaid": 100,
-            "paymentStatus": "PENDING",
-            "thawaniSessionId": session_id,
-            "createdAt": now,
-            "updatedAt": now
-        }
-        db.memberships.insert_one(membership_doc)
-        print(f"✅ Created PENDING membership: {membership_id}")
-        print(f"   User tier before: {user_doc['membershipTier']}")
-        
-        # Send payment.failed webhook
-        payload = {
-            "event_type": "payment.failed",
-            "data": {
-                "session_id": session_id,
-                "client_reference_id": f"mem_{membership_id}"
-            }
-        }
-        raw_body = json.dumps(payload)
-        webhook_timestamp = str(int(time.time()))
-        signature = compute_hmac_signature(raw_body, webhook_timestamp, WEBHOOK_SECRET)
-        
-        response = requests.post(
-            f"{API_BASE}/webhooks/thawani",
-            data=raw_body,
-            headers={
-                "Content-Type": "application/json",
-                "thawani-signature": signature,
-                "thawani-timestamp": webhook_timestamp
-            }
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("received") == True:
-                print("✅ C4 WEBHOOK RECEIVED: 200 with received:true")
-                
-                # Wait for async processing
-                time.sleep(1)
-                
-                # Verify DB changes
-                membership = db.memberships.find_one({"_id": membership_id})
-                user = db.users.find_one({"_id": user_id})
-                
-                if not membership:
-                    print("❌ C4 FAILED: Membership not found in DB")
-                    return False
-                
-                if not user:
-                    print("❌ C4 FAILED: User not found in DB")
-                    return False
-                
-                # Check membership status changed to FAILED
-                if membership.get("paymentStatus") != "FAILED":
-                    print(f"❌ C4 FAILED: Membership.paymentStatus should be FAILED, got {membership.get('paymentStatus')}")
-                    return False
-                
-                print(f"✅ C4 DB CHECK: Membership.paymentStatus = {membership.get('paymentStatus')}")
-                
-                # Check user tier UNCHANGED (still FREE)
-                if user.get("membershipTier") != "FREE":
-                    print(f"❌ C4 FAILED: User.membershipTier should remain FREE, got {user.get('membershipTier')}")
-                    return False
-                
-                print(f"✅ C4 DB CHECK: User.membershipTier = {user.get('membershipTier')} (unchanged)")
-                
-                print("✅ C4 PASSED: payment.failed sets membership to FAILED, user tier unchanged")
-                return True
-            else:
-                print(f"❌ C4 FAILED: Response incorrect: {data}")
-                return False
-        else:
-            print(f"❌ C4 FAILED: Expected 200, got {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"❌ C4 FAILED: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+# ============================================================================
+# MEMBERSHIP ROUTES (6)
+# ============================================================================
+print("\n" + "=" * 80)
+print("MEMBERSHIP ROUTES (6)")
+print("=" * 80)
 
-def main():
-    """Main test runner"""
-    print("="*80)
-    print("THAWANI PAYMENT INTEGRATION - MEMBERSHIP SUBSCRIPTIONS TEST")
-    print("="*80)
-    print(f"Base URL: {BASE_URL}")
-    print(f"MongoDB: {MONGO_URL}")
-    print(f"Timestamp: {datetime.now().isoformat()}")
-    print("\nNOTE: Authentication tests (A2-A6, B2-B5) require NextAuth session")
-    print("      which cannot be easily automated. Testing unauthenticated")
-    print("      endpoints and webhook functionality.")
-    
-    results = {}
-    
-    # Test A1: Subscribe unauthenticated
-    results["A1_subscribe_unauth"] = test_subscribe_unauthenticated()
-    
-    # Test B1: Verify unauthenticated
-    results["B1_verify_unauth"] = test_verify_unauthenticated()
-    
-    # Test C1: Webhook signature validation
-    results["C1_webhook_signature"] = test_webhook_signature_validation()
-    
-    # Test C2: Webhook checkout.completed
-    results["C2_webhook_completed"] = test_webhook_checkout_completed()
-    
-    # Test C3: Webhook idempotency
-    results["C3_webhook_idempotency"] = test_webhook_idempotency()
-    
-    # Test C4: Webhook payment.failed
-    results["C4_webhook_failed"] = test_webhook_payment_failed()
-    
-    # Print summary
-    print("\n" + "="*80)
-    print("TEST SUMMARY")
-    print("="*80)
-    
-    passed = sum(1 for v in results.values() if v)
-    total = len(results)
-    
-    for test_name, passed_flag in results.items():
-        status = "✅ PASSED" if passed_flag else "❌ FAILED"
-        print(f"{status}: {test_name}")
-    
-    print(f"\n{'='*80}")
-    print(f"TOTAL: {passed}/{total} tests passed ({int(passed/total*100)}%)")
-    print(f"{'='*80}\n")
-    
-    print("\n📝 AUTHENTICATION NOTE:")
-    print("   The following tests require authenticated sessions and cannot be")
-    print("   easily automated with NextAuth's browser-based flow:")
-    print("   - A2-A6: Subscribe endpoint with various tiers")
-    print("   - B2-B5: Verify endpoint with various scenarios")
-    print("   These should be tested manually or with a browser automation tool.")
+# 1. POST /api/membership/subscribe
+test_endpoint(
+    "M1-Auth", "POST", "/membership/subscribe",
+    session=None, expected_status=401,
+    body={"tier": "BASIC"},
+    description="Unauthenticated → 401"
+)
 
-if __name__ == "__main__":
-    main()
+test_endpoint(
+    "M1-Valid", "POST", "/membership/subscribe",
+    session=member_session, expected_status=200,
+    body={"tier": "BASIC"},
+    description="Valid subscription"
+)
+
+# 2. POST /api/membership/verify
+test_endpoint(
+    "M2-Auth", "POST", "/membership/verify",
+    session=None, expected_status=401,
+    body={"membershipId": "test"},
+    description="Unauthenticated → 401"
+)
+
+# 3. GET /api/membership/history
+test_endpoint(
+    "M3-Auth", "GET", "/membership/history",
+    session=None, expected_status=401,
+    description="Unauthenticated → 401"
+)
+
+test_endpoint(
+    "M3-Valid", "GET", "/membership/history",
+    session=member_session, expected_status=200,
+    description="Valid history retrieval"
+)
+
+# 4. POST /api/membership/discount
+test_endpoint(
+    "M4-Auth", "POST", "/membership/discount",
+    session=None, expected_status=200,
+    body={"price": 100},
+    description="No auth → FREE tier discount (0%)"
+)
+
+test_endpoint(
+    "M4-Valid", "POST", "/membership/discount",
+    session=admin_session, expected_status=200,
+    body={"price": 100},
+    description="PLATINUM tier discount (30%)"
+)
+
+# 5. POST /api/membership/start-trial
+test_endpoint(
+    "M5-Auth", "POST", "/membership/start-trial",
+    session=None, expected_status=401,
+    description="Unauthenticated → 401"
+)
+
+# 6. GET /api/membership/trial-status (public endpoint)
+test_endpoint(
+    "M6-NoAuth", "GET", "/membership/trial-status",
+    session=None, expected_status=200,
+    description="Public access → 200 (loggedIn: false)"
+)
+
+test_endpoint(
+    "M6-Valid", "GET", "/membership/trial-status",
+    session=member_session, expected_status=200,
+    description="Authenticated → 200 (loggedIn: true)"
+)
+
+# ============================================================================
+# COMPANIES ROUTES (6)
+# ============================================================================
+print("\n" + "=" * 80)
+print("COMPANIES ROUTES (6)")
+print("=" * 80)
+
+# Create test company for admin
+test_company_id = str(uuid.uuid4())
+db.companies.insert_one({
+    "_id": test_company_id,
+    "userId": admin_id,
+    "nameAr": "شركة اختبار",
+    "nameEn": "Test Company",
+    "description": "وصف الشركة",
+    "sector": "TECH",
+    "governorate": "MUSCAT",
+    "status": "PENDING",
+    "isApproved": False,
+    "createdAt": datetime.utcnow()
+})
+print(f"✅ Created test company: {test_company_id}")
+
+# 1. GET /api/companies (public)
+test_endpoint(
+    "C1-Public", "GET", "/companies",
+    session=None, expected_status=200,
+    description="Public list (no auth required)"
+)
+
+# 2. POST /api/companies (auth + BASIC+)
+test_endpoint(
+    "C2-Auth", "POST", "/companies",
+    session=None, expected_status=401,
+    body={"nameAr": "شركة", "sector": "TECH"},
+    description="Unauthenticated → 401"
+)
+
+test_endpoint(
+    "C2-Tier", "POST", "/companies",
+    session=member_session, expected_status=403,
+    body={"nameAr": "شركة اختبار", "sector": "TECH"},
+    description="FREE tier → 403"
+)
+
+# 3. GET /api/companies/:id (public if APPROVED)
+test_endpoint(
+    "C3-Pending", "GET", f"/companies/{test_company_id}",
+    session=None, expected_status=404,
+    description="PENDING company without auth → 404"
+)
+
+test_endpoint(
+    "C3-Owner", "GET", f"/companies/{test_company_id}",
+    session=admin_session, expected_status=200,
+    description="Owner can access PENDING company"
+)
+
+# 4. PUT /api/companies/:id (owner or admin)
+test_endpoint(
+    "C4-Auth", "PUT", f"/companies/{test_company_id}",
+    session=None, expected_status=401,
+    body={"description": "تحديث"},
+    description="Unauthenticated → 401"
+)
+
+test_endpoint(
+    "C4-Valid", "PUT", f"/companies/{test_company_id}",
+    session=admin_session, expected_status=200,
+    body={"description": "تحديث الوصف"},
+    description="Owner update"
+)
+
+# 5. GET /api/my-companies (auth)
+test_endpoint(
+    "C5-Auth", "GET", "/my-companies",
+    session=None, expected_status=401,
+    description="Unauthenticated → 401"
+)
+
+test_endpoint(
+    "C5-Valid", "GET", "/my-companies",
+    session=admin_session, expected_status=200,
+    description="Valid my-companies list"
+)
+
+# 6. GET /api/admin/companies (ADMIN only)
+test_endpoint(
+    "C6-Auth", "GET", "/admin/companies",
+    session=None, expected_status=401,
+    description="Unauthenticated → 401"
+)
+
+test_endpoint(
+    "C6-Role", "GET", "/admin/companies",
+    session=member_session, expected_status=403,
+    description="MEMBER → 403"
+)
+
+test_endpoint(
+    "C6-Valid", "GET", "/admin/companies",
+    session=admin_session, expected_status=200,
+    description="ADMIN access"
+)
+
+# 7. POST /api/admin/companies/:id/approve (ADMIN only)
+test_endpoint(
+    "C7-Auth", "POST", f"/admin/companies/{test_company_id}/approve",
+    session=None, expected_status=401,
+    description="Unauthenticated → 401"
+)
+
+test_endpoint(
+    "C7-Role", "POST", f"/admin/companies/{test_company_id}/approve",
+    session=member_session, expected_status=403,
+    description="MEMBER → 403"
+)
+
+test_endpoint(
+    "C7-Valid", "POST", f"/admin/companies/{test_company_id}/approve",
+    session=admin_session, expected_status=200,
+    description="ADMIN approve"
+)
+
+# 8. POST /api/admin/companies/:id/reject (ADMIN only)
+# Create another test company for rejection
+test_company_id_2 = str(uuid.uuid4())
+db.companies.insert_one({
+    "_id": test_company_id_2,
+    "userId": admin_id,
+    "nameAr": "شركة اختبار 2",
+    "nameEn": "Test Company 2",
+    "description": "وصف",
+    "sector": "TECH",
+    "governorate": "MUSCAT",
+    "status": "PENDING",
+    "isApproved": False,
+    "createdAt": datetime.utcnow()
+})
+
+test_endpoint(
+    "C8-Auth", "POST", f"/admin/companies/{test_company_id_2}/reject",
+    session=None, expected_status=401,
+    body={"reason": "سبب الرفض"},
+    description="Unauthenticated → 401"
+)
+
+test_endpoint(
+    "C8-Role", "POST", f"/admin/companies/{test_company_id_2}/reject",
+    session=member_session, expected_status=403,
+    body={"reason": "سبب الرفض"},
+    description="MEMBER → 403"
+)
+
+test_endpoint(
+    "C8-Valid", "POST", f"/admin/companies/{test_company_id_2}/reject",
+    session=admin_session, expected_status=200,
+    body={"reason": "سبب الرفض"},
+    description="ADMIN reject"
+)
+
+# 9. DELETE /api/companies/:id (owner or admin)
+test_endpoint(
+    "C9-Auth", "DELETE", f"/companies/{test_company_id_2}",
+    session=None, expected_status=401,
+    description="Unauthenticated → 401"
+)
+
+test_endpoint(
+    "C9-Valid", "DELETE", f"/companies/{test_company_id_2}",
+    session=admin_session, expected_status=200,
+    description="Owner delete"
+)
+
+# ============================================================================
+# EXPERTS ROUTES (12)
+# ============================================================================
+print("\n" + "=" * 80)
+print("EXPERTS ROUTES (12)")
+print("=" * 80)
+
+# Create test expert for admin
+test_expert_id = str(uuid.uuid4())
+db.experts.insert_one({
+    "_id": test_expert_id,
+    "userId": admin_id,
+    "specialty": "LEGAL",
+    "specialtyAr": "استشارات قانونية",
+    "hourlyRate": 25,
+    "bio": "خبير قانوني",
+    "status": "PENDING",
+    "isApproved": False,
+    "rating": 0,
+    "totalSessions": 0,
+    "createdAt": datetime.utcnow()
+})
+print(f"✅ Created test expert: {test_expert_id}")
+
+# 1. GET /api/experts (public)
+test_endpoint(
+    "E1-Public", "GET", "/experts",
+    session=None, expected_status=200,
+    description="Public list (no auth required)"
+)
+
+# 2. POST /api/experts/apply (auth + GOLD+)
+test_endpoint(
+    "E2-Auth", "POST", "/experts/apply",
+    session=None, expected_status=401,
+    body={"specialty": "LEGAL", "hourlyRate": 25},
+    description="Unauthenticated → 401"
+)
+
+test_endpoint(
+    "E2-Tier", "POST", "/experts/apply",
+    session=member_session, expected_status=403,
+    body={"specialty": "LEGAL", "hourlyRate": 25},
+    description="FREE/BASIC tier → 403"
+)
+
+# 3. GET /api/experts/me (auth)
+test_endpoint(
+    "E3-Auth", "GET", "/experts/me",
+    session=None, expected_status=401,
+    description="Unauthenticated → 401"
+)
+
+test_endpoint(
+    "E3-Valid", "GET", "/experts/me",
+    session=admin_session, expected_status=200,
+    description="Valid expert profile"
+)
+
+# 4. PUT /api/experts/me (auth + expert)
+test_endpoint(
+    "E4-Auth", "PUT", "/experts/me",
+    session=None, expected_status=401,
+    body={"bio": "تحديث"},
+    description="Unauthenticated → 401"
+)
+
+# 5. GET /api/experts/me/earnings (auth + expert)
+test_endpoint(
+    "E5-Auth", "GET", "/experts/me/earnings",
+    session=None, expected_status=401,
+    description="Unauthenticated → 401"
+)
+
+# 6. PUT /api/experts/me/availability (auth + expert)
+test_endpoint(
+    "E6-Auth", "PUT", "/experts/me/availability",
+    session=None, expected_status=401,
+    body={"availability": []},
+    description="Unauthenticated → 401"
+)
+
+# 7. GET /api/experts/:id (public if APPROVED)
+test_endpoint(
+    "E7-Pending", "GET", f"/experts/{test_expert_id}",
+    session=None, expected_status=404,
+    description="PENDING expert without auth → 404"
+)
+
+test_endpoint(
+    "E7-Owner", "GET", f"/experts/{test_expert_id}",
+    session=admin_session, expected_status=200,
+    description="Owner can access PENDING expert"
+)
+
+# 8. GET /api/experts/:id/reviews (public)
+test_endpoint(
+    "E8-Public", "GET", f"/experts/{test_expert_id}/reviews",
+    session=None, expected_status=200,
+    description="Public reviews (no auth required)"
+)
+
+# 9. GET /api/experts/:id/availability (public)
+test_endpoint(
+    "E9-Public", "GET", f"/experts/{test_expert_id}/availability",
+    session=None, expected_status=200,
+    description="Public availability (no auth required)"
+)
+
+# 10. GET /api/experts/:id/slots (public)
+test_endpoint(
+    "E10-Public", "GET", f"/experts/{test_expert_id}/slots?date=2026-05-01",
+    session=None, expected_status=200,
+    description="Public slots (no auth required)"
+)
+
+# 11. GET /api/admin/experts (ADMIN only)
+test_endpoint(
+    "E11-Auth", "GET", "/admin/experts",
+    session=None, expected_status=401,
+    description="Unauthenticated → 401"
+)
+
+test_endpoint(
+    "E11-Role", "GET", "/admin/experts",
+    session=member_session, expected_status=403,
+    description="MEMBER → 403"
+)
+
+test_endpoint(
+    "E11-Valid", "GET", "/admin/experts",
+    session=admin_session, expected_status=200,
+    description="ADMIN access"
+)
+
+# 12. POST /api/admin/experts/:id/approve (ADMIN only)
+test_endpoint(
+    "E12-Auth", "POST", f"/admin/experts/{test_expert_id}/approve",
+    session=None, expected_status=401,
+    description="Unauthenticated → 401"
+)
+
+test_endpoint(
+    "E12-Role", "POST", f"/admin/experts/{test_expert_id}/approve",
+    session=member_session, expected_status=403,
+    description="MEMBER → 403"
+)
+
+test_endpoint(
+    "E12-Valid", "POST", f"/admin/experts/{test_expert_id}/approve",
+    session=admin_session, expected_status=200,
+    description="ADMIN approve"
+)
+
+# 13. POST /api/admin/experts/:id/reject (ADMIN only)
+# Create another test expert for rejection
+test_expert_id_2 = str(uuid.uuid4())
+db.experts.insert_one({
+    "_id": test_expert_id_2,
+    "userId": gold_id,
+    "specialty": "LEGAL",
+    "specialtyAr": "استشارات قانونية",
+    "hourlyRate": 25,
+    "bio": "خبير",
+    "status": "PENDING",
+    "isApproved": False,
+    "rating": 0,
+    "totalSessions": 0,
+    "createdAt": datetime.utcnow()
+})
+
+test_endpoint(
+    "E13-Auth", "POST", f"/admin/experts/{test_expert_id_2}/reject",
+    session=None, expected_status=401,
+    body={"reason": "سبب الرفض"},
+    description="Unauthenticated → 401"
+)
+
+test_endpoint(
+    "E13-Role", "POST", f"/admin/experts/{test_expert_id_2}/reject",
+    session=member_session, expected_status=403,
+    body={"reason": "سبب الرفض"},
+    description="MEMBER → 403"
+)
+
+test_endpoint(
+    "E13-Valid", "POST", f"/admin/experts/{test_expert_id_2}/reject",
+    session=admin_session, expected_status=200,
+    body={"reason": "سبب الرفض"},
+    description="ADMIN reject"
+)
+
+# ============================================================================
+# REGRESSION CHECK: Test endpoint NOT moved
+# ============================================================================
+print("\n" + "=" * 80)
+print("REGRESSION CHECK: Catch-all still works")
+print("=" * 80)
+
+test_endpoint(
+    "R1-CatchAll", "GET", "/",
+    session=None, expected_status=200,
+    description="GET /api/ still works (catch-all)"
+)
+
+test_endpoint(
+    "R2-Me", "GET", "/me",
+    session=admin_session, expected_status=200,
+    description="GET /api/me still works (catch-all)"
+)
+
+# ============================================================================
+# SUMMARY
+# ============================================================================
+print("\n" + "=" * 80)
+print("TEST SUMMARY")
+print("=" * 80)
+print(f"Total tests: {total_tests}")
+print(f"✅ Passed: {passed_tests}")
+print(f"❌ Failed: {failed_tests}")
+print(f"Success rate: {(passed_tests/total_tests*100):.1f}%")
+print("=" * 80)
+
+if failed_tests == 0:
+    print("🎉 ALL TESTS PASSED!")
+else:
+    print(f"⚠️  {failed_tests} test(s) failed. Review output above.")
+
+# Cleanup
+print("\n" + "=" * 80)
+print("CLEANUP: Removing test data")
+print("=" * 80)
+db.users.delete_many({"email": {"$in": [MEMBER_EMAIL, ADMIN_EMAIL, GOLD_EMAIL]}})
+db.companies.delete_many({"_id": {"$in": [test_company_id, test_company_id_2]}})
+db.experts.delete_many({"_id": {"$in": [test_expert_id, test_expert_id_2]}})
+print("✅ Cleanup complete")

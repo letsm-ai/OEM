@@ -10,43 +10,15 @@ import { User, Membership, PasswordResetToken, Company, Expert, Availability, Ap
 import {
   handleShippingQuote,
 } from '@/lib/api/shipping'
+// NOTE: membership handlers now imported directly by dedicated files under
+//       /app/app/api/membership/**
+// NOTE: company handlers now imported directly by dedicated files under
+//       /app/app/api/companies/** and /app/app/api/admin/companies/**
 import {
-  handleMembershipSubscribe,
-  handleMembershipVerify,
-  handleMembershipHistory,
-  handleMembershipDiscount,
-  handleMembershipStartTrial,
-  handleMembershipTrialStatus,
-} from '@/lib/api/membership'
-import {
-  handleCompaniesList,
-  handleCompanyCreate,
-  handleCompanyDetail,
-  handleCompanyUpdate,
-  handleCompanyDelete,
-  handleMyCompanies,
-  handleAdminCompaniesList,
-  handleAdminCompanyApprove,
-  handleAdminCompanyReject,
-} from '@/lib/api/companies'
-import {
-  handleExpertsList,
-  handleExpertApply,
-  handleExpertMe,
-  handleExpertMeUpdate,
-  handleExpertAvailabilityUpdate,
-  handleExpertReviews,
-  handleExpertAvailabilityGet,
-  handleExpertSlots,
-  handleExpertDetail,
   handleAppointmentBook,
-  handleExpertEarnings,
   handleAppointmentsList,
   handleAppointmentCancel,
   handleAppointmentReview,
-  handleAdminExpertsList,
-  handleAdminExpertApprove,
-  handleAdminExpertReject,
 } from '@/lib/api/experts'
 import {
   handleVendorApplicationGet,
@@ -756,67 +728,24 @@ async function handleRoute(request, { params }) {
     }
 
     // -------- MEMBERSHIP routes --------
-    if (route === '/membership/subscribe' && method === 'POST') {
-      return handleMembershipSubscribe(request)
-    }
-    if (route === '/membership/verify' && method === 'POST') {
-      return handleMembershipVerify(request)
-    }
-    if (route === '/membership/history' && method === 'GET') {
-      return handleMembershipHistory()
-    }
-    if (route === '/membership/discount' && method === 'POST') {
-      return handleMembershipDiscount(request)
-    }
-    if (route === '/membership/start-trial' && method === 'POST') {
-      return handleCORS(await handleMembershipStartTrial(request))
-    }
-    if (route === '/membership/trial-status' && method === 'GET') {
-      return handleCORS(await handleMembershipTrialStatus())
-    }
+    // Now split into dedicated files under /app/app/api/membership/**:
+    //   /membership/subscribe/route.js       (POST)
+    //   /membership/verify/route.js          (POST)
+    //   /membership/history/route.js         (GET)
+    //   /membership/discount/route.js        (POST)
+    //   /membership/start-trial/route.js     (POST)
+    //   /membership/trial-status/route.js    (GET)
 
     /* ============================================================
-       COMPANIES
+       COMPANIES  (SPLIT to /app/app/api/companies/** + /admin/companies/**)
        ============================================================ */
-
-    // Helpers
-    const companyDetailMatch = route.match(/^\/companies\/([A-Za-z0-9-]+)$/)
-    const adminApproveMatch = route.match(
-      /^\/admin\/companies\/([A-Za-z0-9-]+)\/approve$/
-    )
-    const adminRejectMatch = route.match(
-      /^\/admin\/companies\/([A-Za-z0-9-]+)\/reject$/
-    )
-
-    // ---- GET /companies  (public list of APPROVED) ----
-    if (route === '/companies' && method === 'GET') {
-      return handleCompaniesList(request)
-    }
-
-    // ---- POST /companies  (auth + BASIC+) ----
-    if (route === '/companies' && method === 'POST') {
-      return handleCompanyCreate(request)
-    }
-
-    // ---- GET /companies/:id ----
-    if (companyDetailMatch && method === 'GET') {
-      return handleCompanyDetail(companyDetailMatch[1])
-    }
-
-    // ---- PUT /companies/:id  (owner updates; resets to PENDING) ----
-    if (companyDetailMatch && method === 'PUT') {
-      return handleCompanyUpdate(companyDetailMatch[1], request)
-    }
-
-    // ---- DELETE /companies/:id  (owner or admin) ----
-    if (companyDetailMatch && method === 'DELETE') {
-      return handleCompanyDelete(companyDetailMatch[1])
-    }
-
-    // ---- GET /my-companies ----
-    if (route === '/my-companies' && method === 'GET') {
-      return handleMyCompanies()
-    }
+    // Now handled by dedicated route files:
+    //   /api/companies/route.js                          (GET, POST)
+    //   /api/companies/[id]/route.js                     (GET, PUT, DELETE)
+    //   /api/my-companies/route.js                       (GET)
+    //   /api/admin/companies/route.js                    (GET)
+    //   /api/admin/companies/[id]/approve/route.js       (POST)
+    //   /api/admin/companies/[id]/reject/route.js        (POST)
 
     /* ============================================================
        ADMIN
@@ -1063,42 +992,27 @@ async function handleRoute(request, { params }) {
     }
 
     // ---- GET /admin/companies?status=PENDING ----
-    if (route === '/admin/companies' && method === 'GET') {
-      return handleAdminCompaniesList(request)
-    }
-
-    // ---- POST /admin/companies/:id/approve ----
-    if (adminApproveMatch && method === 'POST') {
-      return handleAdminCompanyApprove(adminApproveMatch[1])
-    }
-
-    // ---- POST /admin/companies/:id/reject ----
-    if (adminRejectMatch && method === 'POST') {
-      return handleAdminCompanyReject(adminRejectMatch[1], request)
-    }
+    // Split → /app/app/api/admin/companies/route.js  (GET)
+    //         /app/app/api/admin/companies/[id]/approve/route.js
+    //         /app/app/api/admin/companies/[id]/reject/route.js
 
     /* ============================================================
        EXPERTS & APPOINTMENTS
        ============================================================ */
 
-    const expertDetailMatch = route.match(/^\/experts\/([A-Za-z0-9-]+)$/)
-    const expertAvailMatch = route.match(
-      /^\/experts\/([A-Za-z0-9-]+)\/availability$/
-    )
-    const expertSlotsMatch = route.match(
-      /^\/experts\/([A-Za-z0-9-]+)\/slots$/
-    )
+    // ---- EXPERTS routes: SPLIT into dedicated files under /app/app/api/experts/** and /admin/experts/** ----
+    // Non-expert helpers (appointments, products, etc.) still handled below.
+    // Keep only the regex matchers still used by other route families (appointments, products, wishlist, coupons, orders).
+    const expertAvailMatch = null
+    const expertSlotsMatch = null
+    const expertDetailMatch = null
+    const adminExpApproveMatch = null
+    const adminExpRejectMatch = null
     const apptCancelMatch = route.match(
       /^\/appointments\/([A-Za-z0-9-]+)\/cancel$/
     )
     const apptReviewMatch = route.match(
       /^\/appointments\/([A-Za-z0-9-]+)\/review$/
-    )
-    const adminExpApproveMatch = route.match(
-      /^\/admin\/experts\/([A-Za-z0-9-]+)\/approve$/
-    )
-    const adminExpRejectMatch = route.match(
-      /^\/admin\/experts\/([A-Za-z0-9-]+)\/reject$/
     )
 
     // Marketplace matchers
@@ -1130,60 +1044,19 @@ async function handleRoute(request, { params }) {
       /^\/vendors\/([^/]+?)$/
     )
 
-    // ---- GET /experts (public, APPROVED only) ----
-    if (route === '/experts' && method === 'GET') {
-      return handleExpertsList(request)
-    }
-
-    // ---- POST /experts/apply ----
-    if (route === '/experts/apply' && method === 'POST') {
-      return handleExpertApply(request)
-    }
-
-    // ---- GET /experts/me ----
-    if (route === '/experts/me' && method === 'GET') {
-      return handleExpertMe()
-    }
-
-    // ---- GET /experts/me/earnings ----
-    if (route === '/experts/me/earnings' && method === 'GET') {
-      return handleCORS(await handleExpertEarnings())
-    }
-
-    // ---- PUT /experts/me ----
-    if (route === '/experts/me' && method === 'PUT') {
-      return handleExpertMeUpdate(request)
-    }
-
-    // ---- PUT /experts/me/availability ----
-    if (route === '/experts/me/availability' && method === 'PUT') {
-      return handleExpertAvailabilityUpdate(request)
-    }
-
-    // ---- GET /experts/:id/reviews ----
-    if (
-      /^\/experts\/([A-Za-z0-9-]+)\/reviews$/.test(route) &&
-      method === 'GET'
-    ) {
-      return handleExpertReviews(
-        route.match(/^\/experts\/([A-Za-z0-9-]+)\/reviews$/)[1]
-      )
-    }
-
-    // ---- GET /experts/:id/availability ----
-    if (expertAvailMatch && method === 'GET') {
-      return handleExpertAvailabilityGet(expertAvailMatch[1])
-    }
-
-    // ---- GET /experts/:id/slots ----
-    if (expertSlotsMatch && method === 'GET') {
-      return handleExpertSlots(expertSlotsMatch[1], request)
-    }
-
-    // ---- GET /experts/:id (public) ----
-    if (expertDetailMatch && method === 'GET') {
-      return handleExpertDetail(expertDetailMatch[1])
-    }
+    // ---- EXPERTS routes have been SPLIT into dedicated files: ----
+    //   /api/experts/route.js                          (GET)
+    //   /api/experts/apply/route.js                    (POST)
+    //   /api/experts/me/route.js                       (GET, PUT)
+    //   /api/experts/me/earnings/route.js              (GET)
+    //   /api/experts/me/availability/route.js          (PUT)
+    //   /api/experts/[id]/route.js                     (GET)
+    //   /api/experts/[id]/reviews/route.js             (GET)
+    //   /api/experts/[id]/availability/route.js        (GET)
+    //   /api/experts/[id]/slots/route.js               (GET)
+    //   /api/admin/experts/route.js                    (GET)
+    //   /api/admin/experts/[id]/approve/route.js       (POST)
+    //   /api/admin/experts/[id]/reject/route.js        (POST)
 
     // ---- POST /appointments (book) — supports guest booking ----
     if (route === '/appointments' && method === 'POST') {
@@ -1205,20 +1078,7 @@ async function handleRoute(request, { params }) {
       return handleAppointmentReview(apptReviewMatch[1], request)
     }
 
-    // ---- GET /admin/experts ----
-    if (route === '/admin/experts' && method === 'GET') {
-      return handleAdminExpertsList(request)
-    }
-
-    // ---- POST /admin/experts/:id/approve ----
-    if (adminExpApproveMatch && method === 'POST') {
-      return handleAdminExpertApprove(adminExpApproveMatch[1])
-    }
-
-    // ---- POST /admin/experts/:id/reject ----
-    if (adminExpRejectMatch && method === 'POST') {
-      return handleAdminExpertReject(adminExpRejectMatch[1], request)
-    }
+    // ---- Admin experts routes are now in dedicated files (see comment above) ----
 
 
 
