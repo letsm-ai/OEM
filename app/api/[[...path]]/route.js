@@ -132,6 +132,12 @@ import {
   handleBroadcastHistory,
 } from '@/lib/api/broadcast'
 import {
+  handleTemplatesList,
+  handleTemplatesCreate,
+  handleTemplatesUpdate,
+  handleTemplatesDelete,
+} from '@/lib/api/broadcast-templates'
+import {
   validateCouponForUser,
   handleCouponValidate,
   handleAdminCouponsList,
@@ -414,6 +420,25 @@ async function handleRoute(request, { params }) {
     }
     if (route === '/admin/broadcast/history' && method === 'GET') {
       return handleCORS(await handleBroadcastHistory(request))
+    }
+    // Admin custom broadcast templates
+    if (route === '/admin/broadcast/templates' && method === 'GET') {
+      return handleCORS(await handleTemplatesList())
+    }
+    if (route === '/admin/broadcast/templates' && method === 'POST') {
+      return handleCORS(await handleTemplatesCreate(request))
+    }
+    {
+      const tplMatch = route.match(/^\/admin\/broadcast\/templates\/([A-Za-z0-9-]+)$/)
+      if (tplMatch) {
+        const id = tplMatch[1]
+        if (method === 'PUT' || method === 'PATCH') {
+          return handleCORS(await handleTemplatesUpdate(request, id))
+        }
+        if (method === 'DELETE') {
+          return handleCORS(await handleTemplatesDelete(request, id))
+        }
+      }
     }
 
     // -------- SIGNUP --------

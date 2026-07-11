@@ -40,6 +40,10 @@ import {
   Bell,
   Calendar,
   Heart,
+  Save,
+  Trash2,
+  Plus,
+  BookMarked,
 } from 'lucide-react'
 import { BROADCAST_TEMPLATES, BROADCAST_TEMPLATE_CATEGORIES } from '@/lib/broadcast-templates'
 
@@ -114,6 +118,73 @@ export default function BroadcastClient() {
   const [history, setHistory] = useState([])
   const [historyLoading, setHistoryLoading] = useState(true)
 
+  const [customTemplates, setCustomTemplates] = useState([])
+  const [customLoading, setCustomLoading] = useState(true)
+  const [saveOpen, setSaveOpen] = useState(false)
+  const [saveName, setSaveName] = useState('')
+  const [saveDescription, setSaveDescription] = useState('')
+  const [saveCategory, setSaveCategory] = useState('update')
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+
+  const loadCustomTemplates = useCallback(async () => {
+    setCustomLoading(true)
+    try {
+      const res = await fetch('/api/admin/broadcast/templates')
+      const data = await res.json()
+      setCustomTemplates(Array.isArray(data.items) ? data.items : [])
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setCustomLoading(false)
+    }
+  }, [])
+
+  const saveAsTemplate = async () => {
+    setSaving(true)
+    setSaveError('')
+    try {
+      const res = await fetch('/api/admin/broadcast/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: saveName,
+          description: saveDescription,
+          category: saveCategory,
+          subject,
+          htmlBody,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'SAVE_FAILED')
+      setSaveOpen(false)
+      setSaveName('')
+      setSaveDescription('')
+      setSaveCategory('update')
+      loadCustomTemplates()
+    } catch (e) {
+      setSaveError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const deleteCustomTemplate = async (id) => {
+    if (!confirm('هل تريد حذف هذا القالب المخصّص؟')) return
+    try {
+      const res = await fetch('/api/admin/broadcast/templates/' + id, {
+        method: 'DELETE',
+      })
+      if (!res.ok) throw new Error('DELETE_FAILED')
+      if (selectedTemplateId === id) {
+        setSelectedTemplateId(null)
+      }
+      loadCustomTemplates()
+    } catch (e) {
+      alert('تعذّر الحذف: ' + e.message)
+    }
+  }
+
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true)
     try {
@@ -129,7 +200,8 @@ export default function BroadcastClient() {
 
   useEffect(() => {
     loadHistory()
-  }, [loadHistory])
+    loadCustomTemplates()
+  }, [loadHistory, loadCustomTemplates])
 
   const fetchPreview = useCallback(async () => {
     setPreviewLoading(true)
@@ -247,53 +319,154 @@ export default function BroadcastClient() {
           </CardHeader>
           <CardContent className="space-y-5">
             {/* Template picker */}
-            <div className="space-y-2">
-              <Label className="flex items-center gap-1.5">
-                <FileText className="h-4 w-4 text-[#1B3A6B]" /> اختَر قالباً جاهزاً
-                <span className="text-xs font-normal text-gray-400">(اختياري)</span>
-              </Label>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {BROADCAST_TEMPLATES.map((tpl) => {
-                  const Icon = TEMPLATE_ICONS[tpl.icon] || FileText
-                  const cat = BROADCAST_TEMPLATE_CATEGORIES.find((c) => c.key === tpl.category)
-                  const active = selectedTemplateId === tpl.id
-                  return (
-                    <button
-                      key={tpl.id}
-                      type="button"
-                      onClick={() => applyTemplate(tpl)}
-                      className={`group flex flex-col items-start gap-1.5 rounded-lg border p-3 text-right transition ${
-                        active
-                          ? 'border-[#1B3A6B] bg-[#1B3A6B]/5 ring-1 ring-[#1B3A6B]'
-                          : 'border-gray-200 bg-white hover:border-[#1B3A6B]/40 hover:bg-gray-50'
-                      }`}
-                    >
-                      <div className="flex w-full items-center justify-between">
-                        <div className="flex items-center gap-2">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <Label className="flex items-center gap-1.5">
+                  <FileText className="h-4 w-4 text-[#1B3A6B]" /> اختَر قالباً جاهزاً
+                  <span className="text-xs font-normal text-gray-400">(اختياري)</span>
+                </Label>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setSaveError('')
+                    setSaveOpen(true)
+                  }}
+                  disabled={!subject.trim() || !htmlBody.trim()}
+                  className="h-8 gap-1.5 text-xs"
+                >
+                  <Save className="h-3.5 w-3.5" /> حفظ الرسالة الحالية كقالب
+                </Button>
+              </div>
+
+              {/* Custom templates section */}
+              {(customLoading || customTemplates.length > 0) && (
+                <div className="space-y-2 rounded-lg border border-emerald-200 bg-emerald-50/40 p-3">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-800">
+                    <BookMarked className="h-3.5 w-3.5" /> قوالبك المحفوظة
+                    {!customLoading && (
+                      <Badge variant="secondary" className="text-[10px]">
+                        {customTemplates.length}
+                      </Badge>
+                    )}
+                  </div>
+                  {customLoading ? (
+                    <div className="flex items-center gap-2 text-xs text-gray-500">
+                      <Loader2 className="h-3 w-3 animate-spin" /> جارٍ التحميل...
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                      {customTemplates.map((tpl) => {
+                        const cat = BROADCAST_TEMPLATE_CATEGORIES.find(
+                          (c) => c.key === tpl.category
+                        )
+                        const active = selectedTemplateId === tpl.id
+                        return (
                           <div
-                            className={`flex h-8 w-8 items-center justify-center rounded-md ${
-                              active ? 'bg-[#1B3A6B] text-white' : 'bg-gray-100 text-[#1B3A6B]'
+                            key={tpl.id}
+                            className={`group relative flex flex-col items-start gap-1.5 rounded-lg border p-3 text-right transition ${
+                              active
+                                ? 'border-emerald-500 bg-white ring-1 ring-emerald-500'
+                                : 'border-emerald-200 bg-white hover:border-emerald-400'
                             }`}
                           >
-                            <Icon className="h-4 w-4" />
+                            <button
+                              type="button"
+                              onClick={() => applyTemplate(tpl)}
+                              className="flex w-full flex-col items-start gap-1 text-right"
+                            >
+                              <div className="flex w-full items-center justify-between pl-5">
+                                <div className="flex items-center gap-2">
+                                  <div
+                                    className={`flex h-8 w-8 items-center justify-center rounded-md ${
+                                      active
+                                        ? 'bg-emerald-600 text-white'
+                                        : 'bg-emerald-100 text-emerald-700'
+                                    }`}
+                                  >
+                                    <BookMarked className="h-4 w-4" />
+                                  </div>
+                                  <span className="text-sm font-semibold text-[#1B3A6B]">
+                                    {tpl.name}
+                                  </span>
+                                </div>
+                                {cat && (
+                                  <Badge className={`text-[10px] font-semibold ${cat.color} border`}>
+                                    {cat.label}
+                                  </Badge>
+                                )}
+                              </div>
+                              <p className="line-clamp-2 text-[11px] text-gray-500">
+                                {tpl.description || tpl.subject}
+                              </p>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => deleteCustomTemplate(tpl.id)}
+                              className="absolute left-2 top-2 rounded p-1 text-gray-400 opacity-0 transition hover:bg-red-50 hover:text-red-600 group-hover:opacity-100"
+                              aria-label="حذف القالب"
+                              title="حذف القالب"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
                           </div>
-                          <span className="text-sm font-semibold text-[#1B3A6B]">
-                            {tpl.name}
-                          </span>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Built-in templates */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-gray-500">
+                  <FileText className="h-3.5 w-3.5" /> قوالب افتراضية
+                </div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {BROADCAST_TEMPLATES.map((tpl) => {
+                    const Icon = TEMPLATE_ICONS[tpl.icon] || FileText
+                    const cat = BROADCAST_TEMPLATE_CATEGORIES.find((c) => c.key === tpl.category)
+                    const active = selectedTemplateId === tpl.id
+                    return (
+                      <button
+                        key={tpl.id}
+                        type="button"
+                        onClick={() => applyTemplate(tpl)}
+                        className={`group flex flex-col items-start gap-1.5 rounded-lg border p-3 text-right transition ${
+                          active
+                            ? 'border-[#1B3A6B] bg-[#1B3A6B]/5 ring-1 ring-[#1B3A6B]'
+                            : 'border-gray-200 bg-white hover:border-[#1B3A6B]/40 hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="flex w-full items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <div
+                              className={`flex h-8 w-8 items-center justify-center rounded-md ${
+                                active ? 'bg-[#1B3A6B] text-white' : 'bg-gray-100 text-[#1B3A6B]'
+                              }`}
+                            >
+                              <Icon className="h-4 w-4" />
+                            </div>
+                            <span className="text-sm font-semibold text-[#1B3A6B]">
+                              {tpl.name}
+                            </span>
+                          </div>
+                          {cat && (
+                            <Badge className={`text-[10px] font-semibold ${cat.color} border`}>
+                              {cat.label}
+                            </Badge>
+                          )}
                         </div>
-                        {cat && (
-                          <Badge className={`text-[10px] font-semibold ${cat.color} border`}>
-                            {cat.label}
-                          </Badge>
-                        )}
-                      </div>
-                      <p className="line-clamp-2 text-[11px] text-gray-500">
-                        {tpl.description}
-                      </p>
-                    </button>
-                  )
-                })}
+                        <p className="line-clamp-2 text-[11px] text-gray-500">
+                          {tpl.description}
+                        </p>
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
+
               {selectedTemplateId && (
                 <div className="flex items-center justify-between rounded-md bg-emerald-50 px-3 py-1.5 text-xs text-emerald-800">
                   <span>
@@ -600,6 +773,83 @@ export default function BroadcastClient() {
               ) : (
                 <>
                   <Send className="ml-2 h-4 w-4" /> نعم، أرسل الآن
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* Save-as-template dialog */}
+      <Dialog open={saveOpen} onOpenChange={setSaveOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Save className="h-5 w-5 text-[#1B3A6B]" />
+              حفظ الرسالة الحالية كقالب
+            </DialogTitle>
+            <DialogDescription>
+              سيتمّ حفظ الموضوع والمحتوى الحاليَّين لإعادة استخدامهما لاحقاً.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="tpl-name">اسم القالب</Label>
+              <Input
+                id="tpl-name"
+                value={saveName}
+                onChange={(e) => setSaveName(e.target.value)}
+                placeholder="مثال: عرض الخصم الشهري"
+                maxLength={120}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="tpl-desc">وصف مختصر (اختياري)</Label>
+              <Input
+                id="tpl-desc"
+                value={saveDescription}
+                onChange={(e) => setSaveDescription(e.target.value)}
+                placeholder="متى تستخدمه؟"
+                maxLength={240}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="tpl-cat">التصنيف</Label>
+              <select
+                id="tpl-cat"
+                value={saveCategory}
+                onChange={(e) => setSaveCategory(e.target.value)}
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              >
+                {BROADCAST_TEMPLATE_CATEGORIES.map((c) => (
+                  <option key={c.key} value={c.key}>
+                    {c.label}
+                  </option>
+                ))}
+                <option value="other">أخرى</option>
+              </select>
+            </div>
+            {saveError && (
+              <div className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">
+                {saveError}
+              </div>
+            )}
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setSaveOpen(false)} disabled={saving}>
+              إلغاء
+            </Button>
+            <Button
+              onClick={saveAsTemplate}
+              disabled={saving || !saveName.trim() || !subject.trim() || !htmlBody.trim()}
+              className="bg-[#1B3A6B] hover:bg-[#152c52]"
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="ml-2 h-4 w-4 animate-spin" /> جارٍ الحفظ...
+                </>
+              ) : (
+                <>
+                  <Save className="ml-2 h-4 w-4" /> حفظ القالب
                 </>
               )}
             </Button>
