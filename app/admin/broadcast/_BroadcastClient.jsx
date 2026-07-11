@@ -33,7 +33,17 @@ import {
   XCircle,
   AlertTriangle,
   Info,
+  FileText,
+  Sparkles,
+  Tag,
+  Clock,
+  Bell,
+  Calendar,
+  Heart,
 } from 'lucide-react'
+import { BROADCAST_TEMPLATES, BROADCAST_TEMPLATE_CATEGORIES } from '@/lib/broadcast-templates'
+
+const TEMPLATE_ICONS = { Sparkles, Tag, Clock, Bell, Calendar, Heart }
 
 const TIERS = [
   { key: 'FREE', label: 'مجاني', color: 'bg-gray-100 text-gray-700' },
@@ -81,6 +91,18 @@ export default function BroadcastClient() {
   const [tiers, setTiers] = useState([])
   const [roles, setRoles] = useState([])
   const [activeOnly, setActiveOnly] = useState(true)
+  const [selectedTemplateId, setSelectedTemplateId] = useState(null)
+
+  const applyTemplate = (tpl) => {
+    setSelectedTemplateId(tpl.id)
+    setSubject(tpl.subject)
+    setHtmlBody(tpl.htmlBody)
+  }
+  const clearTemplate = () => {
+    setSelectedTemplateId(null)
+    setSubject('')
+    setHtmlBody('')
+  }
 
   const [preview, setPreview] = useState(null)
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -170,6 +192,7 @@ export default function BroadcastClient() {
       // Reset composer on success
       setSubject('')
       setHtmlBody('')
+      setSelectedTemplateId(null)
       loadHistory()
     } catch (e) {
       setError(e.message)
@@ -223,6 +246,72 @@ export default function BroadcastClient() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-5">
+            {/* Template picker */}
+            <div className="space-y-2">
+              <Label className="flex items-center gap-1.5">
+                <FileText className="h-4 w-4 text-[#1B3A6B]" /> اختَر قالباً جاهزاً
+                <span className="text-xs font-normal text-gray-400">(اختياري)</span>
+              </Label>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {BROADCAST_TEMPLATES.map((tpl) => {
+                  const Icon = TEMPLATE_ICONS[tpl.icon] || FileText
+                  const cat = BROADCAST_TEMPLATE_CATEGORIES.find((c) => c.key === tpl.category)
+                  const active = selectedTemplateId === tpl.id
+                  return (
+                    <button
+                      key={tpl.id}
+                      type="button"
+                      onClick={() => applyTemplate(tpl)}
+                      className={`group flex flex-col items-start gap-1.5 rounded-lg border p-3 text-right transition ${
+                        active
+                          ? 'border-[#1B3A6B] bg-[#1B3A6B]/5 ring-1 ring-[#1B3A6B]'
+                          : 'border-gray-200 bg-white hover:border-[#1B3A6B]/40 hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex w-full items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div
+                            className={`flex h-8 w-8 items-center justify-center rounded-md ${
+                              active ? 'bg-[#1B3A6B] text-white' : 'bg-gray-100 text-[#1B3A6B]'
+                            }`}
+                          >
+                            <Icon className="h-4 w-4" />
+                          </div>
+                          <span className="text-sm font-semibold text-[#1B3A6B]">
+                            {tpl.name}
+                          </span>
+                        </div>
+                        {cat && (
+                          <Badge className={`text-[10px] font-semibold ${cat.color} border`}>
+                            {cat.label}
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="line-clamp-2 text-[11px] text-gray-500">
+                        {tpl.description}
+                      </p>
+                    </button>
+                  )
+                })}
+              </div>
+              {selectedTemplateId && (
+                <div className="flex items-center justify-between rounded-md bg-emerald-50 px-3 py-1.5 text-xs text-emerald-800">
+                  <span>
+                    ✓ تمّ تحميل القالب — يمكنك تعديل النصّ قبل الإرسال
+                  </span>
+                  <button
+                    type="button"
+                    onClick={clearTemplate}
+                    className="text-emerald-700 underline hover:text-emerald-900"
+                  >
+                    مسح
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <Separator />
+
             <div className="space-y-2">
               <Label htmlFor="subject">الموضوع</Label>
               <Input
