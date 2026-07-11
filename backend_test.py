@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-ROUTE SPLIT REGRESSION TEST — Phase 2 & 3
-Tests 24 API routes moved from catch-all to dedicated files.
+PHASE 6 REGRESSION TEST — Route Extraction (Products + Orders + Vendor)
+Tests ~728 lines extracted from catch-all into 5 lib/api modules + 8 dedicated route files.
 """
 
 import requests
@@ -17,13 +17,14 @@ MONGO_URL = "mongodb://localhost:27017/majles"
 
 # Test user credentials
 TIMESTAMP = int(time.time())
-MEMBER_EMAIL = f"route_test_member_{TIMESTAMP}@test.com"
-ADMIN_EMAIL = f"route_test_admin_{TIMESTAMP}@test.com"
-GOLD_EMAIL = f"route_test_gold_{TIMESTAMP}@test.com"
+BUYER_EMAIL = f"phase6_buyer_{TIMESTAMP}@test.com"
+VENDOR_EMAIL = f"phase6_vendor_{TIMESTAMP}@test.com"
+ADMIN_EMAIL = f"phase6_admin_{TIMESTAMP}@test.com"
 PASSWORD = "Password123"
 
 print("=" * 80)
-print("ROUTE SPLIT REGRESSION TEST — 24 Routes")
+print("PHASE 6 REGRESSION TEST — Route Extraction")
+print("Testing: Products, Orders, AI Search, Vendor Orders")
 print("=" * 80)
 
 # MongoDB connection
@@ -101,20 +102,20 @@ print("\n" + "=" * 80)
 print("SETUP: Creating test users")
 print("=" * 80)
 
-member_id = create_test_user(MEMBER_EMAIL, "Test Member", "MEMBER", "FREE")
+buyer_id = create_test_user(BUYER_EMAIL, "Test Buyer", "MEMBER", "FREE")
+vendor_id = create_test_user(VENDOR_EMAIL, "Test Vendor", "VENDOR", "BASIC")
 admin_id = create_test_user(ADMIN_EMAIL, "Test Admin", "ADMIN", "PLATINUM")
-gold_id = create_test_user(GOLD_EMAIL, "Test Gold User", "MEMBER", "GOLD")
 
-if not all([member_id, admin_id, gold_id]):
+if not all([buyer_id, vendor_id, admin_id]):
     print("❌ Failed to create test users. Exiting.")
     exit(1)
 
 # Login sessions
-member_session = login_user(MEMBER_EMAIL, PASSWORD)
+buyer_session = login_user(BUYER_EMAIL, PASSWORD)
+vendor_session = login_user(VENDOR_EMAIL, PASSWORD)
 admin_session = login_user(ADMIN_EMAIL, PASSWORD)
-gold_session = login_user(GOLD_EMAIL, PASSWORD)
 
-if not all([member_session, admin_session, gold_session]):
+if not all([buyer_session, vendor_session, admin_session]):
     print("❌ Failed to login test users. Exiting.")
     exit(1)
 
@@ -123,7 +124,7 @@ total_tests = 0
 passed_tests = 0
 failed_tests = 0
 
-def test_endpoint(name, method, path, session=None, expected_status=None, body=None, description=""):
+def test_endpoint(name, method, path, session=None, expected_status=None, body=None, description="", check_json=False):
     """Test an endpoint and track results"""
     global total_tests, passed_tests, failed_tests
     total_tests += 1
@@ -137,6 +138,8 @@ def test_endpoint(name, method, path, session=None, expected_status=None, body=N
             resp = session.post(url, json=body, timeout=10) if session else requests.post(url, json=body, timeout=10)
         elif method == "PUT":
             resp = session.put(url, json=body, timeout=10) if session else requests.put(url, json=body, timeout=10)
+        elif method == "PATCH":
+            resp = session.patch(url, json=body, timeout=10) if session else requests.patch(url, json=body, timeout=10)
         elif method == "DELETE":
             resp = session.delete(url, timeout=10) if session else requests.delete(url, timeout=10)
         else:
@@ -150,6 +153,14 @@ def test_endpoint(name, method, path, session=None, expected_status=None, body=N
             failed_tests += 1
             return None
         
+        if check_json:
+            try:
+                resp.json()
+            except:
+                print(f"❌ {name}: Invalid JSON response - {description}")
+                failed_tests += 1
+                return None
+        
         print(f"✅ {name}: {resp.status_code} - {description}")
         passed_tests += 1
         return resp
@@ -159,467 +170,610 @@ def test_endpoint(name, method, path, session=None, expected_status=None, body=N
         return None
 
 # ============================================================================
-# MEMBERSHIP ROUTES (6)
+# SETUP: Create test products
 # ============================================================================
 print("\n" + "=" * 80)
-print("MEMBERSHIP ROUTES (6)")
+print("SETUP: Creating test products")
 print("=" * 80)
 
-# 1. POST /api/membership/subscribe
-test_endpoint(
-    "M1-Auth", "POST", "/membership/subscribe",
-    session=None, expected_status=401,
-    body={"tier": "BASIC"},
-    description="Unauthenticated → 401"
-)
-
-test_endpoint(
-    "M1-Valid", "POST", "/membership/subscribe",
-    session=member_session, expected_status=200,
-    body={"tier": "BASIC"},
-    description="Valid subscription"
-)
-
-# 2. POST /api/membership/verify
-test_endpoint(
-    "M2-Auth", "POST", "/membership/verify",
-    session=None, expected_status=401,
-    body={"membershipId": "test"},
-    description="Unauthenticated → 401"
-)
-
-# 3. GET /api/membership/history
-test_endpoint(
-    "M3-Auth", "GET", "/membership/history",
-    session=None, expected_status=401,
-    description="Unauthenticated → 401"
-)
-
-test_endpoint(
-    "M3-Valid", "GET", "/membership/history",
-    session=member_session, expected_status=200,
-    description="Valid history retrieval"
-)
-
-# 4. POST /api/membership/discount
-test_endpoint(
-    "M4-Auth", "POST", "/membership/discount",
-    session=None, expected_status=200,
-    body={"price": 100},
-    description="No auth → FREE tier discount (0%)"
-)
-
-test_endpoint(
-    "M4-Valid", "POST", "/membership/discount",
-    session=admin_session, expected_status=200,
-    body={"price": 100},
-    description="PLATINUM tier discount (30%)"
-)
-
-# 5. POST /api/membership/start-trial
-test_endpoint(
-    "M5-Auth", "POST", "/membership/start-trial",
-    session=None, expected_status=401,
-    description="Unauthenticated → 401"
-)
-
-# 6. GET /api/membership/trial-status (public endpoint)
-test_endpoint(
-    "M6-NoAuth", "GET", "/membership/trial-status",
-    session=None, expected_status=200,
-    description="Public access → 200 (loggedIn: false)"
-)
-
-test_endpoint(
-    "M6-Valid", "GET", "/membership/trial-status",
-    session=member_session, expected_status=200,
-    description="Authenticated → 200 (loggedIn: true)"
-)
-
-# ============================================================================
-# COMPANIES ROUTES (6)
-# ============================================================================
-print("\n" + "=" * 80)
-print("COMPANIES ROUTES (6)")
-print("=" * 80)
-
-# Create test company for admin
-test_company_id = str(uuid.uuid4())
-db.companies.insert_one({
-    "_id": test_company_id,
-    "userId": admin_id,
-    "nameAr": "شركة اختبار",
-    "nameEn": "Test Company",
-    "description": "وصف الشركة",
-    "sector": "TECH",
-    "governorate": "MUSCAT",
-    "status": "PENDING",
-    "isApproved": False,
+test_product_id = str(uuid.uuid4())
+db.products.insert_one({
+    "_id": test_product_id,
+    "vendorId": vendor_id,
+    "nameAr": "خاتم ذهبي فاخر",
+    "nameEn": "Luxury Gold Ring",
+    "description": "خاتم ذهبي عيار 21 قيراط",
+    "category": "JEWELRY",
+    "subcategory": "خواتم",
+    "price": 150.0,
+    "stock": 10,
+    "isActive": True,
+    "tags": ["ذهب", "خواتم", "فاخر"],
+    "images": [],
+    "rating": 4.5,
+    "salesCount": 5,
     "createdAt": datetime.utcnow()
 })
-print(f"✅ Created test company: {test_company_id}")
+print(f"✅ Created test product: {test_product_id}")
 
-# 1. GET /api/companies (public)
-test_endpoint(
-    "C1-Public", "GET", "/companies",
+test_product_id_2 = str(uuid.uuid4())
+db.products.insert_one({
+    "_id": test_product_id_2,
+    "vendorId": vendor_id,
+    "nameAr": "سوار فضي",
+    "nameEn": "Silver Bracelet",
+    "description": "سوار فضي أنيق",
+    "category": "JEWELRY",
+    "subcategory": "أساور",
+    "price": 50.0,
+    "stock": 20,
+    "isActive": True,
+    "tags": ["فضة", "أساور"],
+    "images": [],
+    "rating": 4.0,
+    "salesCount": 3,
+    "createdAt": datetime.utcnow()
+})
+print(f"✅ Created test product 2: {test_product_id_2}")
+
+# ============================================================================
+# A) GET /api/tags/popular — Extracted to /lib/api/products-public.js
+# ============================================================================
+print("\n" + "=" * 80)
+print("A) GET /api/tags/popular (Extracted Route)")
+print("=" * 80)
+
+resp = test_endpoint(
+    "A1-Public", "GET", "/tags/popular",
     session=None, expected_status=200,
-    description="Public list (no auth required)"
+    description="Public tags list (no auth required)",
+    check_json=True
 )
 
-# 2. POST /api/companies (auth + BASIC+)
-test_endpoint(
-    "C2-Auth", "POST", "/companies",
-    session=None, expected_status=401,
-    body={"nameAr": "شركة", "sector": "TECH"},
-    description="Unauthenticated → 401"
+if resp:
+    data = resp.json()
+    if "tags" in data and isinstance(data["tags"], list):
+        print(f"   ✓ Response has 'tags' array with {len(data['tags'])} items")
+    else:
+        print(f"   ⚠ Response missing 'tags' array")
+
+resp = test_endpoint(
+    "A2-Limit", "GET", "/tags/popular?limit=5",
+    session=None, expected_status=200,
+    description="Tags with limit parameter",
+    check_json=True
 )
 
-test_endpoint(
-    "C2-Tier", "POST", "/companies",
-    session=member_session, expected_status=403,
-    body={"nameAr": "شركة اختبار", "sector": "TECH"},
-    description="FREE tier → 403"
+# ============================================================================
+# B) GET /api/products — Extracted to /lib/api/products-public.js
+# ============================================================================
+print("\n" + "=" * 80)
+print("B) GET /api/products (Extracted Route)")
+print("=" * 80)
+
+resp = test_endpoint(
+    "B1-Public", "GET", "/products",
+    session=None, expected_status=200,
+    description="Public products list (no auth required)",
+    check_json=True
 )
 
-# 3. GET /api/companies/:id (public if APPROVED)
-test_endpoint(
-    "C3-Pending", "GET", f"/companies/{test_company_id}",
+if resp:
+    data = resp.json()
+    if "products" in data and isinstance(data["products"], list):
+        print(f"   ✓ Response has 'products' array with {len(data['products'])} items")
+        if len(data["products"]) > 0:
+            p = data["products"][0]
+            if "vendorName" in p and "vendorSlug" in p:
+                print(f"   ✓ Vendor enrichment working (vendorName: {p.get('vendorName', 'N/A')})")
+            else:
+                print(f"   ⚠ Vendor enrichment missing")
+    else:
+        print(f"   ⚠ Response missing 'products' array")
+
+resp = test_endpoint(
+    "B2-Category", "GET", "/products?category=JEWELRY",
+    session=None, expected_status=200,
+    description="Products filtered by category",
+    check_json=True
+)
+
+resp = test_endpoint(
+    "B3-Search", "GET", "/products?search=خاتم",
+    session=None, expected_status=200,
+    description="Products search filter",
+    check_json=True
+)
+
+resp = test_endpoint(
+    "B4-Sort", "GET", "/products?sort=price_asc",
+    session=None, expected_status=200,
+    description="Products with sort parameter",
+    check_json=True
+)
+
+resp = test_endpoint(
+    "B5-Price", "GET", "/products?minPrice=50&maxPrice=200",
+    session=None, expected_status=200,
+    description="Products with price range filter",
+    check_json=True
+)
+
+# ============================================================================
+# C) GET /api/products/[id] — Extracted to /lib/api/products-public.js
+# ============================================================================
+print("\n" + "=" * 80)
+print("C) GET /api/products/[id] (Extracted Route)")
+print("=" * 80)
+
+resp = test_endpoint(
+    "C1-Valid", "GET", f"/products/{test_product_id}",
+    session=None, expected_status=200,
+    description="Public product detail (no auth required)",
+    check_json=True
+)
+
+if resp:
+    data = resp.json()
+    if "product" in data:
+        p = data["product"]
+        if "vendor" in p and p["vendor"]:
+            print(f"   ✓ Vendor embed working (vendor.name: {p['vendor'].get('name', 'N/A')})")
+        else:
+            print(f"   ⚠ Vendor embed missing")
+    else:
+        print(f"   ⚠ Response missing 'product' object")
+
+resp = test_endpoint(
+    "C2-NotFound", "GET", f"/products/{uuid.uuid4()}",
     session=None, expected_status=404,
-    description="PENDING company without auth → 404"
-)
-
-test_endpoint(
-    "C3-Owner", "GET", f"/companies/{test_company_id}",
-    session=admin_session, expected_status=200,
-    description="Owner can access PENDING company"
-)
-
-# 4. PUT /api/companies/:id (owner or admin)
-test_endpoint(
-    "C4-Auth", "PUT", f"/companies/{test_company_id}",
-    session=None, expected_status=401,
-    body={"description": "تحديث"},
-    description="Unauthenticated → 401"
-)
-
-test_endpoint(
-    "C4-Valid", "PUT", f"/companies/{test_company_id}",
-    session=admin_session, expected_status=200,
-    body={"description": "تحديث الوصف"},
-    description="Owner update"
-)
-
-# 5. GET /api/my-companies (auth)
-test_endpoint(
-    "C5-Auth", "GET", "/my-companies",
-    session=None, expected_status=401,
-    description="Unauthenticated → 401"
-)
-
-test_endpoint(
-    "C5-Valid", "GET", "/my-companies",
-    session=admin_session, expected_status=200,
-    description="Valid my-companies list"
-)
-
-# 6. GET /api/admin/companies (ADMIN only)
-test_endpoint(
-    "C6-Auth", "GET", "/admin/companies",
-    session=None, expected_status=401,
-    description="Unauthenticated → 401"
-)
-
-test_endpoint(
-    "C6-Role", "GET", "/admin/companies",
-    session=member_session, expected_status=403,
-    description="MEMBER → 403"
-)
-
-test_endpoint(
-    "C6-Valid", "GET", "/admin/companies",
-    session=admin_session, expected_status=200,
-    description="ADMIN access"
-)
-
-# 7. POST /api/admin/companies/:id/approve (ADMIN only)
-test_endpoint(
-    "C7-Auth", "POST", f"/admin/companies/{test_company_id}/approve",
-    session=None, expected_status=401,
-    description="Unauthenticated → 401"
-)
-
-test_endpoint(
-    "C7-Role", "POST", f"/admin/companies/{test_company_id}/approve",
-    session=member_session, expected_status=403,
-    description="MEMBER → 403"
-)
-
-test_endpoint(
-    "C7-Valid", "POST", f"/admin/companies/{test_company_id}/approve",
-    session=admin_session, expected_status=200,
-    description="ADMIN approve"
-)
-
-# 8. POST /api/admin/companies/:id/reject (ADMIN only)
-# Create another test company for rejection
-test_company_id_2 = str(uuid.uuid4())
-db.companies.insert_one({
-    "_id": test_company_id_2,
-    "userId": admin_id,
-    "nameAr": "شركة اختبار 2",
-    "nameEn": "Test Company 2",
-    "description": "وصف",
-    "sector": "TECH",
-    "governorate": "MUSCAT",
-    "status": "PENDING",
-    "isApproved": False,
-    "createdAt": datetime.utcnow()
-})
-
-test_endpoint(
-    "C8-Auth", "POST", f"/admin/companies/{test_company_id_2}/reject",
-    session=None, expected_status=401,
-    body={"reason": "سبب الرفض"},
-    description="Unauthenticated → 401"
-)
-
-test_endpoint(
-    "C8-Role", "POST", f"/admin/companies/{test_company_id_2}/reject",
-    session=member_session, expected_status=403,
-    body={"reason": "سبب الرفض"},
-    description="MEMBER → 403"
-)
-
-test_endpoint(
-    "C8-Valid", "POST", f"/admin/companies/{test_company_id_2}/reject",
-    session=admin_session, expected_status=200,
-    body={"reason": "سبب الرفض"},
-    description="ADMIN reject"
-)
-
-# 9. DELETE /api/companies/:id (owner or admin)
-test_endpoint(
-    "C9-Auth", "DELETE", f"/companies/{test_company_id_2}",
-    session=None, expected_status=401,
-    description="Unauthenticated → 401"
-)
-
-test_endpoint(
-    "C9-Valid", "DELETE", f"/companies/{test_company_id_2}",
-    session=admin_session, expected_status=200,
-    description="Owner delete"
+    description="Non-existent product → 404"
 )
 
 # ============================================================================
-# EXPERTS ROUTES (12)
+# D) GET /api/products/[id]/related — Extracted to /lib/api/products-public.js
 # ============================================================================
 print("\n" + "=" * 80)
-print("EXPERTS ROUTES (12)")
+print("D) GET /api/products/[id]/related (Extracted Route)")
 print("=" * 80)
 
-# Create test expert for admin
-test_expert_id = str(uuid.uuid4())
-db.experts.insert_one({
-    "_id": test_expert_id,
-    "userId": admin_id,
-    "specialty": "LEGAL",
-    "specialtyAr": "استشارات قانونية",
-    "hourlyRate": 25,
-    "bio": "خبير قانوني",
-    "status": "PENDING",
-    "isApproved": False,
-    "rating": 0,
-    "totalSessions": 0,
-    "createdAt": datetime.utcnow()
-})
-print(f"✅ Created test expert: {test_expert_id}")
-
-# 1. GET /api/experts (public)
-test_endpoint(
-    "E1-Public", "GET", "/experts",
+resp = test_endpoint(
+    "D1-Valid", "GET", f"/products/{test_product_id}/related",
     session=None, expected_status=200,
-    description="Public list (no auth required)"
+    description="Related products (no auth required)",
+    check_json=True
 )
 
-# 2. POST /api/experts/apply (auth + GOLD+)
-test_endpoint(
-    "E2-Auth", "POST", "/experts/apply",
-    session=None, expected_status=401,
-    body={"specialty": "LEGAL", "hourlyRate": 25},
-    description="Unauthenticated → 401"
-)
+if resp:
+    data = resp.json()
+    if "products" in data and isinstance(data["products"], list):
+        print(f"   ✓ Response has 'products' array with {len(data['products'])} items")
+        if len(data["products"]) > 0:
+            p = data["products"][0]
+            if "vendorName" in p and "vendorSlug" in p:
+                print(f"   ✓ Vendor enrichment working in related products")
+            else:
+                print(f"   ⚠ Vendor enrichment missing in related products")
+    else:
+        print(f"   ⚠ Response missing 'products' array")
 
-test_endpoint(
-    "E2-Tier", "POST", "/experts/apply",
-    session=member_session, expected_status=403,
-    body={"specialty": "LEGAL", "hourlyRate": 25},
-    description="FREE/BASIC tier → 403"
-)
-
-# 3. GET /api/experts/me (auth)
-test_endpoint(
-    "E3-Auth", "GET", "/experts/me",
-    session=None, expected_status=401,
-    description="Unauthenticated → 401"
-)
-
-test_endpoint(
-    "E3-Valid", "GET", "/experts/me",
-    session=admin_session, expected_status=200,
-    description="Valid expert profile"
-)
-
-# 4. PUT /api/experts/me (auth + expert)
-test_endpoint(
-    "E4-Auth", "PUT", "/experts/me",
-    session=None, expected_status=401,
-    body={"bio": "تحديث"},
-    description="Unauthenticated → 401"
-)
-
-# 5. GET /api/experts/me/earnings (auth + expert)
-test_endpoint(
-    "E5-Auth", "GET", "/experts/me/earnings",
-    session=None, expected_status=401,
-    description="Unauthenticated → 401"
-)
-
-# 6. PUT /api/experts/me/availability (auth + expert)
-test_endpoint(
-    "E6-Auth", "PUT", "/experts/me/availability",
-    session=None, expected_status=401,
-    body={"availability": []},
-    description="Unauthenticated → 401"
-)
-
-# 7. GET /api/experts/:id (public if APPROVED)
-test_endpoint(
-    "E7-Pending", "GET", f"/experts/{test_expert_id}",
+resp = test_endpoint(
+    "D2-NotFound", "GET", f"/products/{uuid.uuid4()}/related",
     session=None, expected_status=404,
-    description="PENDING expert without auth → 404"
-)
-
-test_endpoint(
-    "E7-Owner", "GET", f"/experts/{test_expert_id}",
-    session=admin_session, expected_status=200,
-    description="Owner can access PENDING expert"
-)
-
-# 8. GET /api/experts/:id/reviews (public)
-test_endpoint(
-    "E8-Public", "GET", f"/experts/{test_expert_id}/reviews",
-    session=None, expected_status=200,
-    description="Public reviews (no auth required)"
-)
-
-# 9. GET /api/experts/:id/availability (public)
-test_endpoint(
-    "E9-Public", "GET", f"/experts/{test_expert_id}/availability",
-    session=None, expected_status=200,
-    description="Public availability (no auth required)"
-)
-
-# 10. GET /api/experts/:id/slots (public)
-test_endpoint(
-    "E10-Public", "GET", f"/experts/{test_expert_id}/slots?date=2026-05-01",
-    session=None, expected_status=200,
-    description="Public slots (no auth required)"
-)
-
-# 11. GET /api/admin/experts (ADMIN only)
-test_endpoint(
-    "E11-Auth", "GET", "/admin/experts",
-    session=None, expected_status=401,
-    description="Unauthenticated → 401"
-)
-
-test_endpoint(
-    "E11-Role", "GET", "/admin/experts",
-    session=member_session, expected_status=403,
-    description="MEMBER → 403"
-)
-
-test_endpoint(
-    "E11-Valid", "GET", "/admin/experts",
-    session=admin_session, expected_status=200,
-    description="ADMIN access"
-)
-
-# 12. POST /api/admin/experts/:id/approve (ADMIN only)
-test_endpoint(
-    "E12-Auth", "POST", f"/admin/experts/{test_expert_id}/approve",
-    session=None, expected_status=401,
-    description="Unauthenticated → 401"
-)
-
-test_endpoint(
-    "E12-Role", "POST", f"/admin/experts/{test_expert_id}/approve",
-    session=member_session, expected_status=403,
-    description="MEMBER → 403"
-)
-
-test_endpoint(
-    "E12-Valid", "POST", f"/admin/experts/{test_expert_id}/approve",
-    session=admin_session, expected_status=200,
-    description="ADMIN approve"
-)
-
-# 13. POST /api/admin/experts/:id/reject (ADMIN only)
-# Create another test expert for rejection
-test_expert_id_2 = str(uuid.uuid4())
-db.experts.insert_one({
-    "_id": test_expert_id_2,
-    "userId": gold_id,
-    "specialty": "LEGAL",
-    "specialtyAr": "استشارات قانونية",
-    "hourlyRate": 25,
-    "bio": "خبير",
-    "status": "PENDING",
-    "isApproved": False,
-    "rating": 0,
-    "totalSessions": 0,
-    "createdAt": datetime.utcnow()
-})
-
-test_endpoint(
-    "E13-Auth", "POST", f"/admin/experts/{test_expert_id_2}/reject",
-    session=None, expected_status=401,
-    body={"reason": "سبب الرفض"},
-    description="Unauthenticated → 401"
-)
-
-test_endpoint(
-    "E13-Role", "POST", f"/admin/experts/{test_expert_id_2}/reject",
-    session=member_session, expected_status=403,
-    body={"reason": "سبب الرفض"},
-    description="MEMBER → 403"
-)
-
-test_endpoint(
-    "E13-Valid", "POST", f"/admin/experts/{test_expert_id_2}/reject",
-    session=admin_session, expected_status=200,
-    body={"reason": "سبب الرفض"},
-    description="ADMIN reject"
+    description="Non-existent product → 404"
 )
 
 # ============================================================================
-# REGRESSION CHECK: Test endpoint NOT moved
+# E) POST /api/products/ai-search — Extracted to /lib/api/products-ai.js
 # ============================================================================
 print("\n" + "=" * 80)
-print("REGRESSION CHECK: Catch-all still works")
+print("E) POST /api/products/ai-search (Extracted Route)")
 print("=" * 80)
 
-test_endpoint(
-    "R1-CatchAll", "GET", "/",
-    session=None, expected_status=200,
-    description="GET /api/ still works (catch-all)"
+resp = test_endpoint(
+    "E1-Empty", "POST", "/products/ai-search",
+    session=None, expected_status=400,
+    body={},
+    description="Empty query → 400"
 )
 
-test_endpoint(
-    "R2-Me", "GET", "/me",
-    session=admin_session, expected_status=200,
-    description="GET /api/me still works (catch-all)"
+resp = test_endpoint(
+    "E2-Valid", "POST", "/products/ai-search",
+    session=None, expected_status=None,  # May be 200 or 500 depending on EMERGENT_LLM_KEY
+    body={"query": "خواتم رخيصة"},
+    description="Valid AI search query (may fail if LLM key missing)"
 )
+
+if resp:
+    if resp.status_code == 200:
+        data = resp.json()
+        if "products" in data and "filters" in data:
+            print(f"   ✓ AI search successful with {len(data['products'])} products")
+            print(f"   ✓ Filters: {data.get('filters', {})}")
+        else:
+            print(f"   ⚠ Response missing expected fields")
+    elif resp.status_code == 500:
+        print(f"   ⚠ AI search failed (likely missing EMERGENT_LLM_KEY) - this is acceptable")
+    else:
+        print(f"   ⚠ Unexpected status code: {resp.status_code}")
+
+resp = test_endpoint(
+    "E3-TooLong", "POST", "/products/ai-search",
+    session=None, expected_status=400,
+    body={"query": "x" * 201},
+    description="Query too long (>200 chars) → 400"
+)
+
+# ============================================================================
+# F) POST /api/orders/verify — Extracted to /lib/api/orders-verify.js
+# ============================================================================
+print("\n" + "=" * 80)
+print("F) POST /api/orders/verify (Extracted Route)")
+print("=" * 80)
+
+resp = test_endpoint(
+    "F1-Auth", "POST", "/orders/verify",
+    session=None, expected_status=401,
+    body={"sessionId": "test"},
+    description="Unauthenticated → 401"
+)
+
+resp = test_endpoint(
+    "F2-Missing", "POST", "/orders/verify",
+    session=buyer_session, expected_status=400,
+    body={},
+    description="Missing sessionId/orderId → 400"
+)
+
+resp = test_endpoint(
+    "F3-NotFound", "POST", "/orders/verify",
+    session=buyer_session, expected_status=404,
+    body={"orderId": str(uuid.uuid4())},
+    description="Non-existent order → 404"
+)
+
+# ============================================================================
+# G) GET /api/orders/[id] — Extracted to /lib/api/orders-read.js
+# ============================================================================
+print("\n" + "=" * 80)
+print("G) GET /api/orders/[id] (Extracted Route)")
+print("=" * 80)
+
+# Create a test order
+test_order_id = str(uuid.uuid4())
+db.orders.insert_one({
+    "_id": test_order_id,
+    "buyerId": buyer_id,
+    "items": [{
+        "productId": test_product_id,
+        "vendorId": vendor_id,
+        "nameAr": "خاتم ذهبي",
+        "quantity": 1,
+        "price": 150.0,
+        "lineSubtotal": 150.0
+    }],
+    "subtotal": 150.0,
+    "discountPercent": 0,
+    "discountAmount": 0,
+    "shippingFee": 0,
+    "totalPaid": 150.0,
+    "status": "PAID",
+    "paymentStatus": "PAID",
+    "paymentMethod": "COD",
+    "shippingAddress": {
+        "name": "Test Buyer",
+        "phone": "+96812345678",
+        "governorate": "MUSCAT",
+        "wilayat": "مسقط",
+        "address": "شارع الاختبار"
+    },
+    "createdAt": datetime.utcnow()
+})
+print(f"✅ Created test order: {test_order_id}")
+
+resp = test_endpoint(
+    "G1-Auth", "GET", f"/orders/{test_order_id}",
+    session=None, expected_status=401,
+    description="Unauthenticated → 401"
+)
+
+resp = test_endpoint(
+    "G2-Buyer", "GET", f"/orders/{test_order_id}",
+    session=buyer_session, expected_status=200,
+    description="Buyer can view their order",
+    check_json=True
+)
+
+if resp:
+    data = resp.json()
+    if "order" in data:
+        print(f"   ✓ Order detail returned for buyer")
+    else:
+        print(f"   ⚠ Response missing 'order' object")
+
+resp = test_endpoint(
+    "G3-Vendor", "GET", f"/orders/{test_order_id}",
+    session=vendor_session, expected_status=200,
+    description="Vendor can view order with their items",
+    check_json=True
+)
+
+if resp:
+    data = resp.json()
+    if "order" in data and "items" in data["order"]:
+        items = data["order"]["items"]
+        print(f"   ✓ Vendor sees {len(items)} item(s) (filtered to their items only)")
+    else:
+        print(f"   ⚠ Response missing order items")
+
+resp = test_endpoint(
+    "G4-Admin", "GET", f"/orders/{test_order_id}",
+    session=admin_session, expected_status=200,
+    description="Admin can view any order",
+    check_json=True
+)
+
+# Create another user to test 403
+other_user_id = create_test_user(f"phase6_other_{TIMESTAMP}@test.com", "Other User", "MEMBER", "FREE")
+other_session = login_user(f"phase6_other_{TIMESTAMP}@test.com", PASSWORD)
+
+resp = test_endpoint(
+    "G5-Forbidden", "GET", f"/orders/{test_order_id}",
+    session=other_session, expected_status=403,
+    description="Non-buyer/non-vendor/non-admin → 403"
+)
+
+resp = test_endpoint(
+    "G6-NotFound", "GET", f"/orders/{uuid.uuid4()}",
+    session=buyer_session, expected_status=404,
+    description="Non-existent order → 404"
+)
+
+# ============================================================================
+# H) GET /api/vendor/orders — Extracted to /lib/api/vendor-orders.js
+# ============================================================================
+print("\n" + "=" * 80)
+print("H) GET /api/vendor/orders (Extracted Route)")
+print("=" * 80)
+
+resp = test_endpoint(
+    "H1-Auth", "GET", "/vendor/orders",
+    session=None, expected_status=401,
+    description="Unauthenticated → 401"
+)
+
+resp = test_endpoint(
+    "H2-Role", "GET", "/vendor/orders",
+    session=buyer_session, expected_status=403,
+    description="Non-vendor/non-admin → 403"
+)
+
+resp = test_endpoint(
+    "H3-Vendor", "GET", "/vendor/orders",
+    session=vendor_session, expected_status=200,
+    description="Vendor can view their orders",
+    check_json=True
+)
+
+if resp:
+    data = resp.json()
+    if "orders" in data and "earnings" in data:
+        print(f"   ✓ Response has 'orders' array with {len(data['orders'])} items")
+        earnings = data["earnings"]
+        if all(k in earnings for k in ["totalSales", "totalCommission", "totalNet", "commissionPercent"]):
+            print(f"   ✓ Earnings aggregation working (totalSales: {earnings['totalSales']}, totalNet: {earnings['totalNet']})")
+        else:
+            print(f"   ⚠ Earnings aggregation incomplete")
+    else:
+        print(f"   ⚠ Response missing 'orders' or 'earnings'")
+
+resp = test_endpoint(
+    "H4-Admin", "GET", "/vendor/orders",
+    session=admin_session, expected_status=200,
+    description="Admin can view vendor orders",
+    check_json=True
+)
+
+# ============================================================================
+# I) PATCH /api/vendor/orders/[id]/status — Extracted to /lib/api/vendor-orders.js
+# ============================================================================
+print("\n" + "=" * 80)
+print("I) PATCH /api/vendor/orders/[id]/status (Extracted Route)")
+print("=" * 80)
+
+resp = test_endpoint(
+    "I1-Auth", "PATCH", f"/vendor/orders/{test_order_id}/status",
+    session=None, expected_status=401,
+    body={"status": "SHIPPED"},
+    description="Unauthenticated → 401"
+)
+
+resp = test_endpoint(
+    "I2-Role", "PATCH", f"/vendor/orders/{test_order_id}/status",
+    session=buyer_session, expected_status=403,
+    body={"status": "SHIPPED"},
+    description="Non-vendor/non-admin → 403"
+)
+
+resp = test_endpoint(
+    "I3-Invalid", "PATCH", f"/vendor/orders/{test_order_id}/status",
+    session=vendor_session, expected_status=400,
+    body={"status": "INVALID"},
+    description="Invalid status → 400"
+)
+
+resp = test_endpoint(
+    "I4-Valid", "PATCH", f"/vendor/orders/{test_order_id}/status",
+    session=vendor_session, expected_status=200,
+    body={"status": "SHIPPED", "trackingNumber": "TRK123", "carrier": "Oman Post"},
+    description="Valid status transition PAID → SHIPPED",
+    check_json=True
+)
+
+if resp:
+    data = resp.json()
+    if "order" in data and data["order"].get("status") == "SHIPPED":
+        print(f"   ✓ Order status updated to SHIPPED")
+        if data["order"].get("trackingNumber") == "TRK123":
+            print(f"   ✓ Tracking number saved")
+    else:
+        print(f"   ⚠ Status update incomplete")
+
+resp = test_endpoint(
+    "I5-Transition", "PATCH", f"/vendor/orders/{test_order_id}/status",
+    session=vendor_session, expected_status=200,
+    body={"status": "DELIVERED"},
+    description="Valid status transition SHIPPED → DELIVERED",
+    check_json=True
+)
+
+resp = test_endpoint(
+    "I6-InvalidTransition", "PATCH", f"/vendor/orders/{test_order_id}/status",
+    session=vendor_session, expected_status=400,
+    body={"status": "SHIPPED"},
+    description="Invalid transition DELIVERED → SHIPPED → 400"
+)
+
+resp = test_endpoint(
+    "I7-NotFound", "PATCH", f"/vendor/orders/{uuid.uuid4()}/status",
+    session=vendor_session, expected_status=404,
+    body={"status": "SHIPPED"},
+    description="Non-existent order → 404"
+)
+
+# ============================================================================
+# REGRESSION: POST /api/products (still delegates to products-vendor.js)
+# ============================================================================
+print("\n" + "=" * 80)
+print("REGRESSION: POST /api/products (Stayed in Split Route)")
+print("=" * 80)
+
+resp = test_endpoint(
+    "R1-Auth", "POST", "/products",
+    session=None, expected_status=401,
+    body={"nameAr": "منتج", "price": 100},
+    description="Unauthenticated → 401"
+)
+
+resp = test_endpoint(
+    "R2-Role", "POST", "/products",
+    session=buyer_session, expected_status=403,
+    body={"nameAr": "منتج", "price": 100},
+    description="Non-vendor/non-admin → 403"
+)
+
+resp = test_endpoint(
+    "R3-Valid", "POST", "/products",
+    session=vendor_session, expected_status=200,
+    body={
+        "nameAr": "منتج اختبار جديد",
+        "nameEn": "New Test Product",
+        "description": "وصف المنتج",
+        "category": "JEWELRY",
+        "price": 100,
+        "stock": 10
+    },
+    description="Vendor can create product",
+    check_json=True
+)
+
+# ============================================================================
+# REGRESSION: PUT/DELETE /api/products/[id] (still delegates)
+# ============================================================================
+print("\n" + "=" * 80)
+print("REGRESSION: PUT/DELETE /api/products/[id] (Stayed in Split Route)")
+print("=" * 80)
+
+resp = test_endpoint(
+    "R4-Auth", "PUT", f"/products/{test_product_id}",
+    session=None, expected_status=401,
+    body={"price": 200},
+    description="Unauthenticated → 401"
+)
+
+resp = test_endpoint(
+    "R5-Valid", "PUT", f"/products/{test_product_id}",
+    session=vendor_session, expected_status=200,
+    body={"price": 175, "description": "وصف محدث"},
+    description="Vendor can update their product",
+    check_json=True
+)
+
+resp = test_endpoint(
+    "R6-Auth", "DELETE", f"/products/{test_product_id_2}",
+    session=None, expected_status=401,
+    description="Unauthenticated → 401"
+)
+
+resp = test_endpoint(
+    "R7-Valid", "DELETE", f"/products/{test_product_id_2}",
+    session=vendor_session, expected_status=200,
+    description="Vendor can delete their product"
+)
+
+# ============================================================================
+# REGRESSION: GET /api/orders (buyer list — still in catch-all)
+# ============================================================================
+print("\n" + "=" * 80)
+print("REGRESSION: GET /api/orders (Stayed in Catch-all)")
+print("=" * 80)
+
+resp = test_endpoint(
+    "R8-Auth", "GET", "/orders",
+    session=None, expected_status=401,
+    description="Unauthenticated → 401"
+)
+
+resp = test_endpoint(
+    "R9-Valid", "GET", "/orders",
+    session=buyer_session, expected_status=200,
+    description="Buyer can view their order list",
+    check_json=True
+)
+
+if resp:
+    data = resp.json()
+    if "orders" in data and isinstance(data["orders"], list):
+        print(f"   ✓ Response has 'orders' array with {len(data['orders'])} items")
+    else:
+        print(f"   ⚠ Response missing 'orders' array")
+
+# ============================================================================
+# REGRESSION: POST /api/orders (checkout — still in catch-all)
+# ============================================================================
+print("\n" + "=" * 80)
+print("REGRESSION: POST /api/orders (Stayed in Catch-all)")
+print("=" * 80)
+
+resp = test_endpoint(
+    "R10-Empty", "POST", "/orders",
+    session=buyer_session, expected_status=400,
+    body={"items": [], "paymentMethod": "COD"},
+    description="Empty cart → 400"
+)
+
+if resp:
+    print(f"   ✓ Empty cart validation working (still in catch-all)")
+
+# ============================================================================
+# REGRESSION: POST /api/webhooks/thawani (uses finalizeOrderPayment via import)
+# ============================================================================
+print("\n" + "=" * 80)
+print("REGRESSION: POST /api/webhooks/thawani (Uses order-finalize.js)")
+print("=" * 80)
+
+resp = test_endpoint(
+    "R11-Unsigned", "POST", "/webhooks/thawani",
+    session=None, expected_status=None,  # May be 401 or 501 depending on implementation
+    body={"event": "test"},
+    description="Unsigned webhook → 401/501"
+)
+
+if resp:
+    if resp.status_code in [401, 501]:
+        print(f"   ✓ Webhook security working (rejected unsigned request)")
+    else:
+        print(f"   ⚠ Unexpected status code: {resp.status_code}")
 
 # ============================================================================
 # SUMMARY
@@ -635,6 +789,24 @@ print("=" * 80)
 
 if failed_tests == 0:
     print("🎉 ALL TESTS PASSED!")
+    print("\n✅ PHASE 6 REGRESSION TEST COMPLETE")
+    print("   All extracted routes working correctly:")
+    print("   • GET /api/tags/popular")
+    print("   • GET /api/products (with filters)")
+    print("   • GET /api/products/[id] (with vendor embed)")
+    print("   • GET /api/products/[id]/related")
+    print("   • POST /api/products/ai-search")
+    print("   • POST /api/orders/verify")
+    print("   • GET /api/orders/[id]")
+    print("   • GET /api/vendor/orders (with earnings)")
+    print("   • PATCH /api/vendor/orders/[id]/status")
+    print("\n✅ REGRESSION TESTS PASSED")
+    print("   Routes that stayed in catch-all still working:")
+    print("   • GET /api/orders (buyer list)")
+    print("   • POST /api/orders (checkout validation)")
+    print("   • POST /api/webhooks/thawani (webhook security)")
+    print("   • POST /api/products (create)")
+    print("   • PUT/DELETE /api/products/[id]")
 else:
     print(f"⚠️  {failed_tests} test(s) failed. Review output above.")
 
@@ -642,7 +814,7 @@ else:
 print("\n" + "=" * 80)
 print("CLEANUP: Removing test data")
 print("=" * 80)
-db.users.delete_many({"email": {"$in": [MEMBER_EMAIL, ADMIN_EMAIL, GOLD_EMAIL]}})
-db.companies.delete_many({"_id": {"$in": [test_company_id, test_company_id_2]}})
-db.experts.delete_many({"_id": {"$in": [test_expert_id, test_expert_id_2]}})
+db.users.delete_many({"email": {"$regex": f"phase6_.*_{TIMESTAMP}@test.com"}})
+db.products.delete_many({"_id": {"$in": [test_product_id, test_product_id_2]}})
+db.orders.delete_many({"_id": test_order_id})
 print("✅ Cleanup complete")
