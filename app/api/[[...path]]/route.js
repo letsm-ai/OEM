@@ -126,17 +126,9 @@ import {
   handleAdminSettingsGet,
   handleAdminSettingsPatch,
 } from '@/lib/api/admin-settings'
-import {
-  handleBroadcastPreview,
-  handleBroadcastSend,
-  handleBroadcastHistory,
-} from '@/lib/api/broadcast'
-import {
-  handleTemplatesList,
-  handleTemplatesCreate,
-  handleTemplatesUpdate,
-  handleTemplatesDelete,
-} from '@/lib/api/broadcast-templates'
+// NOTE: broadcast + broadcast-templates handlers are now imported directly by their
+// dedicated per-route files under /app/app/api/admin/broadcast/**. They no longer
+// need to be dispatched from this catch-all router.
 import {
   validateCouponForUser,
   handleCouponValidate,
@@ -412,34 +404,14 @@ async function handleRoute(request, { params }) {
     }
 
     // -------- Admin: Broadcast / Bulk Email Campaigns --------
-    if (route === '/admin/broadcast/preview' && method === 'POST') {
-      return handleCORS(await handleBroadcastPreview(request))
-    }
-    if (route === '/admin/broadcast/send' && method === 'POST') {
-      return handleCORS(await handleBroadcastSend(request))
-    }
-    if (route === '/admin/broadcast/history' && method === 'GET') {
-      return handleCORS(await handleBroadcastHistory(request))
-    }
-    // Admin custom broadcast templates
-    if (route === '/admin/broadcast/templates' && method === 'GET') {
-      return handleCORS(await handleTemplatesList())
-    }
-    if (route === '/admin/broadcast/templates' && method === 'POST') {
-      return handleCORS(await handleTemplatesCreate(request))
-    }
-    {
-      const tplMatch = route.match(/^\/admin\/broadcast\/templates\/([A-Za-z0-9-]+)$/)
-      if (tplMatch) {
-        const id = tplMatch[1]
-        if (method === 'PUT' || method === 'PATCH') {
-          return handleCORS(await handleTemplatesUpdate(request, id))
-        }
-        if (method === 'DELETE') {
-          return handleCORS(await handleTemplatesDelete(request, id))
-        }
-      }
-    }
+    // NOTE: These routes have been SPLIT into dedicated files:
+    //   /app/app/api/admin/broadcast/preview/route.js
+    //   /app/app/api/admin/broadcast/send/route.js
+    //   /app/app/api/admin/broadcast/history/route.js
+    //   /app/app/api/admin/broadcast/templates/route.js          (GET, POST)
+    //   /app/app/api/admin/broadcast/templates/[id]/route.js     (PUT, PATCH, DELETE)
+    // Next.js prefers the more-specific file-based routes over this catch-all,
+    // so we intentionally do NOT re-dispatch them here (removed 2025-refactor).
 
     // -------- SIGNUP --------
     if (route === '/signup' && method === 'POST') {
