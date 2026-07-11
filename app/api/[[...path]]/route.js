@@ -1058,25 +1058,10 @@ async function handleRoute(request, { params }) {
     //   /api/admin/experts/[id]/approve/route.js       (POST)
     //   /api/admin/experts/[id]/reject/route.js        (POST)
 
-    // ---- POST /appointments (book) — supports guest booking ----
-    if (route === '/appointments' && method === 'POST') {
-      return handleAppointmentBook(request)
-    }
-
-    // ---- GET /appointments ----
-    if (route === '/appointments' && method === 'GET') {
-      return handleAppointmentsList(request)
-    }
-
-    // ---- POST /appointments/:id/cancel ----
-    if (apptCancelMatch && method === 'POST') {
-      return handleAppointmentCancel(apptCancelMatch[1])
-    }
-
-    // ---- POST /appointments/:id/review ----
-    if (apptReviewMatch && method === 'POST') {
-      return handleAppointmentReview(apptReviewMatch[1], request)
-    }
+    // ---- APPOINTMENTS: SPLIT to /app/app/api/appointments/** ----
+    //   /appointments/route.js                 (GET, POST)
+    //   /appointments/[id]/cancel/route.js     (POST)
+    //   /appointments/[id]/review/route.js     (POST)
 
     // ---- Admin experts routes are now in dedicated files (see comment above) ----
 
@@ -1605,16 +1590,9 @@ async function handleRoute(request, { params }) {
       )
     }
 
-    // ---- Product Reviews (see /lib/api/reviews.js) ----
-    if (productReviewsMatch && method === 'GET') {
-      return handleReviewsList(productReviewsMatch[1])
-    }
-    if (productReviewsMatch && method === 'POST') {
-      return handleReviewCreate(request, productReviewsMatch[1])
-    }
-    if (productMyReviewStatusMatch && method === 'GET') {
-      return handleMyReviewStatus(productMyReviewStatusMatch[1])
-    }
+    // ---- Product Reviews: SPLIT into dedicated files ----
+    //   /products/[id]/reviews/route.js            (GET, POST)
+    //   /products/[id]/my-review-status/route.js   (GET)
 
     // ---- GET /products/:id/related (public — related products) ----
     if (productRelatedMatch && method === 'GET') {
@@ -1688,35 +1666,15 @@ async function handleRoute(request, { params }) {
       )
     }
 
-    // ---- Wishlist (see /lib/api/wishlist.js) ----
-    if (route === '/wishlist' && method === 'GET') {
-      return handleWishlistList()
-    }
-    if (wishlistItemMatch && method === 'POST') {
-      return handleWishlistAdd(wishlistItemMatch[1])
-    }
-    if (wishlistItemMatch && method === 'DELETE') {
-      return handleWishlistRemove(wishlistItemMatch[1])
-    }
+    // ---- Wishlist: SPLIT to /app/app/api/wishlist/** ----
+    //   /wishlist/route.js         (GET)
+    //   /wishlist/[id]/route.js    (POST, DELETE)
 
 
     /* ============================================================
        MARKETPLACE — CART SYNC (for abandoned-cart reminders)
        ============================================================ */
-    // ---- POST /cart (auth) — upsert user's cart ----
-    if (route === '/cart' && method === 'POST') {
-      return handleCartUpsert(request)
-    }
-
-    // ---- GET /cart (auth) — fetch saved cart ----
-    if (route === '/cart' && method === 'GET') {
-      return handleCartGet()
-    }
-
-    // ---- DELETE /cart (auth) — clear cart (after order success) ----
-    if (route === '/cart' && method === 'DELETE') {
-      return handleCartClear()
-    }
+    // ---- Cart: SPLIT to /app/app/api/cart/route.js (GET, POST, DELETE) ----
 
     /* ============================================================
        CRON — ABANDONED CART REMINDER EMAILS
@@ -1864,10 +1822,10 @@ async function handleRoute(request, { params }) {
     }
 
 
-    // ---- Coupons + Admin CRUD (see /lib/api/coupons.js) ----
-    if (route === '/coupons/validate' && method === 'POST') {
-      return handleCouponValidate(request)
-    }
+    // ---- Coupons: SPLIT ----
+    //   /coupons/validate/route.js         (POST)
+    //   /admin/coupons/route.js            (GET, POST)
+    //   /admin/coupons/[id]/route.js       (PATCH, DELETE)
 
     /* ============================================================
        ADMIN USER MANAGEMENT
@@ -1890,18 +1848,7 @@ async function handleRoute(request, { params }) {
       return handleAdminApprovalsSummary()
     }
 
-    if (route === '/admin/coupons' && method === 'GET') {
-      return handleAdminCouponsList()
-    }
-    if (route === '/admin/coupons' && method === 'POST') {
-      return handleAdminCouponCreate(request)
-    }
-    if (adminCouponActionMatch && method === 'PATCH') {
-      return handleAdminCouponUpdate(request, adminCouponActionMatch[1])
-    }
-    if (adminCouponActionMatch && method === 'DELETE') {
-      return handleAdminCouponDelete(adminCouponActionMatch[1])
-    }
+    // ---- Admin coupons CRUD is now under dedicated files (see comment above) ----
 
 
     /* ============================================================
