@@ -225,12 +225,8 @@ async function handleRoute(request, { params }) {
     if (route === '/push/unsubscribe' && method === 'POST') {
       return handleCORS(await handlePushUnsubscribe(request))
     }
-    if (route === '/admin/push/broadcast' && method === 'POST') {
-      return handleCORS(await handlePushBroadcast(request))
-    }
-    if (route === '/admin/push/stats' && method === 'GET') {
-      return handleCORS(await handlePushStats())
-    }
+    // Split → /app/app/api/admin/push/broadcast/route.js  (POST)
+    // Split → /app/app/api/admin/push/stats/route.js       (GET)
 
     // -------- Email unsubscribe (public) --------
     if (route === '/unsubscribe' && method === 'GET') {
@@ -241,24 +237,13 @@ async function handleRoute(request, { params }) {
     }
 
     // -------- Admin: EmailOptOut management --------
-    if (route === '/admin/email-optouts' && method === 'GET') {
-      return handleCORS(await handleAdminOptOutList(request))
-    }
-    if (route === '/admin/email-optouts/export' && method === 'GET') {
-      return await handleAdminOptOutExport()
-    }
-    const adminOptOutMatch = route.match(/^\/admin\/email-optouts\/([^/]+)$/)
-    if (adminOptOutMatch && method === 'DELETE') {
-      return handleCORS(await handleAdminOptOutDelete(adminOptOutMatch[1]))
-    }
+    // Split into dedicated files:
+    //   /admin/email-optouts/route.js           (GET)
+    //   /admin/email-optouts/export/route.js    (GET, returns text/csv)
+    //   /admin/email-optouts/[id]/route.js      (DELETE)
 
-    // -------- Admin: Site Settings (prices, discounts, free-mode, trial, etc.) --------
-    if (route === '/admin/settings' && method === 'GET') {
-      return handleCORS(await handleAdminSettingsGet())
-    }
-    if (route === '/admin/settings' && method === 'PATCH') {
-      return handleCORS(await handleAdminSettingsPatch(request))
-    }
+    // -------- Admin: Site Settings --------
+    // Split → /app/app/api/admin/settings/route.js  (GET, PATCH)
 
     // -------- Admin: Broadcast / Bulk Email Campaigns --------
     // NOTE: These routes have been SPLIT into dedicated files:
@@ -636,245 +621,7 @@ async function handleRoute(request, { params }) {
        ADMIN
        ============================================================ */
     // ---- GET /admin/analytics (KPIs + time series for charts) ----
-    if (route === '/admin/analytics' && method === 'GET') {
-      const session = await getServerSession(authOptions)
-      if (!session?.user) {
-        return handleCORS(
-          NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-        )
-      }
-      if (session.user.role !== 'ADMIN') {
-        return handleCORS(
-          NextResponse.json({ error: 'صلاحيات مسؤول مطلوبة' }, { status: 403 })
-        )
-      }
-      await connectDB()
-
-      const now = new Date()
-      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
-      // First day of the month, 11 months ago → gives us 12 full month buckets
-      const startOfMonth12 = new Date(
-        Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11, 1)
-      )
-
-      // -------- PARALLEL AGGREGATIONS --------
-      const [
-        totalUsers,
-        usersByRole,
-        usersByTier,
-        paidMemberships,
-        allCompleted,
-        allConfirmed,
-        pendingCompanies,
-        pendingExperts,
-        last30Signups,
-        monthlySignupsAgg,
-        monthlyMembershipAgg,
-        monthlyRevenueAgg,
-        topExperts,
-      ] = await Promise.all([
-        User.countDocuments({}),
-        User.aggregate([{ $group: { _id: '$role', count: { $sum: 1 } } }]),
-        User.aggregate([
-          { $group: { _id: '$membershipTier', count: { $sum: 1 } } },
-        ]),
-        Membership.aggregate([
-          { $match: { paymentStatus: 'PAID' } },
-          {
-            $group: {
-              _id: '$tier',
-              count: { $sum: 1 },
-              revenue: { $sum: '$amountPaid' },
-            },
-          },
-        ]),
-        Appointment.aggregate([
-          { $match: { status: 'COMPLETED' } },
-          {
-            $group: {
-              _id: null,
-              count: { $sum: 1 },
-              revenue: { $sum: '$totalPaid' },
-            },
-          },
-        ]),
-        Appointment.aggregate([
-          { $match: { status: 'CONFIRMED' } },
-          {
-            $group: {
-              _id: null,
-              count: { $sum: 1 },
-              revenue: { $sum: '$totalPaid' },
-            },
-          },
-        ]),
-        Company.countDocuments({ status: 'PENDING' }),
-        Expert.countDocuments({ status: 'PENDING' }),
-        User.countDocuments({ createdAt: { $gte: thirtyDaysAgo } }),
-        // Monthly user signups (last 12 months)
-        User.aggregate([
-          { $match: { createdAt: { $gte: startOfMonth12 } } },
-          {
-            $group: {
-              _id: {
-                y: { $year: '$createdAt' },
-                m: { $month: '$createdAt' },
-              },
-              count: { $sum: 1 },
-            },
-          },
-        ]),
-        // Monthly membership revenue (last 12 months)
-        Membership.aggregate([
-          {
-            $match: {
-              paymentStatus: 'PAID',
-              startDate: { $gte: startOfMonth12 },
-            },
-          },
-          {
-            $group: {
-              _id: {
-                y: { $year: '$startDate' },
-                m: { $month: '$startDate' },
-              },
-              count: { $sum: 1 },
-              revenue: { $sum: '$amountPaid' },
-            },
-          },
-        ]),
-        // Monthly consultation revenue (last 12 months) — COMPLETED + CONFIRMED
-        Appointment.aggregate([
-          {
-            $match: {
-              status: { $in: ['COMPLETED', 'CONFIRMED'] },
-              createdAt: { $gte: startOfMonth12 },
-            },
-          },
-          {
-            $group: {
-              _id: {
-                y: { $year: '$createdAt' },
-                m: { $month: '$createdAt' },
-              },
-              count: { $sum: 1 },
-              revenue: { $sum: '$totalPaid' },
-            },
-          },
-        ]),
-        // Top experts by rating/totalSessions
-        Expert.find({ status: 'APPROVED' })
-          .sort({ rating: -1, totalSessions: -1 })
-          .limit(5)
-          .lean(),
-      ])
-
-      // Build the 12-month scaffold (ordered)
-      const monthKeys = []
-      for (let i = 0; i < 12; i++) {
-        const d = new Date(
-          Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11 + i, 1)
-        )
-        monthKeys.push({
-          y: d.getUTCFullYear(),
-          m: d.getUTCMonth() + 1,
-          key: `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`,
-        })
-      }
-      const bucket = (agg) => {
-        const map = new Map()
-        for (const row of agg || []) {
-          const key = `${row._id.y}-${String(row._id.m).padStart(2, '0')}`
-          map.set(key, row)
-        }
-        return map
-      }
-      const mSignups = bucket(monthlySignupsAgg)
-      const mMember = bucket(monthlyMembershipAgg)
-      const mRev = bucket(monthlyRevenueAgg)
-
-      const monthly = monthKeys.map(({ key, y, m }) => ({
-        key,
-        year: y,
-        month: m,
-        signups: mSignups.get(key)?.count || 0,
-        memberships: mMember.get(key)?.count || 0,
-        membershipRevenue: +(mMember.get(key)?.revenue || 0).toFixed(3),
-        consultationRevenue: +(mRev.get(key)?.revenue || 0).toFixed(3),
-        consultationBookings: mRev.get(key)?.count || 0,
-      }))
-
-      // Topline numbers
-      const membershipsSold = paidMemberships.reduce(
-        (s, r) => s + (r.count || 0),
-        0
-      )
-      const membershipRevenueTotal = paidMemberships.reduce(
-        (s, r) => s + (r.revenue || 0),
-        0
-      )
-      const completedRev = allCompleted[0]?.revenue || 0
-      const completedCount = allCompleted[0]?.count || 0
-      const confirmedRev = allConfirmed[0]?.revenue || 0
-      const confirmedCount = allConfirmed[0]?.count || 0
-
-      // Expert user lookup for topExperts
-      const topExpertUserIds = topExperts.map((e) => e.userId)
-      const topExpertUsers = await User.find({
-        _id: { $in: topExpertUserIds },
-      })
-        .select({ _id: 1, name: 1 })
-        .lean()
-      const topExpertUserMap = Object.fromEntries(
-        topExpertUsers.map((u) => [u._id, u.name])
-      )
-
-      return handleCORS(
-        NextResponse.json({
-          generatedAt: now.toISOString(),
-          users: {
-            total: totalUsers,
-            last30Days: last30Signups,
-            byRole: Object.fromEntries(
-              usersByRole.map((r) => [r._id || 'UNKNOWN', r.count])
-            ),
-            byTier: Object.fromEntries(
-              usersByTier.map((r) => [r._id || 'FREE', r.count])
-            ),
-          },
-          memberships: {
-            totalSold: membershipsSold,
-            totalRevenue: +membershipRevenueTotal.toFixed(3),
-            byTier: paidMemberships.map((r) => ({
-              tier: r._id,
-              count: r.count,
-              revenue: +(r.revenue || 0).toFixed(3),
-            })),
-          },
-          consultations: {
-            completedCount,
-            completedRevenue: +completedRev.toFixed(3),
-            confirmedCount,
-            confirmedRevenue: +confirmedRev.toFixed(3),
-            totalRevenue: +(completedRev + confirmedRev).toFixed(3),
-          },
-          pending: {
-            companies: pendingCompanies,
-            experts: pendingExperts,
-          },
-          monthly,
-          topExperts: topExperts.map((e) => ({
-            id: e._id,
-            name: topExpertUserMap[e.userId] || 'خبير',
-            specialty: e.specialty,
-            specialtyAr: e.specialtyAr,
-            rating: e.rating || 0,
-            totalSessions: e.totalSessions || 0,
-            hourlyRate: e.hourlyRate || 0,
-          })),
-        })
-      )
-    }
+    // Split → /app/app/api/admin/analytics/route.js  (GET, uses admin-analytics.js handler)
 
     // ---- GET /admin/companies?status=PENDING ----
     // Split → /app/app/api/admin/companies/route.js  (GET)
@@ -1189,19 +936,9 @@ async function handleRoute(request, { params }) {
       return handleVendorApply(request)
     }
 
-    // ---- GET /admin/vendor-applications?status= (admin) ----
-    if (route === '/admin/vendor-applications' && method === 'GET') {
-      return handleAdminVendorApplicationsList(request)
-    }
-
-    // ---- POST /admin/vendor-applications/:id/(approve|reject) (admin) ----
-    if (adminVendorAppActionMatch && method === 'POST') {
-      return handleAdminVendorApplicationAction(
-        adminVendorAppActionMatch[1],
-        adminVendorAppActionMatch[2],
-        request
-      )
-    }
+    // ---- Admin vendor-applications SPLIT: ----
+    //   /admin/vendor-applications/route.js                       (GET)
+    //   /admin/vendor-applications/[id]/[action]/route.js         (POST approve/reject)
 
     /* ============================================================
        MARKETPLACE — PRODUCTS
@@ -1279,18 +1016,9 @@ async function handleRoute(request, { params }) {
       return handleVendorPayoutCreate(request)
     }
 
-    // ---- GET /admin/payouts (admin: all requests, filterable) ----
-    if (route === '/admin/payouts' && method === 'GET') {
-      return handleAdminPayoutsList(request)
-    }
-
-    // ---- POST /admin/payouts/:id/:action (admin approve/reject/mark-paid) ----
-    const adminPayoutMatch = route.match(
-      /^\/admin\/payouts\/([A-Za-z0-9-]+)\/(approve|reject|mark-paid)$/
-    )
-    if (adminPayoutMatch && method === 'POST') {
-      return handleAdminPayoutAction(adminPayoutMatch[1], adminPayoutMatch[2], request)
-    }
+    // ---- Admin payouts SPLIT: ----
+    //   /admin/payouts/route.js                       (GET)
+    //   /admin/payouts/[id]/[action]/route.js         (POST approve/reject/mark-paid)
 
     /* ============================================================
        PROMOTIONS (عروض ترويجية)
@@ -1384,22 +1112,14 @@ async function handleRoute(request, { params }) {
        ADMIN USER MANAGEMENT
        ============================================================ */
     // ---- GET /admin/users?role=&tier=&suspended=&search=&page=&limit= ----
-    if (route === '/admin/users' && method === 'GET') {
-      return handleAdminUsersList(request)
-    }
-
-    // ---- PATCH /admin/users/:id  (change role, tier, or suspend/activate) ----
-    const adminUserMatch = route.match(/^\/admin\/users\/([^/]+)$/)
-    if (adminUserMatch && method === 'PATCH') {
-      return handleAdminUserPatch(adminUserMatch[1], request)
-    }
+    // ---- Admin users SPLIT: ----
+    //   /admin/users/route.js         (GET list)
+    //   /admin/users/[id]/route.js    (PATCH role/tier/status)
 
     /* ============================================================
        ADMIN APPROVALS — combined summary
        ============================================================ */
-    if (route === '/admin/approvals/summary' && method === 'GET') {
-      return handleAdminApprovalsSummary()
-    }
+    // Split → /app/app/api/admin/approvals/summary/route.js  (GET)
 
     // ---- Admin coupons CRUD is now under dedicated files (see comment above) ----
 
