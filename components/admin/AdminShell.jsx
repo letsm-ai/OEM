@@ -29,6 +29,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Send,
+  Trash2,
 } from 'lucide-react'
 
 const groups = [
@@ -74,6 +75,7 @@ const groups = [
     label: 'النظام',
     items: [
       { href: '/admin/settings', label: 'الإعدادات', Icon: Sliders },
+      { href: '/admin/cleanup', label: 'تنظيف البيانات', Icon: Trash2 },
       { href: '/help/admin', label: 'دليل الأدمن', Icon: BookOpen },
     ],
   },
