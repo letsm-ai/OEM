@@ -190,6 +190,55 @@ export default function AnalyticsClient() {
         />
       </div>
 
+      {/* Diagnostic: shown only when membership revenue is unexpectedly zero */}
+      {data.memberships.totalSold === 0 && Array.isArray(data.memberships.diagnostic) && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-amber-100 text-amber-700">
+              !
+            </div>
+            <div className="flex-1">
+              <div className="font-bold text-amber-900">
+                لا توجد اشتراكات مدفوعة مسجّلة بعد
+              </div>
+              <p className="mt-1 text-sm text-amber-800">
+                إذا كنت تتوقّع ظهور إيرادات هنا، تحقّق من حالة كل اشتراك في قاعدة
+                البيانات. يجب أن يكون <code className="rounded bg-white px-1 py-0.5 text-[11px] font-mono">paymentStatus = &quot;PAID&quot;</code>{' '}
+                (أو <code className="rounded bg-white px-1 py-0.5 text-[11px] font-mono">amountPaid &gt; 0</code>).
+              </p>
+              {data.memberships.diagnostic.length > 0 ? (
+                <div className="mt-3 overflow-hidden rounded-lg border border-amber-200 bg-white">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="bg-amber-50 text-right text-amber-800">
+                        <th className="px-3 py-2">الحالة</th>
+                        <th className="px-3 py-2 text-center">العدد</th>
+                        <th className="px-3 py-2 text-center">المبلغ (ر.ع)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.memberships.diagnostic.map((row) => (
+                        <tr key={row.status} className="border-t border-amber-100">
+                          <td className="px-3 py-2 font-mono">{row.status}</td>
+                          <td className="px-3 py-2 text-center">{row.count}</td>
+                          <td className="px-3 py-2 text-center">
+                            {fmtOMR(row.revenue)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="mt-2 text-xs text-amber-700">
+                  لا يوجد أي سجلّ اشتراك في قاعدة البيانات على الإطلاق.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Monthly revenue area chart */}
       <ChartCard
         title="الإيرادات الشهرية"
