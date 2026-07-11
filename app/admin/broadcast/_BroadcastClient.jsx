@@ -44,6 +44,7 @@ import {
   Trash2,
   Plus,
   BookMarked,
+  Pencil,
 } from 'lucide-react'
 import { BROADCAST_TEMPLATES, BROADCAST_TEMPLATE_CATEGORIES } from '@/lib/broadcast-templates'
 
@@ -126,6 +127,30 @@ export default function BroadcastClient() {
   const [saveCategory, setSaveCategory] = useState('update')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [editingId, setEditingId] = useState(null)
+
+  const openCreateDialog = () => {
+    setEditingId(null)
+    setSaveName('')
+    setSaveDescription('')
+    setSaveCategory('update')
+    setSaveError('')
+    setSaveOpen(true)
+  }
+
+  const openEditDialog = (tpl) => {
+    // Load the template into the composer so the admin can tweak subject/body too
+    setSubject(tpl.subject)
+    setHtmlBody(tpl.htmlBody)
+    setSelectedTemplateId(tpl.id)
+    // Pre-fill metadata
+    setEditingId(tpl.id)
+    setSaveName(tpl.name)
+    setSaveDescription(tpl.description || '')
+    setSaveCategory(tpl.category || 'other')
+    setSaveError('')
+    setSaveOpen(true)
+  }
 
   const loadCustomTemplates = useCallback(async () => {
     setCustomLoading(true)
@@ -144,8 +169,12 @@ export default function BroadcastClient() {
     setSaving(true)
     setSaveError('')
     try {
-      const res = await fetch('/api/admin/broadcast/templates', {
-        method: 'POST',
+      const url = editingId
+        ? '/api/admin/broadcast/templates/' + editingId
+        : '/api/admin/broadcast/templates'
+      const method = editingId ? 'PUT' : 'POST'
+      const res = await fetch(url, {
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: saveName,
@@ -158,6 +187,7 @@ export default function BroadcastClient() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'SAVE_FAILED')
       setSaveOpen(false)
+      setEditingId(null)
       setSaveName('')
       setSaveDescription('')
       setSaveCategory('update')
@@ -329,10 +359,7 @@ export default function BroadcastClient() {
                   type="button"
                   size="sm"
                   variant="outline"
-                  onClick={() => {
-                    setSaveError('')
-                    setSaveOpen(true)
-                  }}
+                  onClick={openCreateDialog}
                   disabled={!subject.trim() || !htmlBody.trim()}
                   className="h-8 gap-1.5 text-xs"
                 >
@@ -400,6 +427,15 @@ export default function BroadcastClient() {
                               <p className="line-clamp-2 text-[11px] text-gray-500">
                                 {tpl.description || tpl.subject}
                               </p>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openEditDialog(tpl)}
+                              className="absolute left-9 top-2 rounded p-1 text-gray-400 opacity-0 transition hover:bg-blue-50 hover:text-blue-600 group-hover:opacity-100"
+                              aria-label="تعديل القالب"
+                              title="تعديل القالب"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
                             </button>
                             <button
                               type="button"
@@ -779,16 +815,27 @@ export default function BroadcastClient() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      {/* Save-as-template dialog */}
+      {/* Save-as-template dialog (create or edit) */}
       <Dialog open={saveOpen} onOpenChange={setSaveOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Save className="h-5 w-5 text-[#1B3A6B]" />
-              حفظ الرسالة الحالية كقالب
+              {editingId ? (
+                <>
+                  <Pencil className="h-5 w-5 text-[#1B3A6B]" />
+                  تعديل القالب
+                </>
+              ) : (
+                <>
+                  <Save className="h-5 w-5 text-[#1B3A6B]" />
+                  حفظ الرسالة الحالية كقالب
+                </>
+              )}
             </DialogTitle>
             <DialogDescription>
-              سيتمّ حفظ الموضوع والمحتوى الحاليَّين لإعادة استخدامهما لاحقاً.
+              {editingId
+                ? 'يمكنك تعديل الاسم والوصف والتصنيف. لتعديل الموضوع أو المحتوى، عدّلهما في المحرّر ثم احفظ.'
+                : 'سيتمّ حفظ الموضوع والمحتوى الحاليَّين لإعادة استخدامهما لاحقاً.'}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -845,7 +892,12 @@ export default function BroadcastClient() {
             >
               {saving ? (
                 <>
-                  <Loader2 className="ml-2 h-4 w-4 animate-spin" /> جارٍ الحفظ...
+                  <Loader2 className="ml-2 h-4 w-4 animate-spin" />
+                  {editingId ? 'جارٍ التحديث...' : 'جارٍ الحفظ...'}
+                </>
+              ) : editingId ? (
+                <>
+                  <Pencil className="ml-2 h-4 w-4" /> تحديث القالب
                 </>
               ) : (
                 <>
