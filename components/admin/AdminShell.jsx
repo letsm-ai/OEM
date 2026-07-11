@@ -28,6 +28,7 @@ import {
   Menu,
   PanelRightClose,
   PanelRightOpen,
+  Send,
 } from 'lucide-react'
 
 const groups = [
@@ -64,6 +65,7 @@ const groups = [
   {
     label: 'الاتصالات',
     items: [
+      { href: '/admin/broadcast', label: 'الرسائل الجماعية', Icon: Send },
       { href: '/admin/notifications', label: 'الإشعارات', Icon: Bell },
       { href: '/admin/email-optouts', label: 'إلغاء اشتراك الإيميل', Icon: MailX },
     ],

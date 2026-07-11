@@ -127,6 +127,11 @@ import {
   handleAdminSettingsPatch,
 } from '@/lib/api/admin-settings'
 import {
+  handleBroadcastPreview,
+  handleBroadcastSend,
+  handleBroadcastHistory,
+} from '@/lib/api/broadcast'
+import {
   validateCouponForUser,
   handleCouponValidate,
   handleAdminCouponsList,
@@ -398,6 +403,17 @@ async function handleRoute(request, { params }) {
     }
     if (route === '/admin/settings' && method === 'PATCH') {
       return handleCORS(await handleAdminSettingsPatch(request))
+    }
+
+    // -------- Admin: Broadcast / Bulk Email Campaigns --------
+    if (route === '/admin/broadcast/preview' && method === 'POST') {
+      return handleCORS(await handleBroadcastPreview(request))
+    }
+    if (route === '/admin/broadcast/send' && method === 'POST') {
+      return handleCORS(await handleBroadcastSend(request))
+    }
+    if (route === '/admin/broadcast/history' && method === 'GET') {
+      return handleCORS(await handleBroadcastHistory(request))
     }
 
     // -------- SIGNUP --------
