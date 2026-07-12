@@ -715,41 +715,56 @@ export default function BroadcastClient() {
                 </thead>
                 <tbody>
                   {history.map((b) => (
-                    <tr key={b.id} className="border-b last:border-0 hover:bg-gray-50">
-                      <td className="px-4 py-3">
-                        <div className="line-clamp-1 font-semibold text-[#1B3A6B]">
-                          {b.subject}
-                        </div>
-                        <div className="text-[11px] text-gray-400">بواسطة {b.sentByName || '—'}</div>
-                      </td>
-                      <td className="px-4 py-3 text-xs text-gray-500">{fmtDate(b.sentAt || b.createdAt)}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex flex-wrap gap-1">
-                          {(b.tiers || []).map((t) => (
-                            <Badge key={'t' + t} variant="secondary" className="text-[10px]">
-                              {TIERS.find((x) => x.key === t)?.label || t}
-                            </Badge>
-                          ))}
-                          {(b.roles || []).map((r) => (
-                            <Badge key={'r' + r} variant="outline" className="text-[10px]">
-                              {ROLES.find((x) => x.key === r)?.label || r}
-                            </Badge>
-                          ))}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-center font-semibold">
-                        {b.totalRecipients}
-                      </td>
-                      <td className="px-4 py-3 text-center font-semibold text-emerald-600">
-                        {b.successCount}
-                      </td>
-                      <td className="px-4 py-3 text-center font-semibold text-red-500">
-                        {b.failCount}
-                      </td>
-                      <td className="px-4 py-3">
-                        <StatusBadge status={b.status} />
-                      </td>
-                    </tr>
+                    <React.Fragment key={b.id}>
+                      <tr className="border-b last:border-0 hover:bg-gray-50">
+                        <td className="px-4 py-3">
+                          <div className="line-clamp-1 font-semibold text-[#1B3A6B]">
+                            {b.subject}
+                          </div>
+                          <div className="text-[11px] text-gray-400">بواسطة {b.sentByName || '—'}</div>
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-500">{fmtDate(b.sentAt || b.createdAt)}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-wrap gap-1">
+                            {(b.tiers || []).map((t) => (
+                              <Badge key={'t' + t} variant="secondary" className="text-[10px]">
+                                {TIERS.find((x) => x.key === t)?.label || t}
+                              </Badge>
+                            ))}
+                            {(b.roles || []).map((r) => (
+                              <Badge key={'r' + r} variant="outline" className="text-[10px]">
+                                {ROLES.find((x) => x.key === r)?.label || r}
+                              </Badge>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-center font-semibold">
+                          {b.totalRecipients}
+                        </td>
+                        <td className="px-4 py-3 text-center font-semibold text-emerald-600">
+                          {b.successCount}
+                        </td>
+                        <td className="px-4 py-3 text-center font-semibold text-red-500">
+                          {b.failCount}
+                        </td>
+                        <td className="px-4 py-3">
+                          <StatusBadge status={b.status} />
+                        </td>
+                      </tr>
+                      {b.error && b.failCount > 0 && (
+                        <tr className="border-b bg-red-50/50 last:border-0">
+                          <td colSpan={7} className="px-4 py-2">
+                            <div className="flex items-start gap-2 text-[11px] text-red-800">
+                              <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                              <div>
+                                <span className="font-semibold">أول أخطاء Resend: </span>
+                                <span className="font-mono">{b.error}</span>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>
