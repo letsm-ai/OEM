@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import CompanyCard from '@/components/CompanyCard'
+import CompanyRow from '@/components/CompanyRow'
 import { Building2, List, Map as MapIcon, LayoutGrid, Loader2 } from 'lucide-react'
 import { useI18n } from '@/lib/i18n/I18nContext'
 
@@ -115,15 +116,18 @@ export default function DirectoryClient({ companies, featuredIds, filtered }) {
           height={600}
         />
       ) : view === 'split' ? (
-        <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_400px]">
           <DirectoryMap
             companies={withLocation}
             featuredIds={featuredIds}
             height={600}
           />
-          <div className="grid max-h-[600px] gap-2.5 overflow-y-auto pr-1">
+          <div className="flex max-h-[600px] flex-col gap-2 overflow-y-auto pl-1 pr-1">
+            <div className="sticky top-0 z-10 -mx-1 -mt-0.5 bg-gradient-to-b from-white via-white to-transparent px-1 pt-0.5 pb-1 text-xs font-semibold text-gray-500">
+              {companies.length} {t('dir.count.companies')}
+            </div>
             {companies.map((c) => (
-              <CompanyCard
+              <CompanyRow
                 key={c.id}
                 company={c}
                 featured={featuredIds.includes(c.id)}
