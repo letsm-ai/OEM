@@ -20,16 +20,22 @@ export default function MembershipPage() {
   const [toast, setToast] = useState(null)
   const [trialPolicy, setTrialPolicy] = useState(null) // { enabled, durationDays, allowedTier, trialUsed }
   const [trialLoading, setTrialLoading] = useState(null) // tier currently starting trial
+  const [publicSettings, setPublicSettings] = useState(null) // { tierPrices, freeMode, ... }
 
   // Localised name / tagline / benefits helper
   const meta = (key) => {
     const m = TIER_META[key]
+    // Use live price from public settings; fall back to hardcoded meta only if
+    // the settings fetch hasn't completed yet (never let the UI show a price
+    // that differs from what will be charged at checkout).
+    const livePrice = publicSettings?.tierPrices?.[key]
     return {
       ...m,
       name: isAr ? m.nameAr : (m.nameEn || m.nameAr),
       tag: isAr ? m.tagline : (m.taglineEn || m.tagline),
       benefitsList: isAr ? m.benefits : (m.benefitsEn || m.benefits),
       limitsList: isAr ? m.limits : (m.limitsEn || m.limits),
+      price: typeof livePrice === 'number' ? livePrice : m.price,
     }
   }
 
@@ -58,6 +64,21 @@ export default function MembershipPage() {
     }
     loadTrial()
   }, [status])
+
+  // Fetch public settings (tier prices, discounts, free-mode flag) so the UI
+  // always reflects the SAME prices the backend charges at checkout. Without
+  // this, hard-coded meta.price can drift from admin-controlled prices.
+  useEffect(() => {
+    async function loadSettings() {
+      try {
+        const res = await fetch('/api/settings/public')
+        if (res.ok) setPublicSettings(await res.json())
+      } catch (e) {
+        // silent — meta prices used as fallback
+      }
+    }
+    loadSettings()
+  }, [])
 
   const currentTier = me?.membershipTier || session?.user?.membershipTier || 'FREE'
 
