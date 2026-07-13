@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
-import { Check, X, Crown, Loader2, Sparkles, Star } from 'lucide-react'
+import { Check, X, Crown, Loader2, Sparkles, Star, Gift, Clock } from 'lucide-react'
 import { TIER_META, formatLocaleDate } from '@/lib/membership'
 import { useI18n } from '@/lib/i18n/I18nContext'
 
@@ -18,6 +18,8 @@ export default function MembershipPage() {
   const [loadingTier, setLoadingTier] = useState(null)
   const [confirm, setConfirm] = useState(null) // tier pending confirmation
   const [toast, setToast] = useState(null)
+  const [trialPolicy, setTrialPolicy] = useState(null) // { enabled, durationDays, allowedTier, trialUsed }
+  const [trialLoading, setTrialLoading] = useState(null) // tier currently starting trial
 
   // Localised name / tagline / benefits helper
   const meta = (key) => {
@@ -44,6 +46,19 @@ export default function MembershipPage() {
     loadMe()
   }, [status])
 
+  // Fetch trial policy (public endpoint works whether logged in or not)
+  useEffect(() => {
+    async function loadTrial() {
+      try {
+        const res = await fetch('/api/membership/trial-status')
+        if (res.ok) setTrialPolicy(await res.json())
+      } catch (e) {
+        // silent — trial UI simply won't render
+      }
+    }
+    loadTrial()
+  }, [status])
+
   const currentTier = me?.membershipTier || session?.user?.membershipTier || 'FREE'
 
   const onSubscribe = async (tier) => {
@@ -63,12 +78,27 @@ export default function MembershipPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tier: confirm }),
       })
-      const data = await res.json()
+      const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        setToast({ type: 'error', msg: data.error || t('mem.toast.error') })
+        // Surface the exact backend error so admin can debug (e.g. "Thawani not configured")
+        const msg = data.error || data.message || t('mem.toast.error')
+        setToast({ type: 'error', msg: `${msg}${data.code ? ` (${data.code})` : ''}` })
         setLoadingTier(null)
         setConfirm(null)
-        setTimeout(() => setToast(null), 4000)
+        setTimeout(() => setToast(null), 6000)
+        return
+      }
+
+      // ---- FREE MODE: admin toggled 'everything free' — tier already activated by API ----
+      if (data.success && data.freeMode) {
+        setToast({
+          type: 'success',
+          msg: isAr
+            ? 'تم تفعيل الباقة مجاناً (وضع مجاني). جارٍ التحديث...'
+            : 'Tier activated free (free mode). Refreshing...',
+        })
+        try { await update() } catch (e) { /* session refresh optional */ }
+        setTimeout(() => { window.location.href = '/dashboard' }, 900)
         return
       }
 
@@ -87,15 +117,13 @@ export default function MembershipPage() {
         return
       }
 
-      // ---- Any other response is treated as an error (defensive) ----
-      // The API MUST return { requiresPayment, redirectUrl } for paid tiers.
-      // If we got here, something is misconfigured — do NOT locally activate anything.
+      // ---- Unexpected shape — show raw response for diagnostics ----
       console.error('[membership] unexpected subscribe response', data)
       setToast({
         type: 'error',
         msg: isAr
-          ? 'تعذّر بدء عملية الدفع. الرجاء المحاولة لاحقاً أو التواصل مع الدعم.'
-          : 'Could not start payment. Please try again later or contact support.',
+          ? `تعذّر بدء عملية الدفع. ${data.error || data.message || 'الرجاء المحاولة لاحقاً أو التواصل مع الدعم.'}`
+          : `Could not start payment. ${data.error || data.message || 'Please try again later or contact support.'}`,
       })
     } catch (e) {
       setToast({ type: 'error', msg: t('mem.toast.network') })
@@ -103,13 +131,65 @@ export default function MembershipPage() {
       // Only clear loading if we didn't redirect
       setLoadingTier((prev) => (prev === confirm ? null : prev))
       setConfirm(null)
-      setTimeout(() => setToast(null), 4000)
+      setTimeout(() => setToast(null), 6000)
     }
+  }
+
+  // ---- Start a free trial for a specific tier ----
+  const onStartTrial = async (tier) => {
+    if (status !== 'authenticated') {
+      router.push(`/login?callbackUrl=/membership`)
+      return
+    }
+    if (!trialPolicy?.enabled || trialPolicy?.trialUsed) return
+    setTrialLoading(tier)
+    try {
+      const res = await fetch('/api/membership/start-trial', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tier }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setToast({
+          type: 'error',
+          msg: data.error || (isAr ? 'تعذّر بدء التجربة' : 'Could not start trial'),
+        })
+        setTimeout(() => setToast(null), 5000)
+        setTrialLoading(null)
+        return
+      }
+      setToast({
+        type: 'success',
+        msg: isAr
+          ? `تم تفعيل تجربة ${trialPolicy.durationDays} يوم! جارٍ التحديث...`
+          : `${trialPolicy.durationDays}-day trial activated! Refreshing...`,
+      })
+      try { await update() } catch (e) { /* session refresh optional */ }
+      setTimeout(() => { window.location.href = '/dashboard' }, 1000)
+    } catch (e) {
+      setToast({ type: 'error', msg: t('mem.toast.network') })
+      setTrialLoading(null)
+    }
+  }
+
+  // Which tiers can start a trial? If admin locked allowedTier, only that.
+  // Otherwise any paid tier.
+  const canStartTrialForTier = (tier) => {
+    if (!trialPolicy?.enabled) return false
+    if (trialPolicy?.trialUsed) return false
+    if (status !== 'authenticated') return true // will redirect to login
+    if (currentTier !== 'FREE') return false // already have a paid tier
+    if (tier === 'FREE') return false
+    const locked = trialPolicy.allowedTier
+    if (locked && locked !== '') return locked === tier
+    return true
   }
 
   const currentMeta = meta(currentTier)
   const confirmMeta = confirm ? meta(confirm) : null
   const toastSide = isRTL ? 'right-6' : 'left-6'
+  const trialActive = !!(trialPolicy?.enabled && !trialPolicy?.trialUsed)
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] py-12">
@@ -125,6 +205,27 @@ export default function MembershipPage() {
         <p className="mx-auto mt-3 max-w-2xl text-gray-600">
           {t('mem.subtitle')}
         </p>
+
+        {/* Free-trial highlight banner (only if trial policy is enabled and user hasn't used it) */}
+        {trialActive && currentTier === 'FREE' && (
+          <div className="mx-auto mt-6 max-w-2xl rounded-2xl border-2 border-dashed border-[#C9A84C] bg-gradient-to-br from-[#C9A84C]/10 to-[#1B3A6B]/5 p-5">
+            <div className="flex items-center justify-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[#C9A84C]">
+                <Gift className="h-5 w-5 text-[#1B3A6B]" />
+              </div>
+              <div className={isRTL ? 'text-right' : 'text-left'}>
+                <div className="text-sm font-bold text-[#1B3A6B]">
+                  {isAr ? `🎁 تجربة مجانية لمدة ${trialPolicy.durationDays} يوم` : `🎁 ${trialPolicy.durationDays}-day free trial`}
+                </div>
+                <div className="mt-0.5 text-xs text-gray-600">
+                  {isAr
+                    ? 'اختر الباقة واضغط "ابدأ التجربة المجانية" — بدون بطاقة، لمرة واحدة فقط لكل مستخدم.'
+                    : 'Pick a plan and click "Start free trial" — no card needed, once per user.'}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Current tier banner */}
@@ -241,27 +342,52 @@ export default function MembershipPage() {
                     {status === 'authenticated' ? t('mem.free.default') : t('mem.free.signup')}
                   </button>
                 ) : (
-                  <button
-                    onClick={() => onSubscribe(key)}
-                    disabled={loadingTier === key}
-                    className={`flex w-full items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-semibold transition disabled:opacity-60 ${
-                      isPopular
-                        ? 'bg-[#C9A84C] text-[#1B3A6B] hover:bg-[#b89440]'
-                        : 'bg-[#1B3A6B] text-white hover:bg-[#152c52]'
-                    }`}
-                  >
-                    {loadingTier === key ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        {t('mem.subscribing')}
-                      </>
-                    ) : (
-                      <>
-                        <Crown className="h-4 w-4" />
-                        {t('mem.subscribe')}
-                      </>
+                  <>
+                    <button
+                      onClick={() => onSubscribe(key)}
+                      disabled={loadingTier === key}
+                      className={`flex w-full items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-semibold transition disabled:opacity-60 ${
+                        isPopular
+                          ? 'bg-[#C9A84C] text-[#1B3A6B] hover:bg-[#b89440]'
+                          : 'bg-[#1B3A6B] text-white hover:bg-[#152c52]'
+                      }`}
+                    >
+                      {loadingTier === key ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          {t('mem.subscribing')}
+                        </>
+                      ) : (
+                        <>
+                          <Crown className="h-4 w-4" />
+                          {t('mem.subscribe')}
+                        </>
+                      )}
+                    </button>
+
+                    {/* Start free trial (only if trial policy allows this tier and user hasn't used it) */}
+                    {canStartTrialForTier(key) && (
+                      <button
+                        onClick={() => onStartTrial(key)}
+                        disabled={trialLoading === key || loadingTier === key}
+                        className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border-2 border-dashed border-[#C9A84C] bg-white py-2.5 text-sm font-semibold text-[#8a6f2d] transition hover:bg-[#C9A84C]/10 disabled:opacity-60"
+                      >
+                        {trialLoading === key ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            {isAr ? 'جارٍ التفعيل...' : 'Activating...'}
+                          </>
+                        ) : (
+                          <>
+                            <Gift className="h-4 w-4" />
+                            {isAr
+                              ? `ابدأ التجربة المجانية (${trialPolicy?.durationDays || 30} يوم)`
+                              : `Start free trial (${trialPolicy?.durationDays || 30} days)`}
+                          </>
+                        )}
+                      </button>
                     )}
-                  </button>
+                  </>
                 )}
               </div>
             )

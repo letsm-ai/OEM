@@ -1,411 +1,515 @@
 #!/usr/bin/env python3
 """
-Backend test for Bulk Email Broadcast system with Resend Batch API migration.
-Tests the three broadcast endpoints with focus on the new batch send implementation.
+Backend API Testing for Omani Entrepreneur Majles
+Tests membership trial and subscribe endpoints with enhanced error diagnostics
 """
 
 import requests
 import json
 import time
-from datetime import datetime
+import os
+from datetime import datetime, timedelta
+from pymongo import MongoClient
+import bcrypt
 
 # Configuration
-BASE_URL = "https://omani-startup-hub.preview.emergentagent.com"
+BASE_URL = os.getenv('NEXT_PUBLIC_BASE_URL', 'https://omani-startup-hub.preview.emergentagent.com')
 API_BASE = f"{BASE_URL}/api"
+MONGO_URL = os.getenv('MONGO_URL', 'mongodb://localhost:27017/majles')
+DB_NAME = os.getenv('DB_NAME', 'majles')
 
-# Admin credentials
+# Test credentials
 ADMIN_EMAIL = "mazin298@gmail.com"
 ADMIN_PASSWORD = "Password123"
 
-class BroadcastTester:
-    def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        })
-        self.admin_cookies = None
-        
-    def login_admin(self):
-        """Login as admin and get session cookies"""
-        print("\n🔐 Logging in as admin...")
-        
-        # Get CSRF token first
-        csrf_response = self.session.get(f"{API_BASE}/auth/csrf")
-        if csrf_response.status_code != 200:
-            print(f"❌ Failed to get CSRF token: {csrf_response.status_code}")
-            return False
-            
-        csrf_data = csrf_response.json()
-        csrf_token = csrf_data.get('csrfToken')
-        
-        # Login with credentials
-        login_payload = {
-            'email': ADMIN_EMAIL,
-            'password': ADMIN_PASSWORD,
+# MongoDB connection
+mongo_client = MongoClient(MONGO_URL)
+db = mongo_client[DB_NAME]
+
+print("=" * 80)
+print("MEMBERSHIP TRIAL + SUBSCRIBE ENHANCED ERROR DIAGNOSTICS TESTING")
+print("=" * 80)
+print(f"API Base URL: {API_BASE}")
+print(f"MongoDB: {MONGO_URL}/{DB_NAME}")
+print(f"Test started at: {datetime.now().isoformat()}")
+print("=" * 80)
+
+# Helper functions
+def login(email, password):
+    """Login and return session cookies"""
+    session = requests.Session()
+    
+    # Get CSRF token
+    csrf_resp = session.get(f"{BASE_URL}/api/auth/csrf")
+    csrf_token = csrf_resp.json().get('csrfToken')
+    
+    # Login
+    login_resp = session.post(
+        f"{BASE_URL}/api/auth/callback/credentials",
+        data={
+            'email': email,
+            'password': password,
             'csrfToken': csrf_token,
-            'json': True
+            'json': 'true'
+        },
+        headers={'Content-Type': 'application/x-www-form-urlencoded'},
+        allow_redirects=False
+    )
+    
+    # Return the session object which maintains cookies
+    return session
+
+def create_test_user(email, password, name="Test User"):
+    """Create a test user via signup API"""
+    resp = requests.post(
+        f"{API_BASE}/signup",
+        json={
+            'name': name,
+            'email': email,
+            'password': password
         }
+    )
+    return resp
+
+def cleanup_test_user(email):
+    """Delete test user and related data from database"""
+    try:
+        user = db.users.find_one({'email': email})
+        if user:
+            user_id = user['_id']
+            # Delete memberships
+            db.memberships.delete_many({'userId': user_id})
+            # Delete user
+            db.users.delete_one({'_id': user_id})
+            print(f"✓ Cleaned up test user: {email}")
+    except Exception as e:
+        print(f"✗ Cleanup error for {email}: {e}")
+
+# Test counters
+total_tests = 0
+passed_tests = 0
+failed_tests = 0
+
+def test_result(name, passed, details=""):
+    global total_tests, passed_tests, failed_tests
+    total_tests += 1
+    if passed:
+        passed_tests += 1
+        print(f"✅ TEST {total_tests}: {name}")
+    else:
+        failed_tests += 1
+        print(f"❌ TEST {total_tests}: {name}")
+    if details:
+        print(f"   {details}")
+    print()
+
+# =============================================================================
+# TEST 1: GET /api/membership/trial-status (public, no auth)
+# =============================================================================
+print("\n" + "=" * 80)
+print("TEST 1: GET /api/membership/trial-status (public, no auth)")
+print("=" * 80)
+
+try:
+    resp = requests.get(f"{API_BASE}/membership/trial-status")
+    data = resp.json()
+    
+    if resp.status_code == 200:
+        required_fields = ['loggedIn', 'enabled', 'durationDays', 'allowedTier']
+        has_all_fields = all(field in data for field in required_fields)
         
-        login_response = self.session.post(
-            f"{API_BASE}/auth/callback/credentials",
-            json=login_payload
+        if has_all_fields and data['loggedIn'] == False:
+            test_result(
+                "Public trial-status endpoint",
+                True,
+                f"Response: loggedIn={data['loggedIn']}, enabled={data['enabled']}, durationDays={data['durationDays']}, allowedTier={data.get('allowedTier', '')}"
+            )
+        else:
+            test_result(
+                "Public trial-status endpoint",
+                False,
+                f"Missing fields or loggedIn not False. Data: {data}"
+            )
+    else:
+        test_result(
+            "Public trial-status endpoint",
+            False,
+            f"Expected 200, got {resp.status_code}: {data}"
+        )
+except Exception as e:
+    test_result("Public trial-status endpoint", False, f"Exception: {e}")
+
+# =============================================================================
+# TEST 2: GET /api/membership/trial-status (authenticated)
+# =============================================================================
+print("\n" + "=" * 80)
+print("TEST 2: GET /api/membership/trial-status (authenticated)")
+print("=" * 80)
+
+try:
+    # Login as admin
+    admin_session = login(ADMIN_EMAIL, ADMIN_PASSWORD)
+    
+    resp = admin_session.get(
+        f"{API_BASE}/membership/trial-status"
+    )
+    data = resp.json()
+    
+    if resp.status_code == 200:
+        required_fields = ['loggedIn', 'enabled', 'durationDays', 'allowedTier', 'trialUsed', 'trialTier', 'trialStart', 'trialEnd']
+        has_all_fields = all(field in data for field in required_fields)
+        
+        if has_all_fields and data['loggedIn'] == True:
+            test_result(
+                "Authenticated trial-status endpoint",
+                True,
+                f"Response: loggedIn={data['loggedIn']}, trialUsed={data['trialUsed']}, trialTier={data.get('trialTier', '')}"
+            )
+        else:
+            test_result(
+                "Authenticated trial-status endpoint",
+                False,
+                f"Missing fields or loggedIn not True. Data: {data}"
+            )
+    else:
+        test_result(
+            "Authenticated trial-status endpoint",
+            False,
+            f"Expected 200, got {resp.status_code}: {data}"
+        )
+except Exception as e:
+    test_result("Authenticated trial-status endpoint", False, f"Exception: {e}")
+
+# =============================================================================
+# TEST 3: POST /api/membership/start-trial (full flow)
+# =============================================================================
+print("\n" + "=" * 80)
+print("TEST 3: POST /api/membership/start-trial (full flow)")
+print("=" * 80)
+
+# Create a fresh test user
+test_email = f"trial_test_{int(time.time())}@example.com"
+test_password = "TestPass123"
+test_name = "Trial Test User"
+
+print(f"Creating fresh test user: {test_email}")
+
+try:
+    # Create user
+    signup_resp = create_test_user(test_email, test_password, test_name)
+    
+    if signup_resp.status_code == 200:
+        print(f"✓ Test user created: {test_email}")
+        
+        # Login as test user
+        test_session = login(test_email, test_password)
+        
+        # Verify user is FREE tier with trialUsed=false
+        user_doc = db.users.find_one({'email': test_email})
+        if user_doc:
+            print(f"✓ User doc found: membershipTier={user_doc.get('membershipTier', 'FREE')}, trialUsed={user_doc.get('trialUsed', False)}")
+        
+        # Start trial
+        trial_resp = test_session.post(
+            f"{API_BASE}/membership/start-trial",
+            json={'tier': 'BASIC'}
+        )
+        trial_data = trial_resp.json()
+        
+        if trial_resp.status_code == 200:
+            # Verify response structure
+            required_fields = ['success', 'trial', 'user']
+            has_all_fields = all(field in trial_data for field in required_fields)
+            
+            if has_all_fields and trial_data['success'] == True:
+                trial_info = trial_data['trial']
+                user_info = trial_data['user']
+                
+                # Verify trial info
+                trial_valid = (
+                    trial_info.get('tier') == 'BASIC' and
+                    'start' in trial_info and
+                    'end' in trial_info and
+                    trial_info.get('durationDays') == 30
+                )
+                
+                # Verify user info
+                user_valid = (
+                    user_info.get('membershipTier') == 'BASIC' and
+                    user_info.get('trialUsed') == True
+                )
+                
+                if trial_valid and user_valid:
+                    # Verify database update
+                    updated_user = db.users.find_one({'email': test_email})
+                    db_valid = (
+                        updated_user.get('membershipTier') == 'BASIC' and
+                        updated_user.get('trialUsed') == True and
+                        updated_user.get('trialEnd') is not None
+                    )
+                    
+                    # Verify Membership record created
+                    membership = db.memberships.find_one({'userId': updated_user['_id']})
+                    membership_valid = (
+                        membership is not None and
+                        membership.get('tier') == 'BASIC' and
+                        membership.get('amountPaid') == 0 and
+                        membership.get('paymentStatus') == 'PAID'
+                    )
+                    
+                    if db_valid and membership_valid:
+                        test_result(
+                            "Start trial - Success path",
+                            True,
+                            f"Trial started: tier=BASIC, durationDays=30, user updated, membership created"
+                        )
+                    else:
+                        test_result(
+                            "Start trial - Success path",
+                            False,
+                            f"DB validation failed. db_valid={db_valid}, membership_valid={membership_valid}"
+                        )
+                else:
+                    test_result(
+                        "Start trial - Success path",
+                        False,
+                        f"Response validation failed. trial_valid={trial_valid}, user_valid={user_valid}"
+                    )
+            else:
+                test_result(
+                    "Start trial - Success path",
+                    False,
+                    f"Missing fields or success not True. Data: {trial_data}"
+                )
+        else:
+            test_result(
+                "Start trial - Success path",
+                False,
+                f"Expected 200, got {trial_resp.status_code}: {trial_data}"
+            )
+        
+        # TEST 3b: Second trial attempt should fail
+        print("\nTesting duplicate trial prevention...")
+        trial2_resp = test_session.post(
+            f"{API_BASE}/membership/start-trial",
+            json={'tier': 'BASIC'}
+        )
+        trial2_data = trial2_resp.json()
+        
+        if trial2_resp.status_code == 400 and 'لقد استخدمت تجربتك المجانية مسبقاً' in trial2_data.get('error', ''):
+            test_result(
+                "Start trial - Duplicate prevention",
+                True,
+                f"Correctly rejected second trial: {trial2_data.get('error')}"
+            )
+        else:
+            test_result(
+                "Start trial - Duplicate prevention",
+                False,
+                f"Expected 400 with Arabic error, got {trial2_resp.status_code}: {trial2_data}"
+            )
+        
+        # Cleanup test user
+        cleanup_test_user(test_email)
+        
+    else:
+        test_result(
+            "Start trial - User creation",
+            False,
+            f"Failed to create test user: {signup_resp.status_code}"
         )
         
-        if login_response.status_code == 200:
-            # Store cookies for subsequent requests
-            self.admin_cookies = self.session.cookies
-            print(f"✅ Admin login successful")
-            return True
-        else:
-            print(f"❌ Admin login failed: {login_response.status_code}")
-            print(f"Response: {login_response.text[:200]}")
-            return False
-    
-    def test_preview_endpoint(self):
-        """Test POST /api/admin/broadcast/preview"""
-        print("\n" + "="*80)
-        print("TEST 1: POST /api/admin/broadcast/preview")
-        print("="*80)
-        
-        test_cases = [
-            {
-                "name": "Preview with PLATINUM tier (small audience)",
-                "payload": {"tiers": ["PLATINUM"], "roles": [], "activeOnly": True},
-                "expect_status": 200
-            },
-            {
-                "name": "Preview with ADMIN role (small audience)",
-                "payload": {"tiers": [], "roles": ["ADMIN"], "activeOnly": True},
-                "expect_status": 200
-            },
-            {
-                "name": "Preview with both tier and role",
-                "payload": {"tiers": ["GOLD", "PLATINUM"], "roles": ["EXPERT"], "activeOnly": True},
-                "expect_status": 200
-            }
-        ]
-        
-        passed = 0
-        failed = 0
-        
-        for tc in test_cases:
-            print(f"\n📋 {tc['name']}")
-            try:
-                response = self.session.post(
-                    f"{API_BASE}/admin/broadcast/preview",
-                    json=tc['payload'],
-                    cookies=self.admin_cookies
-                )
-                
-                if response.status_code == tc['expect_status']:
-                    data = response.json()
-                    if 'total' in data and 'optedOut' in data and 'deliverable' in data:
-                        print(f"✅ Status: {response.status_code}")
-                        print(f"   Response: total={data['total']}, optedOut={data['optedOut']}, deliverable={data['deliverable']}")
-                        passed += 1
-                    else:
-                        print(f"❌ Missing required fields in response")
-                        print(f"   Response: {data}")
-                        failed += 1
-                else:
-                    print(f"❌ Expected {tc['expect_status']}, got {response.status_code}")
-                    print(f"   Response: {response.text[:200]}")
-                    failed += 1
-            except Exception as e:
-                print(f"❌ Exception: {str(e)}")
-                failed += 1
-        
-        print(f"\n📊 Preview Endpoint: {passed} passed, {failed} failed")
-        return passed, failed
-    
-    def test_send_endpoint(self):
-        """Test POST /api/admin/broadcast/send - THE CRITICAL FIX"""
-        print("\n" + "="*80)
-        print("TEST 2: POST /api/admin/broadcast/send (BATCH API)")
-        print("="*80)
-        
-        # Test validation errors first
-        validation_tests = [
-            {
-                "name": "Missing subject",
-                "payload": {"subject": "", "htmlBody": "<p>Test</p>", "roles": ["ADMIN"]},
-                "expect_status": 400,
-                "expect_error": "MISSING_SUBJECT"
-            },
-            {
-                "name": "Missing htmlBody",
-                "payload": {"subject": "Test", "htmlBody": "", "roles": ["ADMIN"]},
-                "expect_status": 400,
-                "expect_error": "MISSING_BODY"
-            },
-            {
-                "name": "Missing target (no tiers AND no roles)",
-                "payload": {"subject": "Test", "htmlBody": "<p>Test</p>", "tiers": [], "roles": []},
-                "expect_status": 400,
-                "expect_error": "MISSING_TARGET"
-            }
-        ]
-        
-        passed = 0
-        failed = 0
-        
-        print("\n🔍 Validation Tests:")
-        for tc in validation_tests:
-            print(f"\n📋 {tc['name']}")
-            try:
-                response = self.session.post(
-                    f"{API_BASE}/admin/broadcast/send",
-                    json=tc['payload'],
-                    cookies=self.admin_cookies
-                )
-                
-                if response.status_code == tc['expect_status']:
-                    data = response.json()
-                    if tc['expect_error'] in str(data.get('error', '')):
-                        print(f"✅ Status: {response.status_code}, Error: {data.get('error')}")
-                        passed += 1
-                    else:
-                        print(f"❌ Expected error '{tc['expect_error']}', got: {data}")
-                        failed += 1
-                else:
-                    print(f"❌ Expected {tc['expect_status']}, got {response.status_code}")
-                    failed += 1
-            except Exception as e:
-                print(f"❌ Exception: {str(e)}")
-                failed += 1
-        
-        # Test successful send with ADMIN role (small, safe audience)
-        print("\n🚀 Successful Send Test (ADMIN role - small audience):")
-        timestamp = int(time.time())
-        send_payload = {
-            "subject": f"Test Broadcast — Batch API {timestamp}",
-            "htmlBody": "<p>هذا اختبار تلقائي للـ Batch API. تم إرساله من الاختبار.</p><p>This is an automated test of the Batch API migration.</p>",
-            "roles": ["ADMIN"],
-            "activeOnly": True
-        }
-        
-        try:
-            print(f"\n📤 Sending broadcast to ADMIN role...")
-            response = self.session.post(
-                f"{API_BASE}/admin/broadcast/send",
-                json=send_payload,
-                cookies=self.admin_cookies
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                print(f"✅ Broadcast sent successfully!")
-                print(f"   Response structure:")
-                print(f"   - id: {data.get('id', 'MISSING')}")
-                print(f"   - totalRecipients: {data.get('totalRecipients', 'MISSING')}")
-                print(f"   - successCount: {data.get('successCount', 'MISSING')}")
-                print(f"   - failCount: {data.get('failCount', 'MISSING')}")
-                print(f"   - optedOutSkipped: {data.get('optedOutSkipped', 'MISSING')}")
-                print(f"   - status: {data.get('status', 'MISSING')}")
-                
-                # Verify critical fields
-                required_fields = ['id', 'totalRecipients', 'successCount', 'failCount', 'optedOutSkipped', 'status']
-                all_present = all(field in data for field in required_fields)
-                
-                if all_present:
-                    # Check success criteria
-                    if data['status'] == 'COMPLETED':
-                        print(f"✅ Status is COMPLETED")
-                        passed += 1
-                    else:
-                        print(f"⚠️  Status is {data['status']} (expected COMPLETED)")
-                        if data.get('error'):
-                            print(f"   Error details: {data['error']}")
-                        passed += 1  # Still count as pass if we got a response
-                    
-                    if data['successCount'] > 0:
-                        print(f"✅ successCount > 0 ({data['successCount']})")
-                    else:
-                        print(f"⚠️  successCount is 0 (may be expected if RESEND_API_KEY is unset)")
-                    
-                    if data['failCount'] == 0:
-                        print(f"✅ failCount is 0")
-                    else:
-                        print(f"⚠️  failCount is {data['failCount']}")
-                        if data.get('error'):
-                            print(f"   Error details: {data['error']}")
-                    
-                    # Store broadcast ID for history test
-                    self.last_broadcast_id = data.get('id')
-                    
-                else:
-                    print(f"❌ Missing required fields in response")
-                    failed += 1
-            else:
-                print(f"❌ Expected 200, got {response.status_code}")
-                print(f"   Response: {response.text[:500]}")
-                failed += 1
-        except Exception as e:
-            print(f"❌ Exception: {str(e)}")
-            failed += 1
-        
-        print(f"\n📊 Send Endpoint: {passed} passed, {failed} failed")
-        return passed, failed
-    
-    def test_history_endpoint(self):
-        """Test GET /api/admin/broadcast/history"""
-        print("\n" + "="*80)
-        print("TEST 3: GET /api/admin/broadcast/history")
-        print("="*80)
-        
-        passed = 0
-        failed = 0
-        
-        try:
-            print(f"\n📋 Fetching broadcast history (limit=5)...")
-            response = self.session.get(
-                f"{API_BASE}/admin/broadcast/history?limit=5",
-                cookies=self.admin_cookies
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                if 'items' in data:
-                    items = data['items']
-                    print(f"✅ Status: 200")
-                    print(f"   Found {len(items)} broadcast(s)")
-                    
-                    if len(items) > 0:
-                        first_item = items[0]
-                        print(f"\n   Most recent broadcast:")
-                        print(f"   - id: {first_item.get('id', 'MISSING')}")
-                        print(f"   - subject: {first_item.get('subject', 'MISSING')}")
-                        print(f"   - totalRecipients: {first_item.get('totalRecipients', 'MISSING')}")
-                        print(f"   - successCount: {first_item.get('successCount', 'MISSING')}")
-                        print(f"   - failCount: {first_item.get('failCount', 'MISSING')}")
-                        print(f"   - status: {first_item.get('status', 'MISSING')}")
-                        print(f"   - sentAt: {first_item.get('sentAt', 'MISSING')}")
-                        
-                        # Verify required fields
-                        required_fields = ['id', 'subject', 'tiers', 'roles', 'totalRecipients', 
-                                         'successCount', 'failCount', 'status', 'sentAt']
-                        all_present = all(field in first_item for field in required_fields)
-                        
-                        if all_present:
-                            print(f"✅ All required fields present")
-                            passed += 1
-                        else:
-                            missing = [f for f in required_fields if f not in first_item]
-                            print(f"❌ Missing fields: {missing}")
-                            failed += 1
-                        
-                        # Check if our test broadcast appears
-                        if hasattr(self, 'last_broadcast_id') and self.last_broadcast_id:
-                            found = any(item.get('id') == self.last_broadcast_id for item in items)
-                            if found:
-                                print(f"✅ Test broadcast found in history")
-                            else:
-                                print(f"⚠️  Test broadcast not found in history (may take a moment)")
-                    else:
-                        print(f"⚠️  No broadcasts in history")
-                        passed += 1  # Not a failure
-                else:
-                    print(f"❌ Missing 'items' field in response")
-                    failed += 1
-            else:
-                print(f"❌ Expected 200, got {response.status_code}")
-                print(f"   Response: {response.text[:200]}")
-                failed += 1
-        except Exception as e:
-            print(f"❌ Exception: {str(e)}")
-            failed += 1
-        
-        print(f"\n📊 History Endpoint: {passed} passed, {failed} failed")
-        return passed, failed
-    
-    def test_auth_checks(self):
-        """Test authentication and authorization"""
-        print("\n" + "="*80)
-        print("TEST 4: Authentication & Authorization")
-        print("="*80)
-        
-        passed = 0
-        failed = 0
-        
-        # Test unauthenticated access
-        print(f"\n📋 Testing unauthenticated access...")
-        unauth_session = requests.Session()
-        
-        endpoints = [
-            ("preview", f"{API_BASE}/admin/broadcast/preview", "POST", {"tiers": ["FREE"]}),
-            ("send", f"{API_BASE}/admin/broadcast/send", "POST", {"subject": "Test", "htmlBody": "Test", "roles": ["ADMIN"]}),
-            ("history", f"{API_BASE}/admin/broadcast/history", "GET", None)
-        ]
-        
-        for name, url, method, payload in endpoints:
-            try:
-                if method == "POST":
-                    response = unauth_session.post(url, json=payload)
-                else:
-                    response = unauth_session.get(url)
-                
-                if response.status_code == 401:
-                    print(f"✅ {name}: Unauthenticated → 401")
-                    passed += 1
-                else:
-                    print(f"❌ {name}: Expected 401, got {response.status_code}")
-                    failed += 1
-            except Exception as e:
-                print(f"❌ {name}: Exception: {str(e)}")
-                failed += 1
-        
-        print(f"\n📊 Auth Checks: {passed} passed, {failed} failed")
-        return passed, failed
-    
-    def run_all_tests(self):
-        """Run all tests"""
-        print("\n" + "="*80)
-        print("🧪 BULK EMAIL BROADCAST - BATCH API MIGRATION TEST")
-        print("="*80)
-        print(f"Base URL: {BASE_URL}")
-        print(f"Testing as: {ADMIN_EMAIL}")
-        print(f"Timestamp: {datetime.now().isoformat()}")
-        
-        if not self.login_admin():
-            print("\n❌ Failed to login as admin. Cannot proceed with tests.")
-            return
-        
-        total_passed = 0
-        total_failed = 0
-        
-        # Run all test suites
-        p, f = self.test_preview_endpoint()
-        total_passed += p
-        total_failed += f
-        
-        p, f = self.test_send_endpoint()
-        total_passed += p
-        total_failed += f
-        
-        p, f = self.test_history_endpoint()
-        total_passed += p
-        total_failed += f
-        
-        p, f = self.test_auth_checks()
-        total_passed += p
-        total_failed += f
-        
-        # Final summary
-        print("\n" + "="*80)
-        print("📊 FINAL SUMMARY")
-        print("="*80)
-        print(f"Total Passed: {total_passed}")
-        print(f"Total Failed: {total_failed}")
-        print(f"Success Rate: {total_passed}/{total_passed + total_failed} ({100 * total_passed / (total_passed + total_failed) if (total_passed + total_failed) > 0 else 0:.1f}%)")
-        
-        if total_failed == 0:
-            print("\n✅ ALL TESTS PASSED - Batch API migration working correctly!")
-        else:
-            print(f"\n⚠️  {total_failed} test(s) failed - Review details above")
-        
-        print("="*80)
+except Exception as e:
+    test_result("Start trial flow", False, f"Exception: {e}")
+    cleanup_test_user(test_email)
 
-if __name__ == "__main__":
-    tester = BroadcastTester()
-    tester.run_all_tests()
+# =============================================================================
+# TEST 4: POST /api/membership/subscribe (enhanced error diagnostics)
+# =============================================================================
+print("\n" + "=" * 80)
+print("TEST 4: POST /api/membership/subscribe (enhanced error diagnostics)")
+print("=" * 80)
+
+# Login as admin
+admin_session = login(ADMIN_EMAIL, ADMIN_PASSWORD)
+
+# TEST 4a: Valid tier with Thawani configured
+print("\nTEST 4a: Valid tier with Thawani configured")
+try:
+    resp = admin_session.post(
+        f"{API_BASE}/membership/subscribe",
+        json={'tier': 'BASIC'}
+    )
+    data = resp.json()
+    
+    if resp.status_code == 200:
+        # Check for requiresPayment response
+        if data.get('requiresPayment') == True:
+            required_fields = ['redirectUrl', 'sessionId', 'membershipId']
+            has_all_fields = all(field in data for field in required_fields)
+            
+            if has_all_fields:
+                redirect_url = data['redirectUrl']
+                if redirect_url.startswith('https://checkout.thawani.om/pay/'):
+                    test_result(
+                        "Subscribe - Valid tier (Thawani)",
+                        True,
+                        f"Thawani session created: sessionId={data['sessionId']}, redirectUrl starts with checkout.thawani.om"
+                    )
+                    
+                    # Cleanup: delete the PENDING membership
+                    membership_id = data['membershipId']
+                    db.memberships.delete_one({'_id': membership_id})
+                    print(f"✓ Cleaned up PENDING membership: {membership_id}")
+                else:
+                    test_result(
+                        "Subscribe - Valid tier (Thawani)",
+                        False,
+                        f"Redirect URL doesn't start with expected domain: {redirect_url}"
+                    )
+            else:
+                test_result(
+                    "Subscribe - Valid tier (Thawani)",
+                    False,
+                    f"Missing required fields. Data: {data}"
+                )
+        elif data.get('freeMode') == True:
+            # Free mode response
+            test_result(
+                "Subscribe - Valid tier (Free mode)",
+                True,
+                f"Free mode activated: {data}"
+            )
+        else:
+            test_result(
+                "Subscribe - Valid tier",
+                False,
+                f"Unexpected response structure: {data}"
+            )
+    elif resp.status_code == 503:
+        # Thawani not configured - verify enhanced error shape
+        if 'code' in data and data['code'] == 'THAWANI_NOT_CONFIGURED':
+            test_result(
+                "Subscribe - Thawani not configured (enhanced error)",
+                True,
+                f"Enhanced error response: code={data['code']}, error={data.get('error')}, missing={data.get('missing')}"
+            )
+        else:
+            test_result(
+                "Subscribe - Enhanced error shape",
+                False,
+                f"503 but missing 'code' field. Data: {data}"
+            )
+    elif resp.status_code == 502:
+        # Thawani session creation failed - verify enhanced error shape
+        if 'code' in data and data['code'] == 'THAWANI_CREATE_SESSION_FAILED':
+            test_result(
+                "Subscribe - Thawani session failed (enhanced error)",
+                True,
+                f"Enhanced error response: code={data['code']}, error={data.get('error')}, providerStatus={data.get('providerStatus')}"
+            )
+        else:
+            test_result(
+                "Subscribe - Enhanced error shape",
+                False,
+                f"502 but missing 'code' field. Data: {data}"
+            )
+    else:
+        test_result(
+            "Subscribe - Valid tier",
+            False,
+            f"Unexpected status {resp.status_code}: {data}"
+        )
+except Exception as e:
+    test_result("Subscribe - Valid tier", False, f"Exception: {e}")
+
+# TEST 4b: Invalid tier
+print("\nTEST 4b: Invalid tier")
+try:
+    resp = admin_session.post(
+        f"{API_BASE}/membership/subscribe",
+        json={'tier': 'BAD'}
+    )
+    data = resp.json()
+    
+    if resp.status_code == 400 and 'باقة غير صحيحة' in data.get('error', ''):
+        test_result(
+            "Subscribe - Invalid tier",
+            True,
+            f"Correctly rejected: {data.get('error')}"
+        )
+    else:
+        test_result(
+            "Subscribe - Invalid tier",
+            False,
+            f"Expected 400 with Arabic error, got {resp.status_code}: {data}"
+        )
+except Exception as e:
+    test_result("Subscribe - Invalid tier", False, f"Exception: {e}")
+
+# TEST 4c: FREE tier
+print("\nTEST 4c: FREE tier")
+try:
+    resp = admin_session.post(
+        f"{API_BASE}/membership/subscribe",
+        json={'tier': 'FREE'}
+    )
+    data = resp.json()
+    
+    if resp.status_code == 400 and 'الباقة المجانية مفعلة تلقائياً' in data.get('error', ''):
+        test_result(
+            "Subscribe - FREE tier",
+            True,
+            f"Correctly rejected: {data.get('error')}"
+        )
+    else:
+        test_result(
+            "Subscribe - FREE tier",
+            False,
+            f"Expected 400 with Arabic error, got {resp.status_code}: {data}"
+        )
+except Exception as e:
+    test_result("Subscribe - FREE tier", False, f"Exception: {e}")
+
+# TEST 4d: Unauthenticated
+print("\nTEST 4d: Unauthenticated")
+try:
+    resp = requests.post(
+        f"{API_BASE}/membership/subscribe",
+        json={'tier': 'BASIC'}
+    )
+    data = resp.json()
+    
+    if resp.status_code == 401 and 'غير مصرح' in data.get('error', ''):
+        test_result(
+            "Subscribe - Unauthenticated",
+            True,
+            f"Correctly rejected: {data.get('error')}"
+        )
+    else:
+        test_result(
+            "Subscribe - Unauthenticated",
+            False,
+            f"Expected 401 with Arabic error, got {resp.status_code}: {data}"
+        )
+except Exception as e:
+    test_result("Subscribe - Unauthenticated", False, f"Exception: {e}")
+
+# =============================================================================
+# SUMMARY
+# =============================================================================
+print("\n" + "=" * 80)
+print("TEST SUMMARY")
+print("=" * 80)
+print(f"Total Tests: {total_tests}")
+print(f"Passed: {passed_tests} ✅")
+print(f"Failed: {failed_tests} ❌")
+print(f"Success Rate: {(passed_tests/total_tests*100):.1f}%")
+print("=" * 80)
+
+if failed_tests == 0:
+    print("\n🎉 ALL TESTS PASSED!")
+else:
+    print(f"\n⚠️  {failed_tests} TEST(S) FAILED")
+
+print(f"\nTest completed at: {datetime.now().isoformat()}")
