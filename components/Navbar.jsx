@@ -42,15 +42,20 @@ export default function Navbar() {
   return (
     <header className="sticky top-0 z-50 w-full border-b border-[#E5E7EB] bg-white/95 backdrop-blur">
       <div className="container mx-auto flex h-16 items-center justify-between px-4">
-        {/* Logo */}
-        <Link href="/" className="flex items-center gap-2.5">
-          <div className="relative h-10 w-[110px] shrink-0 sm:w-[140px]">
+        {/* Logo — icon-only in the navbar for a compact, prominent brand mark.
+            The full wordmark is only shown in the footer. */}
+        <Link
+          href="/"
+          className="flex items-center gap-2.5"
+          aria-label="مجلس رواد الأعمال العماني"
+        >
+          <div className="relative h-11 w-11 shrink-0 sm:h-12 sm:w-12">
             <Image
-              src="/logo.png"
+              src="/logo-icon.png"
               alt="شعار مجلس رواد الأعمال العماني"
               fill
-              sizes="(max-width: 640px) 110px, 140px"
-              className="object-contain object-right"
+              sizes="48px"
+              className="object-contain"
               priority
             />
           </div>

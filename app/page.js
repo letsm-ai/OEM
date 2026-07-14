@@ -372,7 +372,7 @@ export default async function LandingPage() {
                     )
                   })}
                 </div>
-                <Link href="/signup" className="mt-6 block w-full rounded-lg bg-[#C9A84C] py-3 text-center font-semibold text-[#1B3A6B] transition hover:bg-[#b89440]">
+                <Link href="/membership" className="mt-6 block w-full rounded-lg bg-[#C9A84C] py-3 text-center font-semibold text-[#1B3A6B] transition hover:bg-[#b89440]">
                   {t('value.membership.cta')}
                 </Link>
               </div>
