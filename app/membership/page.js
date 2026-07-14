@@ -1,17 +1,19 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSession } from 'next-auth/react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Check, X, Crown, Loader2, Sparkles, Star, Gift, Clock } from 'lucide-react'
 import { TIER_META, formatLocaleDate } from '@/lib/membership'
 import { useI18n } from '@/lib/i18n/I18nContext'
 
 const ORDER = ['FREE', 'BASIC', 'GOLD', 'PLATINUM']
+const VALID_PAID_TIERS = ['BASIC', 'GOLD', 'PLATINUM']
 
 export default function MembershipPage() {
   const { data: session, status, update } = useSession()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const { t, lang, isAr, isRTL } = useI18n()
 
   const [me, setMe] = useState(null)
@@ -21,6 +23,7 @@ export default function MembershipPage() {
   const [trialPolicy, setTrialPolicy] = useState(null) // { enabled, durationDays, allowedTier, trialUsed }
   const [trialLoading, setTrialLoading] = useState(null) // tier currently starting trial
   const [publicSettings, setPublicSettings] = useState(null) // { tierPrices, freeMode, ... }
+  const autoResumedRef = useRef(false) // prevents re-running the auto-resume flow
 
   // Localised name / tagline / benefits helper
   const meta = (key) => {
@@ -84,7 +87,9 @@ export default function MembershipPage() {
 
   const onSubscribe = async (tier) => {
     if (status !== 'authenticated') {
-      router.push('/login?callbackUrl=/membership')
+      // Not logged in → go straight to SIGNUP (not login) with the tier
+      // remembered so we can auto-resume the checkout after account creation.
+      router.push(`/signup?next=/membership&tier=${encodeURIComponent(tier)}`)
       return
     }
     setConfirm(tier)
@@ -159,7 +164,8 @@ export default function MembershipPage() {
   // ---- Start a free trial for a specific tier ----
   const onStartTrial = async (tier) => {
     if (status !== 'authenticated') {
-      router.push(`/login?callbackUrl=/membership`)
+      // Not logged in → send to SIGNUP directly with trial intent remembered.
+      router.push(`/signup?next=/membership&trial=${encodeURIComponent(tier)}`)
       return
     }
     if (!trialPolicy?.enabled || trialPolicy?.trialUsed) return
@@ -206,6 +212,51 @@ export default function MembershipPage() {
     if (locked && locked !== '') return locked === tier
     return true
   }
+
+  // ---- Auto-resume flow after signup/login ----
+  // If the URL has ?tier=X or ?trial=X and the user is now authenticated,
+  // automatically open the confirm modal (or start the trial) without
+  // requiring them to click "Subscribe" again. This makes the signup →
+  // subscribe flow feel like one continuous step.
+  useEffect(() => {
+    if (status !== 'authenticated') return
+    if (autoResumedRef.current) return
+
+    const tierParam = searchParams?.get('tier')
+    const trialParam = searchParams?.get('trial')
+
+    if (tierParam && VALID_PAID_TIERS.includes(tierParam.toUpperCase())) {
+      autoResumedRef.current = true
+      // Open the confirmation modal for that tier
+      setConfirm(tierParam.toUpperCase())
+      // Clean the URL so a refresh doesn't re-trigger the flow
+      try {
+        const url = new URL(window.location.href)
+        url.searchParams.delete('tier')
+        url.searchParams.delete('trial')
+        window.history.replaceState({}, '', url.pathname + (url.search || ''))
+      } catch (e) { /* ignore */ }
+      return
+    }
+
+    if (
+      trialParam &&
+      VALID_PAID_TIERS.includes(trialParam.toUpperCase()) &&
+      trialPolicy?.enabled &&
+      !trialPolicy?.trialUsed
+    ) {
+      autoResumedRef.current = true
+      const tierUp = trialParam.toUpperCase()
+      try {
+        const url = new URL(window.location.href)
+        url.searchParams.delete('tier')
+        url.searchParams.delete('trial')
+        window.history.replaceState({}, '', url.pathname + (url.search || ''))
+      } catch (e) { /* ignore */ }
+      // Fire the trial start after policy is loaded
+      onStartTrial(tierUp)
+    }
+  }, [status, searchParams, trialPolicy])
 
   const currentMeta = meta(currentTier)
   const confirmMeta = confirm ? meta(confirm) : null

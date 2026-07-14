@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { signIn } from 'next-auth/react'
 import { Loader2, UserPlus } from 'lucide-react'
@@ -9,10 +9,36 @@ import { useI18n } from '@/lib/i18n/I18nContext'
 
 export default function SignupPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const { t, isRTL } = useI18n()
   const [form, setForm] = useState({ name: '', email: '', password: '' })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+
+  // Read continuation params so we can resume the flow the user came from
+  // (e.g. /membership → Subscribe → Signup → back to /membership with tier=X).
+  const nextPath = searchParams?.get('next') || ''
+  const tierParam = searchParams?.get('tier') || ''
+  const trialParam = searchParams?.get('trial') || ''
+
+  const buildContinueUrl = () => {
+    // Only allow same-origin paths (starts with "/"), never external redirects.
+    if (!nextPath || !nextPath.startsWith('/')) return '/dashboard'
+    const extras = []
+    if (tierParam) extras.push(`tier=${encodeURIComponent(tierParam)}`)
+    if (trialParam) extras.push(`trial=${encodeURIComponent(trialParam)}`)
+    if (extras.length === 0) return nextPath
+    const sep = nextPath.includes('?') ? '&' : '?'
+    return `${nextPath}${sep}${extras.join('&')}`
+  }
+
+  // Signup CTA can preserve the "already have account?" link params too
+  const buildLoginHref = () => {
+    const params = new URLSearchParams()
+    if (nextPath) params.set('callbackUrl', buildContinueUrl())
+    const qs = params.toString()
+    return qs ? `/login?${qs}` : '/login'
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -41,7 +67,8 @@ export default function SignupPage() {
         setLoading(false)
         return
       }
-      router.push('/dashboard')
+      const dest = buildContinueUrl()
+      router.push(dest)
       router.refresh()
     } catch (err) {
       setError(t('auth.signup.error.network'))
@@ -66,6 +93,17 @@ export default function SignupPage() {
               {t('auth.signup.subtitle')}
             </p>
           </div>
+
+          {/* Continuation intent banner — shown when the user came from a
+              "Subscribe" / "Start trial" button and we need them to create an
+              account before completing the flow. */}
+          {(tierParam || trialParam) && (
+            <div className="mb-4 rounded-lg border border-[#C9A84C]/40 bg-[#C9A84C]/10 px-4 py-3 text-center text-xs text-[#8a6f2d]">
+              {trialParam
+                ? '🎁 أنشئ حسابك المجاني الآن لتفعيل التجربة المجانية مباشرةً'
+                : '👑 أنشئ حسابك خلال ثوانٍ لإتمام الاشتراك في الباقة المختارة'}
+            </div>
+          )}
 
           {error && (
             <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
@@ -134,7 +172,7 @@ export default function SignupPage() {
           <p className="mt-6 text-center text-sm text-gray-600">
             {t('auth.signup.haveAccount')}{' '}
             <Link
-              href="/login"
+              href={buildLoginHref()}
               className="font-semibold text-[#1B3A6B] hover:underline"
             >
               {t('auth.signup.loginNow')}
