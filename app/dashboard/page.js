@@ -281,7 +281,7 @@ export default async function DashboardPage() {
               value={
                 discount > 0 ? (
                   <span className="text-sm font-bold text-green-600">
-                    {discount}% على المشتريات
+                    {discount}% على الاستشارات
                   </span>
                 ) : (
                   <span className="text-sm text-gray-500">لا يوجد</span>

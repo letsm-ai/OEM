@@ -9074,3 +9074,208 @@ agent_communication:
       • Invalid IDs rejected with proper Arabic error messages
       
       🎉 CONCLUSION: Both admin cleanup endpoints are fully functional and production-ready. All authentication, authorization, validation, cascade deletion, and safety guards working correctly.
+
+
+  - task: "Store UX Improvements — Cart badge, guest checkout w/ signup, no discount on store, cart persistence"
+    implemented: true
+    working: true
+    file: "/app/components/CartContext.jsx, /app/components/CartWidget.jsx, /app/components/Navbar.jsx, /app/app/store/[id]/_ProductDetailClient.jsx, /app/app/store/checkout/_CheckoutClient.jsx, /app/app/store/checkout/success/_SuccessClient.jsx, /app/lib/api/orders-create.js, /app/lib/order-finalize.js, /app/lib/email.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Six shopping UX improvements requested by the user:
+          
+          1. **REMOVE store member discount display** — Removed the "خصم العضوية
+             يُطبّق عند إتمام الطلب" hint from the product page. `TIER_DISCOUNT_PERCENT`
+             in `/lib/store.js` is already 0 across all tiers (backend uses raw
+             prices at checkout). Dashboard label updated to "خصم الأعضاء على
+             الاستشارات".
+          
+          2. **Cart badge + toast on add-to-cart** — New CartWidget component
+             (`/app/components/CartWidget.jsx`) shows a live cart icon with a
+             count badge in the Navbar (both desktop + mobile). On every
+             `cart:updated` event it animates (bump) and shows a floating
+             "تمت الإضافة" toast for 3.2s with the product name and a "عرض
+             السلة" button. CartContext broadcasts events on add/update/remove.
+          
+          3. **Fix double-add bug** — Added a 400ms cooldown guard inside
+             `addItem` (`CartContext.jsx`) that de-duplicates rapid identical
+             calls (same productId + variant + qty). This eliminates the
+             "click once → adds twice" issue caused by mobile touch events or
+             React strict-mode double renders in dev.
+          
+          4. **Cart persistence after abandoned checkout** — Previously
+             `_CheckoutClient.jsx` called `clear()` BEFORE the Thawani redirect,
+             wiping the cart even for buyers who cancelled. Fixed: cart is now
+             cleared ONLY after payment is confirmed on the /success page
+             (`_SuccessClient.jsx` uses `useCart().clear()` inside the verify
+             effect when `d.paid === true`).
+          
+          5. **Enhanced checkout page**:
+             a) Email field for guests already existed. Added optional "أنشئ
+                حساب مجاناً" checkbox with a password field. When checked,
+                orders-create.js hashes the password (bcryptjs) and creates a
+                full MEMBER account instead of a guest user. Response now
+                includes `accountCreated: true` so the success screen shows a
+                success banner inviting them to log in later.
+             b) "مواصلة التسوّق" back-link added at the top of the checkout
+                page for easy return to /store.
+             c) sendOrderConfirmationEmail now takes `isGuest` and — for guests
+                only — appends an "أنشئ حسابك لحفظ طلباتك" invite block with a
+                CTA to /signup?email=...
+          
+          6. **Customer dashboard** — /dashboard already exists for authenticated
+             MEMBERs (unchanged). /store/orders shows order history. Both work
+             for new accounts created during checkout.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ GUEST CHECKOUT WITH OPTIONAL ACCOUNT SIGNUP TESTING COMPLETE - All functionality working perfectly (6/6 tests passed - 100% success rate):
+          
+          🎯 COMPREHENSIVE TEST RESULTS:
+          
+          TEST 1: Guest checkout WITH password → Full account ✅
+          • POST /api/orders with guest.password='SecurePass123' → 200
+          • Response: success=true, cod=true, accountCreated=true
+          • Database verification:
+            - User created with isGuest=false (full account)
+            - Password bcrypt hashed (starts with $2, length=60)
+            - Role=MEMBER, membershipTier=FREE
+          
+          TEST 2: Guest checkout WITHOUT password → Guest account ✅
+          • POST /api/orders without guest.password → 200
+          • Response: success=true, cod=true, accountCreated=false
+          • Database verification:
+            - User created with isGuest=true (guest account)
+            - Password is empty string
+          
+          TEST 3: Password too short → 400 error ✅
+          • POST /api/orders with guest.password='abc' (3 chars) → 400
+          • Error message: "كلمة السر يجب أن تكون 6 أحرف على الأقل"
+          • No user created in database
+          
+          TEST 4: Existing full-account email → 409 error ✅
+          • POST /api/orders with admin email (mazin298@gmail.com) → 409
+          • Error message: "هذا البريد مسجّل مسبقاً، يُرجى تسجيل الدخول لإتمام الطلب"
+          • No order created
+          
+          TEST 5: Upgrade guest → Full account ✅
+          • Step 1: Create guest without password → 200, accountCreated=false
+            - Database: isGuest=true, password=''
+          • Step 2: Same email with password → 200, accountCreated=true
+            - Database: isGuest=false, password bcrypt hashed
+          • Existing guest user successfully upgraded to full account
+          
+          TEST 6: accountCreated field consistency ✅
+          • Response always includes accountCreated field (boolean type)
+          • Field present in all successful responses (COD flow verified)
+          
+          🔧 TECHNICAL IMPLEMENTATION VERIFIED:
+          ✅ Optional password field in guest checkout working correctly
+          ✅ Password validation (minimum 6 characters) enforced
+          ✅ Bcrypt password hashing working (bcryptjs, 10 rounds)
+          ✅ User creation with correct isGuest flag (true/false)
+          ✅ Guest upgrade path working (existing guest + password → full account)
+          ✅ Duplicate email detection working (409 for existing full accounts)
+          ✅ accountCreated flag reliably reflects outcome in all scenarios
+          ✅ Role and membership tier defaults (MEMBER, FREE) applied correctly
+          ✅ Order creation successful with COD payment method
+          ✅ Email confirmation sent (order-finalize.js passes isGuest flag)
+          
+          📊 DATABASE VERIFICATION:
+          ✅ Full account: isGuest=false, password starts with $2, length ≥60
+          ✅ Guest account: isGuest=true, password='' (empty string)
+          ✅ Upgrade: existing user document updated (not duplicated)
+          ✅ All users created with role=MEMBER, membershipTier=FREE
+          
+          🎉 CONCLUSION: Guest checkout with optional account signup is fully functional and production-ready. All validation, password hashing, user creation, and upgrade flows working correctly. The accountCreated flag reliably indicates whether a full account was created, enabling the frontend to show appropriate success messages and email invitations.
+        
+        # Test scenarios required
+        # A. Cart double-add cooldown
+        #    - Rapidly firing addItem with same key twice within 400ms → only
+        #      counts once (state test in isolation via manual UI).
+        # B. Cart persistence
+        #    - POST /api/orders with Thawani (mock cancelUrl) → user redirected
+        #      to Thawani. Assume cancel: cart contents on client SHOULD REMAIN.
+        # C. Guest checkout with password (backend)
+        #    - POST /api/orders unauthenticated with body:
+        #        items:[valid], shippingAddress:{...}, guest:{name,email,phone,password:'secret6+'}
+        #    - Expect 200 with accountCreated:true, and a User row is created
+        #      with isGuest:false and a bcrypt-hashed password (60+ chars).
+        # D. Guest checkout without password (existing flow)
+        #    - Same body without password → 200 with accountCreated:false, and
+        #      a User row with isGuest:true.
+        # E. Password validation
+        #    - POST /api/orders unauthenticated with guest.password='abc' (too short)
+        #      → 400 with "كلمة السر يجب أن تكون 6 أحرف على الأقل"
+        # F. Signup email in invite
+        #    - After a guest order, the confirmation email HTML should contain
+        #      the "أنشئ حسابك" block with a link to /signup?email=.
+        # G. Order confirmation for signed-in users
+        #    - Same POST /api/orders authenticated with real cart → no signup
+        #      invite block in the email.
+
+## agent_communication:
+  - agent: "main"
+    message: |
+      Multiple shopping-UX changes. Please test the backend order creation
+      flow, focusing on the NEW optional signup path during guest checkout:
+      
+      Endpoint: POST /api/orders (public, no auth required)
+      
+      Test scenarios:
+      1. Guest checkout WITH password → creates full account
+         Body includes `guest: { name, email, phone, password: '<6+ chars>' }`
+         Expected: 200, response has `accountCreated: true`. Also verify in DB
+         that the User has `isGuest: false` and a bcrypt password (starts with $2).
+      
+      2. Guest checkout WITHOUT password → creates guest account
+         Body includes `guest: { name, email, phone }` (no password)
+         Expected: 200, response has `accountCreated: false`. User has
+         `isGuest: true` and empty password.
+      
+      3. Password too short → 400
+         Body has `guest.password: 'abc'` (3 chars)
+         Expected: 400 with message containing "كلمة السر".
+      
+      4. Existing full user tries to guest-checkout → 409
+         Use an existing account's email (e.g. mazin298@gmail.com) in guest body
+         Expected: 409 with message containing "هذا البريد مسجّل مسبقاً".
+      
+      5. Duplicate guest with password (upgrade) → creates full account
+         First order guest without password, then a second order with the SAME
+         email and a password. Expected: 200, accountCreated: true, the existing
+         guest user record is UPDATED with bcrypt password + isGuest:false.
+      
+      Authentication (admin credentials for other tests):
+      mazin298@gmail.com / Password123
+      
+      Base URL from /app/.env NEXT_PUBLIC_BASE_URL.
+      
+      Use a REAL product id from the DB (query Products collection first).
+      Clean up any test users + orders you create.
+  - agent: "testing"
+    message: |
+      ✅ BACKEND TESTING COMPLETE - Guest checkout with optional account signup fully functional.
+      
+      All 6 test scenarios passed (100% success rate):
+      1. ✅ Guest with password → Full account created (accountCreated=true, isGuest=false, bcrypt password)
+      2. ✅ Guest without password → Guest account created (accountCreated=false, isGuest=true, empty password)
+      3. ✅ Password too short → 400 error with Arabic message
+      4. ✅ Existing email → 409 conflict error
+      5. ✅ Upgrade guest → Full account (existing guest user upgraded with password)
+      6. ✅ accountCreated field present in all responses
+      
+      Technical verification:
+      • Password hashing (bcryptjs) working correctly
+      • User creation with proper isGuest flag
+      • Guest upgrade path functional
+      • All validation rules enforced
+      • Database integrity maintained
+      
+      The backend implementation is production-ready. All test users and orders cleaned up.
+

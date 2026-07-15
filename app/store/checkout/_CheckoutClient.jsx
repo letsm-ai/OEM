@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { CheckCircle2, CreditCard, Loader2, AlertTriangle, MapPin, Truck, Lock, Tag, X, Gift, Banknote } from 'lucide-react'
+import { CheckCircle2, CreditCard, Loader2, AlertTriangle, MapPin, Truck, Lock, Tag, X, Gift, Banknote, ArrowRight, ShoppingBag, UserPlus, Eye, EyeOff } from 'lucide-react'
 import { useCart } from '@/components/CartContext'
 import { computeCartTotals, formatOMR, COD_EXTRA_FEE_OMR } from '@/lib/store'
 
@@ -34,6 +34,9 @@ export default function CheckoutClient({ tier, user, isLoggedIn = true }) {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(null)
   const [guestEmail, setGuestEmail] = useState(user?.email || '')
+  const [wantsAccount, setWantsAccount] = useState(false)
+  const [guestPassword, setGuestPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [agreedToTerms, setAgreedToTerms] = useState(false)
 
   // Coupon state
@@ -111,6 +114,9 @@ export default function CheckoutClient({ tier, user, isLoggedIn = true }) {
       if (!guestEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guestEmail)) {
         return setError('البريد الإلكتروني مطلوب وصحيح للشراء كضيف')
       }
+      if (wantsAccount && guestPassword.length < 6) {
+        return setError('كلمة السر يجب أن تكون 6 أحرف على الأقل لإنشاء الحساب')
+      }
     }
     if (items.length === 0) return setError('السلة فارغة')
     setLoading(true)
@@ -127,7 +133,10 @@ export default function CheckoutClient({ tier, user, isLoggedIn = true }) {
         couponCode: coupon ? coupon.code : undefined,
         paymentMethod: paymentMethod === 'COD' ? 'COD' : undefined,
         guest: isLoggedIn ? undefined : {
-          name: addr.name, email: guestEmail, phone: addr.phone,
+          name: addr.name,
+          email: guestEmail,
+          phone: addr.phone,
+          password: wantsAccount ? guestPassword : undefined,
         },
       }),
     })
@@ -137,15 +146,18 @@ export default function CheckoutClient({ tier, user, isLoggedIn = true }) {
       setError(data.error || 'تعذّر إتمام الطلب')
       return
     }
-    // THAWANI flow: redirect user to Thawani hosted checkout
+    // THAWANI flow: redirect user to Thawani hosted checkout.
+    // IMPORTANT: do NOT clear the cart here — the payment is not complete yet.
+    // If the buyer cancels or fails on Thawani, they must be able to return
+    // and retry. The cart is cleared on the /success page only after the
+    // payment is confirmed by the webhook.
     if (data.pending && data.redirectUrl) {
-      clear()
       window.location.href = data.redirectUrl
       return
     }
     // MOCK or COD flow: immediate success (COD shows "cash on delivery" banner)
     clear()
-    setSuccess({ ...data.order, cod: data.cod === true })
+    setSuccess({ ...data.order, cod: data.cod === true, accountCreated: !!data.accountCreated })
   }
 
   if (success) {
@@ -158,6 +170,15 @@ export default function CheckoutClient({ tier, user, isLoggedIn = true }) {
             ? '💵 طلبك بنظام الدفع عند الاستلام — سيتم التواصل معك قريباً لتنسيق التوصيل وتحصيل المبلغ.'
             : 'سيتم التواصل معك من البائع لتنسيق الشحن.'}
         </p>
+        {success.accountCreated && (
+          <div className="mt-4 rounded-xl border-2 border-dashed border-[#C9A84C] bg-[#C9A84C]/10 p-3 text-[12px] text-[#8a6f2d]">
+            <UserPlus className="mx-auto mb-1 h-5 w-5" />
+            <b>تم إنشاء حسابك بنجاح!</b>
+            <div className="mt-1">
+              يمكنك تسجيل الدخول بـ <span dir="ltr" className="font-mono">{guestEmail}</span> لمتابعة طلباتك في أي وقت.
+            </div>
+          </div>
+        )}
         <div className="mt-5 rounded-xl border border-gray-200 bg-white p-4 text-right">
           <div className="text-sm"><b>رقم الطلب:</b> <span dir="ltr" className="text-xs text-gray-600">{success.id}</span></div>
           <div className="text-sm"><b>{success.cod ? 'المطلوب عند التسليم:' : 'المدفوع:'}</b> {formatOMR(success.totalPaid)} ر.ع</div>
@@ -182,7 +203,17 @@ export default function CheckoutClient({ tier, user, isLoggedIn = true }) {
   return (
     <div className="bg-[#F8F9FA] py-8">
       <div className="container mx-auto max-w-5xl px-4">
-        <h1 className="mb-6 text-2xl font-extrabold text-[#1B3A6B] md:text-3xl">إتمام الطلب</h1>
+        <div className="mb-4 flex items-center justify-between gap-2">
+          <h1 className="text-2xl font-extrabold text-[#1B3A6B] md:text-3xl">إتمام الطلب</h1>
+          <Link
+            href="/store"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-semibold text-[#1B3A6B] transition hover:border-[#1B3A6B] hover:bg-[#F8F9FA]"
+          >
+            <ShoppingBag className="h-3.5 w-3.5" />
+            مواصلة التسوّق
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
+        </div>
         <form onSubmit={submit} className="grid gap-6 lg:grid-cols-[1fr_340px]">
           <div className="space-y-6">
             {/* Shipping */}
@@ -206,7 +237,57 @@ export default function CheckoutClient({ tier, user, isLoggedIn = true }) {
                     placeholder="you@example.com"
                   />
                   <div className="mt-1 text-[10px] text-gray-500">
-                    سنرسل تأكيد الطلب وحالة الشحن إلى هذا البريد.
+                    سنرسل تأكيد الطلب ورقم الفاتورة إلى هذا البريد.
+                  </div>
+
+                  {/* Optional: create a real account with password so the buyer
+                      can log in later and see their orders history. */}
+                  <div className="mt-3 rounded-lg border border-dashed border-[#1B3A6B]/40 bg-white p-2.5">
+                    <label className="flex cursor-pointer items-start gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={wantsAccount}
+                        onChange={(e) => setWantsAccount(e.target.checked)}
+                        className="mt-0.5 h-4 w-4 accent-[#1B3A6B]"
+                      />
+                      <span className="flex-1 text-gray-700">
+                        <span className="font-bold text-[#1B3A6B]">
+                          <UserPlus className="inline h-3.5 w-3.5" /> أنشئ حساب مجاناً
+                        </span>
+                        <span className="mt-0.5 block text-[10px] leading-relaxed text-gray-500">
+                          احفظ عنوانك وطلباتك لسهولة الشراء في المرات القادمة.
+                        </span>
+                      </span>
+                    </label>
+                    {wantsAccount && (
+                      <div className="mt-2">
+                        <label className="block">
+                          <span className="mb-1 block text-[10px] font-medium text-gray-700">
+                            كلمة السر (6 أحرف على الأقل) *
+                          </span>
+                          <div className="relative">
+                            <input
+                              type={showPassword ? 'text' : 'password'}
+                              value={guestPassword}
+                              onChange={(e) => setGuestPassword(e.target.value)}
+                              minLength={6}
+                              required
+                              dir="ltr"
+                              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 pl-10 text-sm outline-none focus:border-[#1B3A6B] focus:ring-2 focus:ring-[#1B3A6B]/10"
+                              placeholder="••••••"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowPassword((s) => !s)}
+                              className="absolute left-2 top-1/2 -translate-y-1/2 rounded p-1 text-gray-400 hover:text-gray-600"
+                              aria-label={showPassword ? 'إخفاء' : 'إظهار'}
+                            >
+                              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                            </button>
+                          </div>
+                        </label>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

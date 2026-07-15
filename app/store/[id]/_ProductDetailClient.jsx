@@ -238,7 +238,6 @@ export default function ProductDetailClient({ product }) {
                 {formatOMR(effectivePrice)}
                 <span className="ms-2 text-sm font-medium opacity-80">ريال عماني</span>
               </div>
-              <div className="mt-1 text-[11px] opacity-80">خصم العضوية يُطبّق عند إتمام الطلب</div>
             </div>
 
             {/* Active Promotions Banner */}

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import {
@@ -12,12 +12,15 @@ import {
   Home,
 } from 'lucide-react'
 import { formatOMR } from '@/lib/store'
+import { useCart } from '@/components/CartContext'
 
 export default function SuccessClient() {
   const sp = useSearchParams()
   const sessionId = sp.get('session_id')
   const orderId = sp.get('order_id')
   const [state, setState] = useState({ loading: true, paid: false, error: '', order: null })
+  const { clear } = useCart()
+  const cleared = useRef(false)
 
   useEffect(() => {
     let cancelled = false
@@ -35,13 +38,19 @@ export default function SuccessClient() {
           return
         }
         setState({ loading: false, paid: !!d.paid, error: '', order: d.order })
+        // Clear the cart ONLY after payment is confirmed. If the buyer cancels
+        // on Thawani and returns to the cancel page, the cart stays intact.
+        if (d.paid && !cleared.current) {
+          cleared.current = true
+          clear()
+        }
       } catch (e) {
         if (!cancelled) setState({ loading: false, paid: false, error: 'تعذّر الاتصال بالخادم', order: null })
       }
     }
     verify()
     return () => { cancelled = true }
-  }, [sessionId, orderId])
+  }, [sessionId, orderId, clear])
 
   if (state.loading) {
     return (

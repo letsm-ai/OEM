@@ -7,19 +7,34 @@ const CartCtx = createContext(null)
 
 const STORAGE_KEY = 'majles_cart_v1'
 
+/**
+ * Dispatch a global `cart:updated` event that the CartWidget (or any other
+ * subscriber) listens to for live badge/toast updates.
+ * @param {{delta?:number, name?:string, total?:number}} detail
+ */
+function emitCartUpdated(detail = {}) {
+  if (typeof window === 'undefined') return
+  try {
+    window.dispatchEvent(new CustomEvent('cart:updated', { detail }))
+  } catch (e) { /* older browsers */ }
+}
+
 export function CartProvider({ children }) {
   const { data: session, status } = useSession()
   const [items, setItems] = useState([])
   const [hydrated, setHydrated] = useState(false)
   const initialSyncDone = useRef(false)
   const syncTimeout = useRef(null)
+  // Prevents accidental rapid double-clicks (mobile touch / React double-render)
+  // from adding the same item twice within the same short window.
+  const lastAddRef = useRef({ key: '', at: 0 })
 
   // Hydrate from localStorage
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY)
       if (raw) setItems(JSON.parse(raw))
-    } catch {}
+    } catch (e) { /* corrupt storage → start empty */ }
     setHydrated(true)
   }, [])
 
@@ -28,7 +43,7 @@ export function CartProvider({ children }) {
     if (!hydrated) return
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(items))
-    } catch {}
+    } catch (e) { /* quota exceeded → skip */ }
   }, [items, hydrated])
 
   // On login: merge server cart with local (server-saved cart wins if local empty)
@@ -104,12 +119,26 @@ export function CartProvider({ children }) {
     const effectivePrice = variant && variant.price > 0 ? variant.price : product.price
     const effectiveStock = variant ? (variant.stock ?? 0) : (product.stock ?? 0)
     const effectiveImage = variant?.image || (product.images && product.images[0]) || ''
+
+    // ---- Double-click / React double-render guard ----
+    // If the SAME product+variant+qty is added twice within 400ms, ignore the
+    // second call. This eliminates the "clicked once, added twice" bug caused
+    // by mobile touch events or React strict-mode double-render in dev.
+    const key = `${product.id}::${variantId}::${qty}`
+    const now = Date.now()
+    if (lastAddRef.current.key === key && (now - lastAddRef.current.at) < 400) {
+      return
+    }
+    lastAddRef.current = { key, at: now }
+
+    let broadcastTotal = 0
     setItems((list) => {
       const idx = list.findIndex(
         (x) => x.productId === product.id && (x.variantId || '') === variantId
       )
+      let next
       if (idx >= 0) {
-        const next = [...list]
+        next = [...list]
         next[idx] = {
           ...next[idx],
           quantity: Math.min(
@@ -117,42 +146,54 @@ export function CartProvider({ children }) {
             effectiveStock || 999
           ),
         }
-        return next
+      } else {
+        next = [
+          ...list,
+          {
+            productId: product.id,
+            nameAr: product.nameAr,
+            image: effectiveImage,
+            unitPrice: effectivePrice,
+            vendorName: product.vendorName || '',
+            stock: effectiveStock || 0,
+            quantity: Math.min(qty, effectiveStock || 999),
+            variantId,
+            variantName,
+          },
+        ]
       }
-      return [
-        ...list,
-        {
-          productId: product.id,
-          nameAr: product.nameAr,
-          image: effectiveImage,
-          unitPrice: effectivePrice,
-          vendorName: product.vendorName || '',
-          stock: effectiveStock || 0,
-          quantity: Math.min(qty, effectiveStock || 999),
-          variantId,
-          variantName,
-        },
-      ]
+      broadcastTotal = next.reduce((s, it) => s + Number(it.quantity || 0), 0)
+      return next
     })
+    // Broadcast so the nav badge + toast update immediately.
+    emitCartUpdated({ delta: qty, name: product.nameAr, total: broadcastTotal })
   }, [])
 
   const updateQuantity = useCallback((productId, quantity, variantId = '') => {
     const qty = Math.max(1, parseInt(quantity, 10) || 1)
-    setItems((list) =>
-      list.map((x) =>
+    let broadcastTotal = 0
+    setItems((list) => {
+      const next = list.map((x) =>
         x.productId === productId && (x.variantId || '') === (variantId || '')
           ? { ...x, quantity: Math.min(qty, x.stock ?? 999) }
           : x
       )
-    )
+      broadcastTotal = next.reduce((s, it) => s + Number(it.quantity || 0), 0)
+      return next
+    })
+    emitCartUpdated({ total: broadcastTotal })
   }, [])
 
   const removeItem = useCallback((productId, variantId = '') => {
-    setItems((list) =>
-      list.filter(
+    let broadcastTotal = 0
+    setItems((list) => {
+      const next = list.filter(
         (x) => !(x.productId === productId && (x.variantId || '') === (variantId || ''))
       )
-    )
+      broadcastTotal = next.reduce((s, it) => s + Number(it.quantity || 0), 0)
+      return next
+    })
+    emitCartUpdated({ total: broadcastTotal })
   }, [])
 
   const clear = useCallback(() => {
@@ -161,6 +202,7 @@ export function CartProvider({ children }) {
     if (session?.user) {
       fetch('/api/cart', { method: 'DELETE' }).catch(() => {})
     }
+    emitCartUpdated({ total: 0 })
   }, [session?.user?.id])
 
   const totals = useMemo(() => {

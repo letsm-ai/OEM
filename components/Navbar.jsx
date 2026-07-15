@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react'
 import { Menu, X, LogOut, User as UserIcon, BookOpen, Sparkles, Shield } from 'lucide-react'
 import { useI18n } from '@/lib/i18n/I18nContext'
 import LangSwitcher from '@/components/LangSwitcher'
+import CartWidget from '@/components/CartWidget'
 
 export default function Navbar() {
   const { t } = useI18n()
@@ -105,6 +106,7 @@ export default function Navbar() {
 
         {/* Auth area */}
         <div className="hidden items-center gap-2 lg:flex">
+          <CartWidget />
           <LangSwitcher />
           {status === 'loading' ? (
             <div className="h-9 w-24 animate-pulse rounded-md bg-gray-200" />
@@ -155,13 +157,16 @@ export default function Navbar() {
         </div>
 
         {/* Mobile menu btn */}
-        <button
-          onClick={() => setOpen(!open)}
-          className="rounded-md p-2 text-[#1B3A6B] lg:hidden"
-          aria-label="Menu"
-        >
-          {open ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
-        </button>
+        <div className="flex items-center gap-2 lg:hidden">
+          <CartWidget />
+          <button
+            onClick={() => setOpen(!open)}
+            className="rounded-md p-2 text-[#1B3A6B]"
+            aria-label="Menu"
+          >
+            {open ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
+          </button>
+        </div>
       </div>
 
       {/* Mobile menu */}
