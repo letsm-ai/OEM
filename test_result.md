@@ -9279,3 +9279,227 @@ agent_communication:
       
       The backend implementation is production-ready. All test users and orders cleaned up.
 
+
+
+  - task: "Jobs / Employment Board — Full CRUD + Applications"
+    implemented: true
+    working: true
+    file: "/app/lib/models.js, /app/lib/api/jobs.js, /app/app/api/jobs/**, /app/app/api/me/job-*, /app/app/api/employer/**, /app/app/jobs/**"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Brand new Jobs section (فرص العمل). Two-sided platform:
+          
+          - **Employers** (users who OWN a Company in the directory) can post job
+            ads, extend/close them, and manage applicants.
+          - **Job seekers** (any authenticated MEMBER) can build a professional
+            profile (photo, experience list, skills, custom links, preferences)
+            and apply to jobs with one click. Profile snapshot is stored on the
+            application so future profile edits don't retro-alter what the
+            employer saw.
+          
+          DATA MODELS added to /app/lib/models.js:
+          - JobPosting (companyId, postedBy, title/desc, sector/gov, employment
+            type/work mode/experience level, salary, requirements, skills,
+            applyDeadline, status, views, applicantsCount)
+          - JobSeeker (userId, fullName, title, bio, photo, yearsOfExperience,
+            experience[], skills[], links[], preferences, openToWork,
+            profileVisibility)
+          - JobApplication (jobId, seekerUserId, seekerSnapshot, coverLetter,
+            status, employerViewedAt, employerNotes) with unique index
+            (jobId, seekerUserId) to prevent duplicates.
+          
+          BACKEND (all in /app/lib/api/jobs.js):
+          - GET  /api/jobs — public list w/ filters (q, sector, gov,
+            employmentType, workMode, experienceLevel), sorted featured→newest
+          - GET  /api/jobs/:id — public detail, increments views, returns
+            `alreadyApplied`
+          - POST /api/jobs/:id/apply — auth required. Rejects: closed job,
+            employer applying to own posting, incomplete profile
+            (PROFILE_INCOMPLETE), duplicate (DUPLICATE).
+          - GET/PUT /api/me/job-seeker — my seeker profile CRUD
+          - GET /api/me/job-applications — my applications w/ job info
+          - DELETE /api/me/job-applications/:id — withdraw
+          - GET /api/employer/jobs — my postings + my companies
+          - POST /api/employer/jobs — create (30-day deadline default)
+          - PATCH/PUT/DELETE /api/employer/jobs/:id
+          - POST /api/employer/jobs/:id/extend — +30 days
+          - GET /api/employer/jobs/:id/applicants
+          - PATCH /api/employer/applications/:id — status/notes
+          
+          Employer guard: requires user to own at least one Company. Returns
+          403 { code: 'NO_COMPANY' } if not.
+          
+          FRONTEND PAGES:
+          - /jobs — browse listings
+          - /jobs/[id] — detail + apply modal
+          - /jobs/my-profile — seeker profile editor (photo upload as base64,
+            experience list, custom links, skill chips, preferences)
+          - /jobs/my-applications — track applications + withdraw
+          - /jobs/employer — employer dashboard with:
+              • "Register your company first" empty state if NO_COMPANY
+              • Job list w/ per-row extend/close/delete actions
+              • Modal for creating a new posting
+              • Modal for viewing applicants w/ status buttons
+                (SUBMITTED/VIEWED/SHORTLISTED/REJECTED/HIRED)
+          
+          Navbar link "فرص العمل" added between "دليل الشركات" and "العضوية".
+        
+        # Test scenarios required (BACKEND):
+        # 1. GET /api/jobs → 200 empty list
+        # 2. Employer flow (need existing company)
+        #    a) GET /api/employer/jobs as user with NO company → 403 NO_COMPANY
+        #    b) Create a test Company for admin, then GET → 200 w/ empty items
+        #    c) POST /api/employer/jobs with valid payload → 200 w/ job.id
+        #    d) POST with missing sector/governorate → 400
+        #    e) GET /api/jobs (public) → the new job appears
+        #    f) POST /api/employer/jobs/:id/extend → deadline extended
+        #    g) PATCH /:id { status: 'CLOSED' } → status changes
+        # 3. Seeker profile
+        #    a) GET /api/me/job-seeker (fresh user) → 200 { profile: null }
+        #    b) PUT with { fullName, title, phone } → 200 profile persisted
+        #    c) PUT again with skills[] and links[] → arrays saved
+        # 4. Apply flow
+        #    a) POST /api/jobs/:id/apply w/o profile → 400 PROFILE_INCOMPLETE
+        #    b) Fill profile then apply → 200 success
+        #    c) Apply again → 409 DUPLICATE
+        #    d) Employer POST /jobs/:id/apply on own job → 400
+        #    e) GET /api/me/job-applications → returns the application w/ job info
+        #    f) DELETE /api/me/job-applications/:id → application status WITHDRAWN
+        # 5. Employer sees applicants
+        #    a) GET /api/employer/jobs/:id/applicants → 200 items array
+        #    b) PATCH /api/employer/applications/:id { status: 'SHORTLISTED' } → 200
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ JOBS / EMPLOYMENT BOARD TESTING COMPLETE - All functionality working perfectly (13/13 tests passed - 100% success rate):
+          
+          🎯 COMPREHENSIVE TEST RESULTS:
+          
+          1. Public jobs list ✅
+             • GET /api/jobs returns 200 with correct structure {total, page, limit, pages, items}
+             • Empty list initially (no jobs)
+             • Filters working: ?sector=TECH&governorate=MUSCAT returns 200
+          
+          2. Employer - no company ✅
+             • Created test user without company
+             • GET /api/employer/jobs returns 403 with code: 'NO_COMPANY'
+             • Proper authorization guard working
+          
+          3. Employer - with company ✅
+             • Admin login successful
+             • Created test company for admin (approved in DB)
+             • GET /api/employer/jobs returns 200 with {companies: [...], items: []}
+          
+          4. Create job posting ✅
+             • Valid job posting created successfully with all fields
+             • Job status: ACTIVE, applyDeadline set to +30 days
+             • Validation working:
+               - Missing sector → 400
+               - Missing governorate → 400
+               - titleAr too short (< 4 chars) → 400
+               - descriptionAr too short (< 20 chars) → 400
+          
+          5. Public job detail ✅
+             • New job appears in public list
+             • GET /api/jobs/:id returns 200 with {job: {...}, alreadyApplied: false}
+             • Invalid ID → 400
+             • Non-existent ID → 404
+          
+          6. Job seeker profile ✅
+             • Unauthenticated access → 401
+             • Fresh user profile is null
+             • PUT without fullName → 400
+             • Valid profile creation successful with fullName, title, phone, skills, links
+             • Profile persisted correctly
+          
+          7. Apply flow ✅
+             • Application created successfully with coverLetter
+             • Applicant count incremented on job
+             • Duplicate application → 409 with code: 'DUPLICATE'
+             • Employer applying to own job → 400
+             • Empty profile application → 400 with code: 'PROFILE_INCOMPLETE'
+          
+          8. My applications ✅
+             • GET /api/me/job-applications returns applications with embedded job info
+             • DELETE application successful → status changed to 'WITHDRAWN'
+             • Applicant count decremented
+             • Cannot delete other's application → 403
+          
+          9. Employer sees applicants ✅
+             • GET /api/employer/jobs/:id/applicants returns {job: {...}, items: [...]}
+             • PATCH application status to 'SHORTLISTED' successful
+             • employerViewedAt timestamp set correctly
+          
+          10. Extend deadline ✅
+              • POST /api/employer/jobs/:id/extend successful
+              • Deadline extended by 30 days
+          
+          11. Close and reopen job ✅
+              • PATCH status to 'CLOSED' successful
+              • PATCH status to 'ACTIVE' successful (reopen)
+          
+          12. Authentication checks ✅
+              • All employer endpoints return 401 without auth
+              • All job-seeker endpoints return 401 without auth
+          
+          13. Delete job ✅
+              • DELETE /api/employer/jobs/:id successful
+              • Job no longer accessible (404)
+          
+          🔧 TECHNICAL FIXES APPLIED:
+          • Fixed Company schema field mismatch: Changed requireCompanyOwner to use 'userId' instead of 'ownerId'
+          • Fixed JobPosting schema: Changed companyId and postedBy from ObjectId to String (UUID)
+          • Fixed JobSeeker schema: Changed userId from ObjectId to String (UUID)
+          • Fixed JobApplication schema: Changed jobId, seekerUserId, companyId from ObjectId to String (UUID)
+          • Added _id field with UUID default to JobPosting, JobSeeker, JobApplication schemas
+          • Fixed isValidObjectId function to accept both UUID and MongoDB ObjectId formats
+          • All schemas now consistent with UUID-based _id system used throughout the app
+          
+          📊 BUSINESS LOGIC VERIFIED:
+          • Two-sided platform working correctly (employers and job seekers)
+          • Employer guard: requires owned Company (NO_COMPANY error if none)
+          • Job seeker profile required for applying (PROFILE_INCOMPLETE error)
+          • Duplicate application prevention (unique index working)
+          • Applicant count tracking working correctly
+          • Application status workflow: SUBMITTED → VIEWED → SHORTLISTED/REJECTED/HIRED → WITHDRAWN
+          • Job status workflow: ACTIVE → CLOSED → ACTIVE (reopen)
+          • Deadline extension working (+30 days)
+          • Profile snapshot stored on application (future edits don't affect employer view)
+          
+          🎉 CONCLUSION: The Jobs / Employment Board is fully functional and production-ready. All CRUD operations, authentication, authorization, validation, and business logic working correctly. The system properly handles the two-sided marketplace with employers posting jobs and job seekers applying with their profiles.
+
+## agent_communication:
+  - agent: "main"
+    message: |
+      Full Jobs Board feature added. Please test all backend endpoints listed
+      above. IMPORTANT: 
+      - Admin user (mazin298@gmail.com) needs an owned Company for employer
+        tests. Either create a throwaway Company with ownerId = admin's user id
+        or use one that already exists.
+      - Clean up: delete any test Jobs, JobApplications, JobSeekers, and
+        throwaway Companies at the end.
+      - Test URLs use NEXT_PUBLIC_BASE_URL from /app/.env.
+  - agent: "testing"
+    message: |
+      ✅ JOBS BOARD BACKEND TESTING COMPLETE - 13/13 tests passed (100% success rate)
+      
+      All backend endpoints working correctly:
+      • Public jobs list and detail with filters
+      • Employer workflow with company ownership guard (NO_COMPANY error)
+      • Job posting CRUD (create, update, close, reopen, extend, delete)
+      • Job seeker profile management
+      • Application flow with validation (PROFILE_INCOMPLETE, DUPLICATE guards)
+      • Employer applicant management
+      • All authentication and authorization checks passing
+      
+      FIXES APPLIED:
+      • Fixed schema mismatches: All job-related models now use String UUID _id (not ObjectId)
+      • Fixed Company field reference: Changed 'ownerId' to 'userId' in requireCompanyOwner
+      • Fixed isValidObjectId to accept both UUID and ObjectId formats
+      
+      The Jobs / Employment Board is production-ready. All business logic, validation, and security working correctly.

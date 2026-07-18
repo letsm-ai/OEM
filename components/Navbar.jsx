@@ -16,6 +16,7 @@ export default function Navbar() {
     { href: '/store', label: t('nav.store') },
     { href: '/consultations', label: t('nav.consultations') },
     { href: '/directory', label: t('nav.directory') },
+    { href: '/jobs', label: 'فرص العمل' },
     { href: '/membership', label: t('nav.membership') },
     { href: '/dashboard', label: t('nav.dashboard') },
   ]
