@@ -64,6 +64,9 @@ export default function EmployerClient() {
         <button onClick={() => setNewOpen(true)} className="inline-flex items-center gap-2 rounded-lg bg-[#C9A84C] px-4 py-2 text-sm font-bold text-[#1B3A6B]">
           <Plus className="h-4 w-4" /> وظيفة جديدة
         </button>
+        <Link href="/jobs/employer/search" className="inline-flex items-center gap-2 rounded-lg border-2 border-[#1B3A6B] px-4 py-2 text-sm font-semibold text-[#1B3A6B] hover:bg-[#1B3A6B] hover:text-white">
+          <Users className="h-4 w-4" /> ابحث عن مرشحين
+        </Link>
       </div>
 
       {jobs.length === 0 ? (
