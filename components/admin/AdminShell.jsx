@@ -30,6 +30,7 @@ import {
   PanelRightOpen,
   Send,
   Trash2,
+  Briefcase,
 } from 'lucide-react'
 
 const groups = [
@@ -53,6 +54,7 @@ const groups = [
       { href: '/admin/companies', label: 'الشركات', Icon: Building2 },
       { href: '/admin/experts', label: 'الخبراء', Icon: GraduationCap },
       { href: '/admin/vendor-applications', label: 'طلبات البائعين', Icon: Store },
+      { href: '/admin/jobs', label: 'فرص العمل', Icon: Briefcase },
     ],
   },
   {

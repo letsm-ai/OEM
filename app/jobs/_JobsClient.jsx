@@ -12,6 +12,7 @@ export default function JobsClient() {
   const [items, setItems] = useState([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [suggestions, setSuggestions] = useState([])
   const [filters, setFilters] = useState({ q: '', sector: '', governorate: '', employmentType: '', workMode: '', experienceLevel: '' })
 
   const load = useCallback(async () => {
@@ -31,6 +32,21 @@ export default function JobsClient() {
     const t = setTimeout(load, 300)
     return () => clearTimeout(t)
   }, [load])
+
+  // Fetch AI-ranked suggestions for authenticated seekers
+  useEffect(() => {
+    if (status !== 'authenticated') { setSuggestions([]); return }
+    let cancel = false
+    ;(async () => {
+      try {
+        const res = await fetch('/api/me/job-suggestions')
+        if (!res.ok) return
+        const d = await res.json()
+        if (!cancel) setSuggestions((d.items || []).slice(0, 4))
+      } catch (e) { /* silent */ }
+    })()
+    return () => { cancel = true }
+  }, [status])
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-6">
@@ -65,6 +81,22 @@ export default function JobsClient() {
           </div>
         </div>
       </div>
+
+      {/* AI Suggestions (authenticated users only) */}
+      {suggestions.length > 0 && (
+        <div className="mb-6 rounded-2xl border-2 border-dashed border-[#C9A84C]/40 bg-gradient-to-bl from-[#C9A84C]/10 to-[#1B3A6B]/5 p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#C9A84C] text-[#1B3A6B]">✨</div>
+            <div>
+              <h2 className="text-sm font-bold text-[#1B3A6B]">مقترحة لك (بالذكاء الاصطناعي)</h2>
+              <p className="text-[10px] text-gray-500">وظائف مطابقة لملفك المهني وتفضيلاتك</p>
+            </div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            {suggestions.map((j) => <JobCard key={j.id} job={j} />)}
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="mb-6 rounded-xl border bg-white p-4">
