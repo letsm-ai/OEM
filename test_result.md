@@ -9745,6 +9745,15 @@ backend:
     priority: "high"
     needs_retesting: false
     status_history:
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ 14/14 tests PASSED (100%). Verified:
+            • Unauthenticated → 401; No-company user → 403 NO_COMPANY.
+            • Company owner GET → items[] contain email & phone as strings.
+            • JobSeeker.phone/email preserved when set; User.email fallback works when JobSeeker.email empty.
+            • All filters (q, sector, governorate, workMode, employmentType) + pagination unchanged.
+            • Regression on /api/jobs and /api/employer/jobs → still working.
         - working: "NA"
           agent: "main"
           comment: |
