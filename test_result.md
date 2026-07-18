@@ -9730,3 +9730,137 @@ agent_communication:
       • Proper authentication and authorization on all endpoints ✅
       
       🎉 CONCLUSION: Jobs Board Phase 2 is fully functional and production-ready. All features working correctly with proper authentication, authorization, validation, privacy protection, and business logic.
+
+
+##====================================================================================================
+## Section: Job Seeker Contact Info Exposure to Company Owners (New Iteration)
+##====================================================================================================
+
+backend:
+  - task: "Employer candidate search — expose seeker email/phone to logged-in company owners"
+    implemented: true
+    working: true
+    file: "/app/lib/api/jobs.js (handleEmployerSearchSeekers)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            USER REQUEST: بيانات التواصل (الإيميل والهاتف) للباحثين عن عمل يجب أن تظهر لأصحاب الأعمال والشركات المسجلة (option ج).
+
+            CHANGES MADE:
+            1. GET /api/employer/seekers → now returns email + phone for each seeker.
+            2. Backend fetches User docs by userId in bulk (single query) as fallback when JobSeeker.email/phone are empty (email is not always synced on JobSeeker).
+            3. Access is still restricted at route level by requireCompanyOwner (only logged-in users who own a registered Company can hit this endpoint) — matches user's chosen option (ج).
+            4. No change to the JobSeeker model.
+
+            TEST INSTRUCTIONS (Arabic response required to user):
+            - Login as an admin/vendor who has a Company (mazin298@gmail.com or seed one).
+            - GET /api/employer/seekers?page=1 → verify each item now includes `email` and `phone` string fields (may be empty for seekers without contact info).
+            - Login as a user WITHOUT a company → still receives 403 NO_COMPANY.
+            - Login as unauthenticated → 401.
+            - Verify no regressions: total, pages, filters (q, sector, governorate, workMode, employmentType) still work.
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ EMPLOYER CANDIDATE SEARCH - CONTACT INFO EXPOSURE TESTING COMPLETE (ALL TESTS PASSED - 100% SUCCESS RATE)
+            
+            🎯 TEST 1: AUTH GUARDS (REGRESSION) - 2/2 PASSED
+            • 1A: Unauthenticated GET /api/employer/seekers → 401 ✅
+            • 1B: Authenticated user WITHOUT company → 403 with code NO_COMPANY ✅
+            
+            🎯 TEST 2: CONTACT INFO EXPOSURE (NEW FEATURE) - 4/4 PASSED
+            • 2A: Company owner GET /api/employer/seekers → 200 with proper structure (total, page, limit, pages, items) ✅
+            • 2B: All items have 'email' and 'phone' keys (verified 4 seekers, all have both fields as strings) ✅
+            • 2C: Seeker with phone set in JobSeeker.phone → correct phone returned (+968 9123 4567) ✅
+            • 2D: Email fallback working → all 4 seekers have email addresses (JobSeeker.email or User.email fallback) ✅
+            
+            🎯 TEST 3: FILTERS AND PAGINATION REGRESSION - 6/6 PASSED
+            • 3A: Search filter (?q=مطور) → 200 with email/phone present ✅
+            • 3B: Sector filter (?sector=TECH) → 200 with email/phone present ✅
+            • 3C: Governorate filter (?governorate=MUSCAT) → 200 with email/phone present ✅
+            • 3D: WorkMode filter (?workMode=REMOTE) → 200 with email/phone present ✅
+            • 3E: EmploymentType filter (?employmentType=FULL_TIME) → 200 with email/phone present ✅
+            • 3F: Pagination (?page=1&limit=6) → 200 with correct page/limit/pages and email/phone present ✅
+            
+            🎯 TEST 4: OTHER ENDPOINTS REGRESSION - 2/2 PASSED
+            • 4A: GET /api/jobs (public list) → 200 with proper structure ✅
+            • 4B: GET /api/employer/jobs (company owner's jobs) → 200 with companies and items ✅
+            
+            🔧 TECHNICAL VERIFICATION:
+            ✅ Access control: requireCompanyOwner enforced correctly (401 for unauth, 403 for no company)
+            ✅ Contact info exposure: email and phone fields present in ALL items
+            ✅ Fallback logic: User.email/phone used when JobSeeker.email/phone are empty
+            ✅ Empty string handling: Empty phone/email returned as empty string (not null or missing)
+            ✅ All filters working: q, sector, governorate, workMode, employmentType
+            ✅ Pagination working: page, limit, pages calculated correctly
+            ✅ No regression: Other job endpoints (public list, employer jobs) still working
+            
+            📊 TEST SUMMARY:
+            • Total tests: 14/14 PASSED
+            • Auth guards: 2/2 PASSED
+            • Contact info: 4/4 PASSED
+            • Filters/pagination: 6/6 PASSED
+            • Regression: 2/2 PASSED
+            
+            🎉 CONCLUSION: The updated GET /api/employer/seekers endpoint is fully functional and production-ready. Email and phone fields are now correctly exposed to authenticated company owners, with proper fallback to User data when JobSeeker fields are empty. All access controls, filters, and pagination working correctly with no regressions.
+
+frontend:
+  - task: "Employer Search UI — display seeker email/phone with quick contact actions"
+    implemented: true
+    working: "NA"
+    file: "/app/app/jobs/employer/search/_EmployerSearchClient.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            UI CHANGES:
+            - Replaced the "🔒 privacy" banner in the header with a green banner: "بيانات التواصل متاحة مباشرة لكل شركة مسجّلة".
+            - Added new contact section inside each SeekerCard showing:
+              • mailto: link for email (blue chip)
+              • tel: link for phone (emerald chip)
+              • wa.me/{phone} link for WhatsApp (green chip)
+            - Contact section only rendered when at least one of email/phone is present.
+            - No other card layout changes.
+
+metadata:
+  created_by: "main_agent"
+  version: "1.0"
+  test_sequence: 25
+  run_ui: false
+
+test_plan:
+  current_focus: []
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+  - agent: "main"
+    message: |
+      Updated GET /api/employer/seekers to include `email` and `phone` in each item (previously stripped for privacy).
+      Access still requires an authenticated company owner (requireCompanyOwner).
+      Please verify:
+      1) Company-owner session → items[] includes `email` (string) and `phone` (string) keys.
+      2) Non-company user → still 403 NO_COMPANY (no leak).
+      3) Unauthenticated → 401.
+      4) Filters/pagination unaffected.
+      Fallback logic: if JobSeeker.email/phone are empty, the API pulls them from the User document via a single bulk find. Confirm this fallback yields non-empty values for at least one seeded seeker (or that empty-string is returned gracefully).
+  - agent: "testing"
+    message: |
+      ✅ TESTING COMPLETE: GET /api/employer/seekers endpoint fully verified (14/14 tests passed - 100% success rate).
+      
+      VERIFIED:
+      ✅ Auth guards working: 401 for unauth, 403 NO_COMPANY for users without company
+      ✅ Contact info exposure: email and phone fields present in all items (as strings, empty string if not set)
+      ✅ Fallback logic working: User.email/phone used when JobSeeker fields are empty
+      ✅ All filters working: q, sector, governorate, workMode, employmentType
+      ✅ Pagination working: page, limit, pages calculated correctly
+      ✅ No regressions: Other job endpoints (GET /api/jobs, GET /api/employer/jobs) still working
+      
+      The endpoint is production-ready. All requirements from the user request have been successfully implemented and tested.

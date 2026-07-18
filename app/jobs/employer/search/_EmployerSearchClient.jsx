@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
-import { ArrowRight, Search, User, MapPin, Briefcase, Building2, ExternalLink, Loader2, Users, ChevronLeft, ChevronRight, Filter, X } from 'lucide-react'
+import { ArrowRight, Search, User, MapPin, Briefcase, Building2, ExternalLink, Loader2, Users, ChevronLeft, ChevronRight, Filter, X, Mail, Phone, MessageCircle } from 'lucide-react'
 import { EMPLOYMENT_TYPES, WORK_MODES, labelFrom } from '@/lib/jobs'
 import { SECTORS, GOVERNORATES } from '@/lib/directory'
 
@@ -84,8 +84,8 @@ export default function EmployerSearchClient() {
             <h1 className="text-2xl font-extrabold md:text-3xl">ابحث عن الموهبة المناسبة</h1>
             <p className="mt-1 text-sm opacity-90">{total} مرشح متاح للعمل</p>
           </div>
-          <div className="rounded-lg bg-white/10 px-3 py-2 text-[11px]">
-            🔒 ملفات عامة — رقم الهاتف والإيميل يظهران فقط عندما يتقدّم المرشح لإحدى وظائفك
+          <div className="rounded-lg bg-emerald-500/20 border border-emerald-300/40 px-3 py-2 text-[11px]">
+            ✅ بيانات التواصل (الإيميل والهاتف) متاحة مباشرة لكل شركة مسجّلة — تواصل مع المرشحين فوراً
           </div>
         </div>
       </div>
@@ -223,6 +223,44 @@ function SeekerCard({ seeker }) {
               <ExternalLink className="h-2.5 w-2.5" /> {l.label}
             </a>
           ))}
+        </div>
+      )}
+
+      {/* Contact info — visible to all logged-in company owners */}
+      {(seeker.email || seeker.phone) && (
+        <div className="mt-3 space-y-1.5 border-t pt-3">
+          {seeker.email && (
+            <a
+              href={`mailto:${seeker.email}`}
+              className="flex items-center gap-2 rounded-md bg-blue-50 px-2 py-1.5 text-[11px] font-medium text-blue-700 hover:bg-blue-100"
+              title="أرسل إيميل"
+            >
+              <Mail className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">{seeker.email}</span>
+            </a>
+          )}
+          {seeker.phone && (
+            <div className="flex items-center gap-1.5">
+              <a
+                href={`tel:${seeker.phone}`}
+                className="flex flex-1 items-center gap-2 rounded-md bg-emerald-50 px-2 py-1.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100"
+                title="اتصل"
+              >
+                <Phone className="h-3.5 w-3.5 shrink-0" />
+                <span dir="ltr" className="truncate">{seeker.phone}</span>
+              </a>
+              <a
+                href={`https://wa.me/${String(seeker.phone).replace(/[^0-9]/g, '')}`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 rounded-md bg-green-500 px-2 py-1.5 text-[11px] font-medium text-white hover:bg-green-600"
+                title="واتساب"
+              >
+                <MessageCircle className="h-3.5 w-3.5" />
+                واتساب
+              </a>
+            </div>
+          )}
         </div>
       )}
 
